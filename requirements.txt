@@ -35,7 +35,7 @@ torch>=2.10,<3
 
 # Structured event logging and metrics
 structlog>=25,<26
-prometheus-client>=0.21,<1
+prometheus-client>=0.26.0,<1
 
 # Tests used by local development and CI
 pytest>=8.4,<10
