@@ -1,0 +1,44 @@
+# AI System Trading - backend dependencies
+# Target runtime: Python 3.12
+# Version policy: accept compatible patch/minor updates, block breaking major updates.
+
+# Web API / configuration
+fastapi>=0.139,<0.140
+uvicorn[standard]>=0.51,<0.52
+pydantic-settings>=2.14,<3
+python-multipart>=0.0.20,<1
+email-validator>=2.2,<3
+orjson>=3.10,<4
+
+# PostgreSQL / schema migrations
+SQLAlchemy>=2.0.51,<2.1
+psycopg[binary,pool]>=3.3.4,<4
+alembic>=1.16,<2
+
+# OANDA / Binance REST and WebSocket adapters
+httpx>=0.28,<1
+websockets>=15,<17
+tenacity>=9,<10
+
+# Authentication and API-key protection
+PyJWT[crypto]>=2.10,<3
+pwdlib[argon2]>=0.2,<1
+cryptography>=45,<47
+
+# Market data / technical analysis / machine learning
+numpy>=2.2,<3
+pandas>=2.3,<4
+scipy>=1.15,<2
+scikit-learn>=1.7,<2
+joblib>=1.4,<2
+torch>=2.10,<3
+
+# Structured event logging and metrics
+structlog>=25,<26
+prometheus-client>=0.21,<1
+
+# Tests used by local development and CI
+pytest>=8.4,<10
+pytest-asyncio>=1.0,<2
+pytest-cov>=6,<8
+respx>=0.22,<1
