@@ -1,5 +1,5 @@
 # AI System Trading - backend dependencies
-# Target runtime: Python 3.12
+# Target runtime: Python 3.13
 # Version policy: accept compatible patch/minor updates, block breaking major updates.
 
 # Web API / configuration

@@ -7,7 +7,9 @@ AIモデルとテクニカル分析指標を利用し、複数の取引所にま
 
 ## 開発環境
 
-- Python 3.12以上
+- Python 3.13
+- Node.js 22
+- PostgreSQL 16以上
 - Git
 
 ```powershell
@@ -16,6 +18,29 @@ python -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
+
+`.env.example`を`.env`へコピーし、ローカルPostgreSQLの接続情報を設定します。実際のパスワードやAPIキーはコミットしないでください。
+
+```powershell
+Copy-Item .env.example .env
+python -m alembic upgrade head
+python -m uvicorn app.main:app --reload
+```
+
+既に`postgresql_schema_v0.1.sql`を適用済みのDBでは、内容を確認したうえで`python -m alembic stamp head`を使い、同じDDLを再実行しないでください。
+
+別のターミナルでフロントエンドを起動します。
+
+```powershell
+Set-Location frontend
+npm install
+npm run dev
+```
+
+- React: `http://localhost:5173`
+- FastAPI docs: `http://localhost:8000/docs`
+- API health: `http://localhost:8000/api/v1/health`
+- DB health: `http://localhost:8000/api/v1/health/db`
 
 ## ローカルでの確認
 

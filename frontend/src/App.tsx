@@ -1,121 +1,99 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
+import { useCallback, useEffect, useState } from 'react'
 import './App.css'
 
+type HealthState = {
+  status: 'loading' | 'ok' | 'error'
+  message: string
+}
+
+const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000').replace(
+  /\/$/,
+  '',
+)
+
+const checkEndpoint = async (path: string, okMessage: string): Promise<HealthState> => {
+  try {
+    const response = await fetch(`${apiBaseUrl}${path}`)
+    if (!response.ok) {
+      return { status: 'error', message: `応答エラー: HTTP ${response.status}` }
+    }
+    return { status: 'ok', message: okMessage }
+  } catch {
+    return { status: 'error', message: 'サービスへ接続できません。' }
+  }
+}
+
+const fetchHealth = () =>
+  Promise.all([
+    checkEndpoint('/api/v1/health', 'FastAPIは正常に稼働しています。'),
+    checkEndpoint('/api/v1/health/db', 'PostgreSQLへ接続できています。'),
+  ])
+
+function StatusCard({ title, state }: { title: string; state: HealthState }) {
+  return (
+    <article className={`status-card status-${state.status}`}>
+      <div className="status-heading">
+        <h2>{title}</h2>
+        <span className="status-badge">{state.status}</span>
+      </div>
+      <p>{state.message}</p>
+    </article>
+  )
+}
+
 function App() {
-  const [count, setCount] = useState(0)
+  const [apiHealth, setApiHealth] = useState<HealthState>({
+    status: 'loading',
+    message: 'FastAPIへ接続しています。',
+  })
+  const [dbHealth, setDbHealth] = useState<HealthState>({
+    status: 'loading',
+    message: 'PostgreSQL接続を確認しています。',
+  })
+
+  const loadHealth = useCallback(async () => {
+    const [api, database] = await fetchHealth()
+    setApiHealth(api)
+    setDbHealth(database)
+  }, [])
+
+  const refreshHealth = () => {
+    setApiHealth({ status: 'loading', message: 'FastAPIへ接続しています。' })
+    setDbHealth({ status: 'loading', message: 'PostgreSQL接続を確認しています。' })
+    void loadHealth()
+  }
+
+  useEffect(() => {
+    let active = true
+    void fetchHealth().then(([api, database]) => {
+      if (active) {
+        setApiHealth(api)
+        setDbHealth(database)
+      }
+    })
+    return () => {
+      active = false
+    }
+  }, [])
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
+    <main className="dashboard-shell">
+      <header>
+        <p className="eyebrow">AI SYSTEM TRADING</p>
+        <h1>開発環境ステータス</h1>
+        <p className="subtitle">React → FastAPI → PostgreSQL の接続状態</p>
+      </header>
+
+      <section className="status-grid" aria-live="polite">
+        <StatusCard title="Backend API" state={apiHealth} />
+        <StatusCard title="Database" state={dbHealth} />
       </section>
 
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+      <button type="button" onClick={refreshHealth}>
+        再確認
+      </button>
+      <p className="endpoint">API: {apiBaseUrl}</p>
+    </main>
   )
 }
 
