@@ -4,7 +4,7 @@
 
 # Web API / configuration
 fastapi>=0.139,<0.140
-uvicorn[standard]>=0.51,<0.52
+uvicorn[standard]>=0.51,<0.53
 pydantic-settings>=2.14,<3
 python-multipart>=0.0.20,<1
 email-validator>=2.2,<3
