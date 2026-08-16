@@ -40,5 +40,5 @@ prometheus-client>=0.21,<1
 # Tests used by local development and CI
 pytest>=8.4,<10
 pytest-asyncio>=1.0,<2
-pytest-cov>=6,<8
+pytest-cov>=7.1.0,<8
 respx>=0.22,<1
