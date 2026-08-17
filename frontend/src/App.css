@@ -41,6 +41,69 @@ h1 {
   color: #9fb0c6;
 }
 
+.workspace-panel {
+  margin: 0 0 24px;
+  padding: 24px;
+  border: 1px solid #263851;
+  border-radius: 16px;
+  background: rgba(13, 28, 48, 0.86);
+}
+
+.workspace-panel h2 {
+  margin: 0;
+}
+
+.panel-description,
+.workspace-message {
+  color: #9fb0c6;
+}
+
+.workspace-controls {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto minmax(220px, 1fr);
+  gap: 14px;
+  align-items: end;
+  margin: 22px 0;
+}
+
+.workspace-controls label {
+  display: grid;
+  gap: 7px;
+  color: #9fb0c6;
+  font-size: 0.85rem;
+}
+
+.workspace-controls input,
+.workspace-controls select {
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid #38506f;
+  border-radius: 9px;
+  color: #eaf2ff;
+  background: #07111f;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.connection-list {
+  display: grid;
+  gap: 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.connection-list li {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 16px;
+  padding: 12px;
+  border-radius: 9px;
+  background: #07111f;
+}
+
 .status-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -119,6 +182,11 @@ button:hover {
   }
 
   .status-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-controls,
+  .connection-list li {
     grid-template-columns: 1fr;
   }
 }

@@ -1,7 +1,8 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, SecretStr
 
 
 class OrmModel(BaseModel):
@@ -45,3 +46,14 @@ class ExchangeConnectionRead(OrmModel):
     status: str
     capabilities: dict[str, object]
     last_verified_at: datetime | None
+
+
+class ExchangeConnectionCreate(BaseModel):
+    exchange_code: str = Field(min_length=1, max_length=40)
+    label: str = Field(min_length=1, max_length=120)
+    environment: Literal["practice", "testnet", "paper_data"]
+    api_base_url: AnyHttpUrl
+    credentials: dict[str, SecretStr] = Field(min_length=1)
+
+    def revealed_credentials(self) -> dict[str, str]:
+        return {name: value.get_secret_value() for name, value in self.credentials.items()}

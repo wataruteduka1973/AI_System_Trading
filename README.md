@@ -35,6 +35,19 @@ DATABASE_URL=postgresql+psycopg://postgres:実際のパスワード@localhost:54
 
 パスワードに`@`、`:`、`/`、`#`、`%`などが含まれる場合はURLエンコードが必要です。
 
+開発用Owner認証とローカル暗号化Secret Storeには、それぞれ別のランダム値を設定します。次のコマンドで値を生成し、表示された値を`.env`の`DEV_OWNER_TOKEN`と`SECRET_ENCRYPTION_KEY`へ設定してください。値はコミット、チャット送信、スクリーンショット共有をしないでください。
+
+```powershell
+.\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(32))"
+.\.venv\Scripts\python.exe -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+```dotenv
+DEV_OWNER_TOKEN=1つ目のコマンドで生成した値
+SECRET_ENCRYPTION_KEY=2つ目のコマンドで生成した値
+SECRET_STORE_PATH=.secrets
+```
+
 既に`postgresql_schema_v0.1.sql`を適用済みのDBでは、内容を確認したうえで`python -m alembic stamp head`を使い、同じDDLを再実行しないでください。
 
 別のターミナルでフロントエンドを起動します。
@@ -56,10 +69,12 @@ npm run dev
 - `POST /api/v1/workspaces` — workspace作成
 - `GET /api/v1/workspaces/{workspace_id}` — workspace詳細
 - `GET /api/v1/workspaces/{workspace_id}/connections` — 接続一覧（秘密参照は返さない）
+- `POST /api/v1/workspaces/{workspace_id}/connections` — 暗号化した認証情報で接続登録
+- `POST /api/v1/workspaces/{workspace_id}/connections/{connection_id}/disable` — 接続無効化
 - `GET /api/v1/exchanges` — 対応取引所一覧
 - `GET /api/v1/markets` — 対応市場一覧
 
-認証・認可を実装するまでは、取引所接続の登録・更新APIを公開しません。
+Workspaceと接続APIでは`X-Owner-Token`ヘッダーが必要です。これはローカル開発専用の認証であり、第三者配布前にOIDC認証へ置き換えます。取引所認証情報は`.secrets/`へFernet暗号化して保存し、DBには`local-encrypted://...`形式の参照だけを保存します。
 
 ### 接続トラブルの確認順
 

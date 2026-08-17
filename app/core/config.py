@@ -1,7 +1,8 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Annotated
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -25,6 +26,9 @@ class Settings(BaseSettings):
     cors_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["http://localhost:5173"]
     )
+    dev_owner_token: SecretStr | None = None
+    secret_encryption_key: SecretStr | None = None
+    secret_store_path: Path = Path(".secrets")
     trading_env: str = "paper"
     live_trading_allowed: bool = False
 
