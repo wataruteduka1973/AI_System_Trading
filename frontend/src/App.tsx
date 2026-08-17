@@ -15,6 +15,12 @@ const checkEndpoint = async (path: string, okMessage: string): Promise<HealthSta
   try {
     const response = await fetch(`${apiBaseUrl}${path}`)
     if (!response.ok) {
+      if (path.endsWith('/health/db') && response.status === 503) {
+        return {
+          status: 'error',
+          message: 'FastAPIには接続できましたが、PostgreSQLの認証または接続に失敗しました。',
+        }
+      }
       return { status: 'error', message: `応答エラー: HTTP ${response.status}` }
     }
     return { status: 'ok', message: okMessage }

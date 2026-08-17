@@ -27,6 +27,14 @@ python -m alembic upgrade head
 python -m uvicorn app.main:app --reload
 ```
 
+`Copy-Item`だけではDB接続は完了しません。`.env`の`DATABASE_URL`にある`trade_bot_user`と`change-me`は例示値なので、pgAdminで実際に接続できるユーザー名とパスワードへ変更してください。まず既存環境を確認する場合は、次の形式で設定します。
+
+```dotenv
+DATABASE_URL=postgresql+psycopg://postgres:実際のパスワード@localhost:5432/general_system_db
+```
+
+パスワードに`@`、`:`、`/`、`#`、`%`などが含まれる場合はURLエンコードが必要です。
+
 既に`postgresql_schema_v0.1.sql`を適用済みのDBでは、内容を確認したうえで`python -m alembic stamp head`を使い、同じDDLを再実行しないでください。
 
 別のターミナルでフロントエンドを起動します。
@@ -41,6 +49,24 @@ npm run dev
 - FastAPI docs: `http://localhost:8000/docs`
 - API health: `http://localhost:8000/api/v1/health`
 - DB health: `http://localhost:8000/api/v1/health/db`
+
+### 初期API
+
+- `GET /api/v1/workspaces` — workspace一覧
+- `POST /api/v1/workspaces` — workspace作成
+- `GET /api/v1/workspaces/{workspace_id}` — workspace詳細
+- `GET /api/v1/workspaces/{workspace_id}/connections` — 接続一覧（秘密参照は返さない）
+- `GET /api/v1/exchanges` — 対応取引所一覧
+- `GET /api/v1/markets` — 対応市場一覧
+
+認証・認可を実装するまでは、取引所接続の登録・更新APIを公開しません。
+
+### 接続トラブルの確認順
+
+1. `http://localhost:8000/api/v1/health`が開かなければFastAPIを起動する
+2. APIは開くが`health/db`が503なら`.env`の`DATABASE_URL`を確認する
+3. PostgreSQL側で`general_system_db`、接続ユーザー、パスワード、5432番ポートを確認する
+4. 既にDDL適用済みなら、接続成功後に`python -m alembic stamp head`を実行する
 
 ## ローカルでの確認
 

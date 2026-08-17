@@ -6,6 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.api.router import api_router
 from app.core.config import settings
 from app.db.session import get_db
 
@@ -14,9 +15,10 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+app.include_router(api_router, prefix=settings.api_v1_prefix)
 
 
 @app.get(f"{settings.api_v1_prefix}/health", tags=["health"])
@@ -31,6 +33,10 @@ def database_health_check(db: Annotated[Session, Depends(get_db)]) -> dict[str, 
     except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"status": "unavailable", "database": "postgresql"},
+            detail={
+                "status": "unavailable",
+                "database": "postgresql",
+                "message": "Check DATABASE_URL and PostgreSQL availability.",
+            },
         ) from exc
     return {"status": "ok", "database": "postgresql"}

@@ -28,7 +28,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/ai_system_trading"]
+packages = ["src/ai_system_trading", "app"]
 
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers"
