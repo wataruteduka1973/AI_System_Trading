@@ -59,6 +59,13 @@ class ExchangeConnectionCreate(BaseModel):
         return {name: value.get_secret_value() for name, value in self.credentials.items()}
 
 
+class ExchangeCredentialsUpdate(BaseModel):
+    credentials: dict[str, SecretStr] = Field(min_length=1)
+
+    def revealed_credentials(self) -> dict[str, str]:
+        return {name: value.get_secret_value() for name, value in self.credentials.items()}
+
+
 class OandaAccountRead(BaseModel):
     account_ref_masked: str
     alias: str | None
@@ -73,3 +80,20 @@ class OandaVerificationRead(BaseModel):
     connection_id: UUID
     status: str
     accounts: list[OandaAccountRead]
+
+
+class BinanceAccountRead(BaseModel):
+    account_ref_masked: str
+    account_type: str
+    permissions: list[str]
+    can_trade: bool
+    can_deposit: bool
+    can_withdraw: bool
+    nonzero_asset_count: int
+    btc_jpy_tradeable: bool
+
+
+class BinanceVerificationRead(BaseModel):
+    connection_id: UUID
+    status: str
+    accounts: list[BinanceAccountRead]

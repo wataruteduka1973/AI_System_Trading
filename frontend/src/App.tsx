@@ -29,6 +29,18 @@ type OandaVerification = {
   }>
 }
 
+type BinanceVerification = {
+  status: string
+  accounts: Array<{
+    account_ref_masked: string
+    account_type: string
+    permissions: string[]
+    can_trade: boolean
+    nonzero_asset_count: number
+    btc_jpy_tradeable: boolean
+  }>
+}
+
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000').replace(
   /\/$/,
   '',
@@ -57,6 +69,15 @@ const fetchHealth = () =>
     checkEndpoint('/api/v1/health', 'FastAPIは正常に稼働しています。'),
     checkEndpoint('/api/v1/health/db', 'PostgreSQLへ接続できています。'),
   ])
+
+const apiErrorMessage = async (response: Response, fallback: string) => {
+  try {
+    const payload = (await response.json()) as { detail?: string }
+    return payload.detail ? `${fallback}: ${payload.detail}（HTTP ${response.status}）` : fallback
+  } catch {
+    return `${fallback}（HTTP ${response.status}）`
+  }
+}
 
 function StatusCard({ title, state }: { title: string; state: HealthState }) {
   return (
@@ -92,6 +113,15 @@ function App() {
     'OANDA practice Tokenは登録後すぐに暗号化され、検証後に入力欄から消去されます。',
   )
   const [verifiedAccounts, setVerifiedAccounts] = useState<OandaVerification['accounts']>([])
+  const [selectedOandaConnectionId, setSelectedOandaConnectionId] = useState('')
+  const [binanceLabel, setBinanceLabel] = useState('Binance Spot Testnet')
+  const [binanceApiKey, setBinanceApiKey] = useState('')
+  const [binanceSecretKey, setBinanceSecretKey] = useState('')
+  const [binanceMessage, setBinanceMessage] = useState(
+    'API KeyとSecret Keyは暗号化保存され、検証後に入力欄から消去されます。',
+  )
+  const [binanceAccounts, setBinanceAccounts] = useState<BinanceVerification['accounts']>([])
+  const [selectedBinanceConnectionId, setSelectedBinanceConnectionId] = useState('')
 
   const loadHealth = useCallback(async () => {
     const [api, database] = await fetchHealth()
@@ -131,6 +161,8 @@ function App() {
   const loadConnections = async (workspaceId: string) => {
     setSelectedWorkspaceId(workspaceId)
     setConnections([])
+    setSelectedOandaConnectionId('')
+    setSelectedBinanceConnectionId('')
     if (!workspaceId) return
     try {
       const response = await fetch(
@@ -159,7 +191,7 @@ function App() {
         { method: 'POST', headers: ownerHeaders },
       )
       if (!response.ok) {
-        setRegistrationMessage(`OANDA検証に失敗しました（HTTP ${response.status}）。`)
+        setRegistrationMessage(await apiErrorMessage(response, 'OANDA検証に失敗しました'))
         await loadConnections(selectedWorkspaceId)
         return
       }
@@ -175,34 +207,134 @@ function App() {
   }
 
   const registerAndVerifyOanda = async () => {
-    if (!selectedWorkspaceId || !oandaToken || !connectionLabel.trim()) return
-    setRegistrationMessage('接続情報を暗号化して登録しています。')
+    const isUpdate = Boolean(selectedOandaConnectionId)
+    if (!selectedWorkspaceId || !oandaToken || (!isUpdate && !connectionLabel.trim())) return
+    setRegistrationMessage(
+      isUpdate ? '保存済みTokenを暗号化更新して再検証しています。' : '接続情報を暗号化して登録しています。',
+    )
     setVerifiedAccounts([])
     try {
-      const createResponse = await fetch(
-        `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/connections`,
+      const saveResponse = await fetch(
+        isUpdate
+          ? `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/connections/${selectedOandaConnectionId}/credentials`
+          : `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/connections`,
         {
-          method: 'POST',
+          method: isUpdate ? 'PUT' : 'POST',
           headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            exchange_code: 'oanda',
-            label: connectionLabel.trim(),
-            environment: 'practice',
-            api_base_url: 'https://api-fxpractice.oanda.com',
-            credentials: { token: oandaToken },
-          }),
+          body: JSON.stringify(
+            isUpdate
+              ? { credentials: { token: oandaToken } }
+              : {
+                  exchange_code: 'oanda',
+                  label: connectionLabel.trim(),
+                  environment: 'practice',
+                  api_base_url: 'https://api-fxpractice.oanda.com',
+                  credentials: { token: oandaToken },
+                },
+          ),
         },
       )
       setOandaToken('')
-      if (!createResponse.ok) {
-        setRegistrationMessage(`接続登録に失敗しました（HTTP ${createResponse.status}）。`)
+      if (!saveResponse.ok) {
+        setRegistrationMessage(
+          await apiErrorMessage(saveResponse, isUpdate ? 'Token更新・再検証に失敗しました' : '接続登録に失敗しました'),
+        )
+        await loadConnections(selectedWorkspaceId)
         return
       }
-      const connection = (await createResponse.json()) as ConnectionSummary
-      await verifyOandaConnection(connection.id)
+      if (isUpdate) {
+        const verification = (await saveResponse.json()) as OandaVerification
+        setVerifiedAccounts(verification.accounts)
+        setRegistrationMessage('新しいTokenを暗号化保存し、OANDAでの再検証に成功しました。')
+        await loadConnections(selectedWorkspaceId)
+      } else {
+        const connection = (await saveResponse.json()) as ConnectionSummary
+        await verifyOandaConnection(connection.id)
+      }
     } catch {
       setOandaToken('')
       setRegistrationMessage('接続登録またはOANDA APIへの通信に失敗しました。')
+    }
+  }
+
+  const verifyBinanceConnection = async (connectionId: string) => {
+    if (!selectedWorkspaceId) return
+    setBinanceMessage('Binance Spot TestnetでAPI資格情報を検証しています。')
+    setBinanceAccounts([])
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/connections/${connectionId}/verify`,
+        { method: 'POST', headers: ownerHeaders },
+      )
+      if (!response.ok) {
+        setBinanceMessage(await apiErrorMessage(response, 'Binance検証に失敗しました'))
+        await loadConnections(selectedWorkspaceId)
+        return
+      }
+      const verification = (await response.json()) as BinanceVerification
+      setBinanceAccounts(verification.accounts)
+      setBinanceMessage('Binance Spot Testnet接続を検証し、口座情報を同期しました。')
+      await loadConnections(selectedWorkspaceId)
+    } catch {
+      setBinanceMessage('Binance Spot Testnet APIへの通信に失敗しました。')
+    }
+  }
+
+  const registerAndVerifyBinance = async () => {
+    const isUpdate = Boolean(selectedBinanceConnectionId)
+    if (
+      !selectedWorkspaceId ||
+      !binanceApiKey ||
+      !binanceSecretKey ||
+      (!isUpdate && !binanceLabel.trim())
+    ) return
+    setBinanceMessage(
+      isUpdate ? '保存済みAPI資格情報を暗号化更新して再検証しています。' : '接続情報を暗号化して登録しています。',
+    )
+    setBinanceAccounts([])
+    try {
+      const saveResponse = await fetch(
+        isUpdate
+          ? `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/connections/${selectedBinanceConnectionId}/credentials`
+          : `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/connections`,
+        {
+          method: isUpdate ? 'PUT' : 'POST',
+          headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify(
+            isUpdate
+              ? { credentials: { api_key: binanceApiKey, secret_key: binanceSecretKey } }
+              : {
+                  exchange_code: 'binance',
+                  label: binanceLabel.trim(),
+                  environment: 'testnet',
+                  api_base_url: 'https://testnet.binance.vision',
+                  credentials: { api_key: binanceApiKey, secret_key: binanceSecretKey },
+                },
+          ),
+        },
+      )
+      setBinanceApiKey('')
+      setBinanceSecretKey('')
+      if (!saveResponse.ok) {
+        setBinanceMessage(
+          await apiErrorMessage(saveResponse, isUpdate ? 'API資格情報の更新・再検証に失敗しました' : '接続登録に失敗しました'),
+        )
+        await loadConnections(selectedWorkspaceId)
+        return
+      }
+      if (isUpdate) {
+        const verification = (await saveResponse.json()) as BinanceVerification
+        setBinanceAccounts(verification.accounts)
+        setBinanceMessage('新しいAPI資格情報を暗号化保存し、Binanceでの再検証に成功しました。')
+        await loadConnections(selectedWorkspaceId)
+      } else {
+        const connection = (await saveResponse.json()) as ConnectionSummary
+        await verifyBinanceConnection(connection.id)
+      }
+    } catch {
+      setBinanceApiKey('')
+      setBinanceSecretKey('')
+      setBinanceMessage('接続登録またはBinance APIへの通信に失敗しました。')
     }
   }
 
@@ -277,7 +409,14 @@ function App() {
                 <strong>{connection.label}</strong>
                 <span>{connection.environment}</span>
                 <span>{connection.status}</span>
-                <button type="button" onClick={() => void verifyOandaConnection(connection.id)}>
+                <button
+                  type="button"
+                  onClick={() =>
+                    void (connection.environment === 'testnet'
+                      ? verifyBinanceConnection(connection.id)
+                      : verifyOandaConnection(connection.id))
+                  }
+                >
                   検証
                 </button>
               </li>
@@ -297,10 +436,27 @@ function App() {
           </div>
           <div className="registration-grid">
             <label>
+              操作
+              <select
+                value={selectedOandaConnectionId}
+                onChange={(event) => setSelectedOandaConnectionId(event.target.value)}
+              >
+                <option value="">新しい接続を登録</option>
+                {connections
+                  .filter((connection) => connection.environment === 'practice')
+                  .map((connection) => (
+                    <option key={connection.id} value={connection.id}>
+                      {connection.label}を更新 ({connection.status})
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label>
               接続名
               <input
                 value={connectionLabel}
                 onChange={(event) => setConnectionLabel(event.target.value)}
+                disabled={Boolean(selectedOandaConnectionId)}
               />
             </label>
             <label>
@@ -315,9 +471,9 @@ function App() {
             <button
               type="button"
               onClick={() => void registerAndVerifyOanda()}
-              disabled={!oandaToken || !connectionLabel.trim()}
+              disabled={!oandaToken || (!selectedOandaConnectionId && !connectionLabel.trim())}
             >
-              暗号化保存して検証
+              {selectedOandaConnectionId ? 'Tokenを更新して再検証' : '暗号化保存して検証'}
             </button>
           </div>
           <p className="workspace-message">{registrationMessage}</p>
@@ -328,6 +484,88 @@ function App() {
                   <strong>{account.alias || account.account_ref_masked}</strong>
                   <span>{account.currency}</span>
                   <span>USD/JPY: {account.usd_jpy_tradeable ? '利用可能' : '利用不可'}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+
+      {selectedWorkspaceId && (
+        <section className="workspace-panel connection-registration">
+          <div>
+            <p className="eyebrow">BINANCE SPOT TESTNET</p>
+            <h2>Binance接続を登録</h2>
+            <p className="panel-description">
+              署名付きの口座照会だけを行います。外部注文は送信しません。
+            </p>
+          </div>
+          <div className="registration-grid">
+            <label>
+              操作
+              <select
+                value={selectedBinanceConnectionId}
+                onChange={(event) => setSelectedBinanceConnectionId(event.target.value)}
+              >
+                <option value="">新しい接続を登録</option>
+                {connections
+                  .filter((connection) => connection.environment === 'testnet')
+                  .map((connection) => (
+                    <option key={connection.id} value={connection.id}>
+                      {connection.label}を更新 ({connection.status})
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label>
+              接続名
+              <input
+                value={binanceLabel}
+                onChange={(event) => setBinanceLabel(event.target.value)}
+                disabled={Boolean(selectedBinanceConnectionId)}
+              />
+            </label>
+            <label>
+              Binance API Key
+              <input
+                type="password"
+                value={binanceApiKey}
+                onChange={(event) => setBinanceApiKey(event.target.value)}
+                autoComplete="off"
+              />
+            </label>
+            <label>
+              Binance Secret Key
+              <input
+                type="password"
+                value={binanceSecretKey}
+                onChange={(event) => setBinanceSecretKey(event.target.value)}
+                autoComplete="off"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => void registerAndVerifyBinance()}
+              disabled={
+                !binanceApiKey ||
+                !binanceSecretKey ||
+                (!selectedBinanceConnectionId && !binanceLabel.trim())
+              }
+            >
+              {selectedBinanceConnectionId
+                ? 'API資格情報を更新して再検証'
+                : '暗号化保存して検証'}
+            </button>
+          </div>
+          <p className="workspace-message">{binanceMessage}</p>
+          {binanceAccounts.length > 0 && (
+            <ul className="account-list">
+              {binanceAccounts.map((account) => (
+                <li key={account.account_ref_masked}>
+                  <strong>{account.account_type} ({account.account_ref_masked})</strong>
+                  <span>残高あり資産: {account.nonzero_asset_count}</span>
+                  <span>BTC/JPY: {account.btc_jpy_tradeable ? '利用可能' : '利用不可'}</span>
+                  <span>取引権限: {account.can_trade ? '有効' : '無効'}</span>
                 </li>
               ))}
             </ul>

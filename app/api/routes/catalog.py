@@ -9,6 +9,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.exchanges.binance import (
+    BinanceApiError,
+    BinanceAuthenticationError,
+    BinanceSpotTestnetClient,
+    get_binance_spot_testnet_client,
+    mask_api_key,
+)
 from app.exchanges.oanda import (
     OandaApiError,
     OandaAuthenticationError,
@@ -18,8 +25,11 @@ from app.exchanges.oanda import (
 )
 from app.models.catalog import Exchange, ExchangeConnection, ExternalAccount, Market, Workspace
 from app.schemas.catalog import (
+    BinanceAccountRead,
+    BinanceVerificationRead,
     ExchangeConnectionCreate,
     ExchangeConnectionRead,
+    ExchangeCredentialsUpdate,
     ExchangeRead,
     MarketRead,
     OandaAccountRead,
@@ -35,6 +45,7 @@ DatabaseSession = Annotated[Session, Depends(get_db)]
 Owner = Annotated[str, Depends(require_owner)]
 SecretStore = Annotated[LocalEncryptedSecretStore, Depends(get_secret_store)]
 OandaClient = Annotated[OandaPracticeClient, Depends(get_oanda_practice_client)]
+BinanceClient = Annotated[BinanceSpotTestnetClient, Depends(get_binance_spot_testnet_client)]
 
 
 @router.get("/workspaces", response_model=list[WorkspaceRead], tags=["workspaces"])
@@ -153,19 +164,21 @@ def disable_exchange_connection(
     return connection
 
 
-@router.post(
-    "/workspaces/{workspace_id}/connections/{connection_id}/verify",
-    response_model=OandaVerificationRead,
+@router.put(
+    "/workspaces/{workspace_id}/connections/{connection_id}/credentials",
+    response_model=OandaVerificationRead | BinanceVerificationRead,
     tags=["connections"],
 )
-async def verify_oanda_connection(
+async def update_connection_credentials_and_verify(
     workspace_id: UUID,
     connection_id: UUID,
+    payload: ExchangeCredentialsUpdate,
     db: DatabaseSession,
     secret_store: SecretStore,
     oanda_client: OandaClient,
+    binance_client: BinanceClient,
     _owner: Owner,
-) -> OandaVerificationRead:
+) -> OandaVerificationRead | BinanceVerificationRead:
     connection = db.scalar(
         select(ExchangeConnection).where(
             ExchangeConnection.id == connection_id,
@@ -175,10 +188,75 @@ async def verify_oanda_connection(
     if connection is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connection not found")
     exchange = db.get(Exchange, connection.exchange_id)
-    if exchange is None or exchange.code != "oanda" or connection.environment != "practice":
+    if exchange is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Exchange is missing")
+
+    credentials = payload.revealed_credentials()
+    _validate_connection_credentials(exchange.code, credentials)
+    new_secret_ref = secret_store.put(credentials)
+    old_secret_ref = connection.secret_ref
+    connection.secret_ref = new_secret_ref
+    connection.status = "verifying"
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        secret_store.delete(new_secret_ref)
+        raise
+    if old_secret_ref is not None:
+        secret_store.delete(old_secret_ref)
+
+    try:
+        return await verify_exchange_connection(
+            workspace_id=workspace_id,
+            connection_id=connection_id,
+            db=db,
+            secret_store=secret_store,
+            oanda_client=oanda_client,
+            binance_client=binance_client,
+            _owner=_owner,
+        )
+    except HTTPException as exc:
+        if exc.status_code in {status.HTTP_401_UNAUTHORIZED, status.HTTP_502_BAD_GATEWAY}:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=f"Credentials were updated, but verification failed: {exc.detail}",
+            ) from exc
+        raise
+
+
+@router.post(
+    "/workspaces/{workspace_id}/connections/{connection_id}/verify",
+    response_model=OandaVerificationRead | BinanceVerificationRead,
+    tags=["connections"],
+)
+async def verify_exchange_connection(
+    workspace_id: UUID,
+    connection_id: UUID,
+    db: DatabaseSession,
+    secret_store: SecretStore,
+    oanda_client: OandaClient,
+    binance_client: BinanceClient,
+    _owner: Owner,
+) -> OandaVerificationRead | BinanceVerificationRead:
+    connection = db.scalar(
+        select(ExchangeConnection).where(
+            ExchangeConnection.id == connection_id,
+            ExchangeConnection.workspace_id == workspace_id,
+        )
+    )
+    if connection is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connection not found")
+    exchange = db.get(Exchange, connection.exchange_id)
+    if exchange is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Exchange is missing")
+    supported_connection = (exchange.code == "oanda" and connection.environment == "practice") or (
+        exchange.code == "binance" and connection.environment == "testnet"
+    )
+    if not supported_connection:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only OANDA practice connections can be verified by this endpoint",
+            detail="Only OANDA practice and Binance Spot Testnet connections can be verified",
         )
     if connection.secret_ref is None:
         raise HTTPException(
@@ -191,6 +269,12 @@ async def verify_oanda_connection(
             status_code=status.HTTP_409_CONFLICT,
             detail="Connection credentials cannot be loaded",
         ) from exc
+
+    if exchange.code == "binance":
+        return await _verify_binance_connection(
+            connection, credentials, db, secret_store, binance_client
+        )
+
     token = credentials.get("token")
     if not token:
         raise HTTPException(
@@ -262,6 +346,110 @@ async def verify_oanda_connection(
         status=connection.status,
         accounts=response_accounts,
     )
+
+
+async def _verify_binance_connection(
+    connection: ExchangeConnection,
+    credentials: dict[str, str],
+    db: Session,
+    secret_store: LocalEncryptedSecretStore,
+    binance_client: BinanceSpotTestnetClient,
+) -> BinanceVerificationRead:
+    api_key = credentials.get("api_key")
+    secret_key = credentials.get("secret_key")
+    if not api_key or not secret_key:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Binance credentials must include api_key and secret_key",
+        )
+
+    connection.status = "verifying"
+    db.commit()
+    try:
+        account = await binance_client.verify_account(
+            connection.api_base_url, api_key, secret_key
+        )
+    except BinanceAuthenticationError as exc:
+        connection.status = "invalid"
+        connection.last_verified_at = datetime.now(UTC)
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    except BinanceApiError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    now = datetime.now(UTC)
+    account_hash = hashlib.sha256(account.account_ref.encode("utf-8")).hexdigest()
+    external_account = db.scalar(
+        select(ExternalAccount).where(
+            ExternalAccount.connection_id == connection.id,
+            ExternalAccount.external_account_ref_hash == account_hash,
+        )
+    )
+    if external_account is None:
+        external_account = ExternalAccount(
+            connection_id=connection.id,
+            external_account_ref_hash=account_hash,
+            external_account_ref_encrypted=secret_store.encrypt_text(account.account_ref),
+            external_account_ref_masked=mask_api_key(account.account_ref),
+            environment="testnet",
+            currency="MULTI",
+        )
+        db.add(external_account)
+    external_account.alias = "Binance Spot Testnet"
+    external_account.capabilities = {
+        "account_type": account.account_type,
+        "permissions": list(account.permissions),
+        "can_trade": account.can_trade,
+        "can_deposit": account.can_deposit,
+        "can_withdraw": account.can_withdraw,
+        "nonzero_asset_count": account.nonzero_asset_count,
+        "btc_jpy_tradeable": account.btc_jpy_tradeable,
+    }
+    external_account.status = "active"
+    external_account.synced_at = now
+
+    connection.status = "verified"
+    connection.last_verified_at = now
+    connection.capabilities = {
+        **external_account.capabilities,
+        "account_count": 1,
+        "read_only_verified": True,
+    }
+    db.commit()
+    return BinanceVerificationRead(
+        connection_id=connection.id,
+        status=connection.status,
+        accounts=[
+            BinanceAccountRead(
+                account_ref_masked=external_account.external_account_ref_masked,
+                account_type=account.account_type,
+                permissions=list(account.permissions),
+                can_trade=account.can_trade,
+                can_deposit=account.can_deposit,
+                can_withdraw=account.can_withdraw,
+                nonzero_asset_count=account.nonzero_asset_count,
+                btc_jpy_tradeable=account.btc_jpy_tradeable,
+            )
+        ],
+    )
+
+
+def _validate_connection_credentials(exchange_code: str, credentials: dict[str, str]) -> None:
+    required_keys = {
+        "oanda": {"token"},
+        "binance": {"api_key", "secret_key"},
+    }.get(exchange_code)
+    if required_keys is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Credential updates are not supported for this exchange",
+        )
+    if set(credentials) != required_keys or any(not credentials[key] for key in required_keys):
+        expected = ", ".join(sorted(required_keys))
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"{exchange_code.title()} credentials must contain only: {expected}",
+        )
 
 
 @router.get("/exchanges", response_model=list[ExchangeRead], tags=["catalog"])

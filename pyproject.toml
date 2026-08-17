@@ -14,8 +14,10 @@ dependencies = [
   "alembic>=1.16,<2",
   "cryptography>=46,<47",
   "fastapi>=0.139,<0.142",
+  "oandapyV20>=0.7.2,<1",
   "pydantic-settings>=2.14,<3",
   "psycopg[binary,pool]>=3.3.4,<4",
+  "python-binance>=1.0.37,<2",
   "SQLAlchemy>=2.0.51,<2.1",
   "uvicorn[standard]>=0.51,<0.53",
 ]

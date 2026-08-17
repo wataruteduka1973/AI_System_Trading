@@ -48,6 +48,11 @@ SECRET_ENCRYPTION_KEY=2つ目のコマンドで生成した値
 SECRET_STORE_PATH=.secrets
 ```
 
+FastAPIサーバーを起動する際には以下のコマンドで起動します。
+```powershell
+fastapi dev app/main.py
+```
+
 既に`postgresql_schema_v0.1.sql`を適用済みのDBでは、内容を確認したうえで`python -m alembic stamp head`を使い、同じDDLを再実行しないでください。
 
 別のターミナルでフロントエンドを起動します。
@@ -71,7 +76,8 @@ npm run dev
 - `GET /api/v1/workspaces/{workspace_id}/connections` — 接続一覧（秘密参照は返さない）
 - `POST /api/v1/workspaces/{workspace_id}/connections` — 暗号化した認証情報で接続登録
 - `POST /api/v1/workspaces/{workspace_id}/connections/{connection_id}/disable` — 接続無効化
-- `POST /api/v1/workspaces/{workspace_id}/connections/{connection_id}/verify` — OANDA practice Token検証・口座同期
+- `POST /api/v1/workspaces/{workspace_id}/connections/{connection_id}/verify` — OANDA practice / Binance Spot Testnet 資格情報検証・口座同期
+- `PUT /api/v1/workspaces/{workspace_id}/connections/{connection_id}/credentials` — 暗号化資格情報を置換して即時再検証
 - `GET /api/v1/exchanges` — 対応取引所一覧
 - `GET /api/v1/markets` — 対応市場一覧
 

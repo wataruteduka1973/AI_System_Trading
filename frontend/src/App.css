@@ -75,7 +75,8 @@ h1 {
 
 .workspace-controls input,
 .workspace-controls select,
-.registration-grid input {
+.registration-grid input,
+.registration-grid select {
   width: 100%;
   padding: 11px 12px;
   border: 1px solid #38506f;
@@ -86,7 +87,7 @@ h1 {
 
 .registration-grid {
   display: grid;
-  grid-template-columns: minmax(180px, 0.8fr) minmax(280px, 1.4fr) auto;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 14px;
   align-items: end;
   margin: 22px 0;

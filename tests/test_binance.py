@@ -1,0 +1,58 @@
+import asyncio
+from unittest.mock import AsyncMock, MagicMock
+
+from app.exchanges.binance import BinanceApiError, BinanceSpotTestnetClient, mask_api_key
+
+
+def test_binance_spot_testnet_client_uses_sdk_and_reads_account() -> None:
+    sdk_client = MagicMock()
+    sdk_client.get_account = AsyncMock(
+        return_value={
+            "canTrade": True,
+            "canDeposit": False,
+            "canWithdraw": False,
+            "accountType": "SPOT",
+            "permissions": ["SPOT"],
+            "balances": [
+                {"asset": "BTC", "free": "0.01000000", "locked": "0.00000000"},
+                {"asset": "JPY", "free": "0.00000000", "locked": "0.00000000"},
+            ],
+        }
+    )
+    sdk_client.get_symbol_info = AsyncMock(
+        return_value={"symbol": "BTCJPY", "status": "TRADING"}
+    )
+    sdk_client.close_connection = AsyncMock()
+    client_factory = AsyncMock(return_value=sdk_client)
+
+    account = asyncio.run(
+        BinanceSpotTestnetClient(client_factory=client_factory).verify_account(
+            "https://testnet.binance.vision", "public-api-key", "private-secret"
+        )
+    )
+
+    client_factory.assert_awaited_once_with(
+        api_key="public-api-key",
+        api_secret="private-secret",
+        testnet=True,
+        requests_params={"timeout": 10.0},
+    )
+    sdk_client.get_account.assert_awaited_once_with(recvWindow=5000)
+    sdk_client.get_symbol_info.assert_awaited_once_with("BTCJPY")
+    sdk_client.close_connection.assert_awaited_once()
+    assert account.nonzero_asset_count == 1
+    assert account.btc_jpy_tradeable is True
+    assert mask_api_key(account.account_ref) == "****-key"
+
+
+def test_binance_client_rejects_non_testnet_host() -> None:
+    try:
+        asyncio.run(
+            BinanceSpotTestnetClient().verify_account(
+                "https://example.com", "public-api-key", "private-secret"
+            )
+        )
+    except BinanceApiError as exc:
+        assert "Testnet" in str(exc)
+    else:
+        raise AssertionError("Non-testnet host was accepted")

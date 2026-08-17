@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 from app.db.session import get_db
+from app.exchanges.binance import BinanceSpotAccount, get_binance_spot_testnet_client
 from app.exchanges.oanda import OandaAccount, get_oanda_practice_client
 from app.main import app
 from app.models.catalog import Exchange, Market, Workspace
@@ -183,3 +184,171 @@ def test_verify_oanda_connection_syncs_masked_account() -> None:
     external_account = session.add.call_args.args[0]
     assert external_account.external_account_ref_encrypted == "encrypted-account-reference"
     assert external_account.external_account_ref_hash != "101-001-12345678-001"
+
+
+def test_verify_binance_connection_syncs_masked_account() -> None:
+    workspace_id = uuid4()
+    connection = MagicMock()
+    connection.id = uuid4()
+    connection.workspace_id = workspace_id
+    connection.exchange_id = uuid4()
+    connection.environment = "testnet"
+    connection.api_base_url = "https://testnet.binance.vision"
+    connection.secret_ref = "local-encrypted://abcdef0123456789abcdef0123456789"
+    connection.capabilities = {}
+    exchange = Exchange(id=connection.exchange_id, code="binance", name="Binance", status="active")
+    session = MagicMock()
+    session.scalar.side_effect = [connection, None]
+    session.get.return_value = exchange
+    secret_store = MagicMock()
+    secret_store.get.return_value = {
+        "api_key": "public-sensitive-key",
+        "secret_key": "private-sensitive-secret",
+    }
+    secret_store.encrypt_text.return_value = "encrypted-api-key-reference"
+    binance_client = MagicMock()
+    binance_client.verify_account = AsyncMock(
+        return_value=BinanceSpotAccount(
+            account_ref="public-sensitive-key",
+            can_trade=True,
+            can_deposit=False,
+            can_withdraw=False,
+            account_type="SPOT",
+            permissions=("SPOT",),
+            nonzero_asset_count=2,
+            btc_jpy_tradeable=True,
+        )
+    )
+    override_database(session)
+    app.dependency_overrides[get_secret_store] = lambda: secret_store
+    app.dependency_overrides[get_binance_spot_testnet_client] = lambda: binance_client
+    try:
+        response = client.post(
+            f"/api/v1/workspaces/{workspace_id}/connections/{connection.id}/verify"
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["accounts"][0]["account_ref_masked"] == "****-key"
+    assert "sensitive" not in response.text
+    assert response.json()["accounts"][0]["btc_jpy_tradeable"] is True
+    assert connection.status == "verified"
+    external_account = session.add.call_args.args[0]
+    assert external_account.external_account_ref_encrypted == "encrypted-api-key-reference"
+    assert external_account.external_account_ref_hash != "public-sensitive-key"
+
+
+def test_update_oanda_credentials_replaces_secret_and_reverifies() -> None:
+    workspace_id = uuid4()
+    connection = MagicMock()
+    connection.id = uuid4()
+    connection.workspace_id = workspace_id
+    connection.exchange_id = uuid4()
+    connection.environment = "practice"
+    connection.api_base_url = "https://api-fxpractice.oanda.com"
+    connection.secret_ref = "local-encrypted://11111111111111111111111111111111"
+    connection.capabilities = {}
+    exchange = Exchange(id=connection.exchange_id, code="oanda", name="OANDA", status="active")
+    session = MagicMock()
+    session.scalar.side_effect = [connection, connection, None]
+    session.get.return_value = exchange
+    secret_store = MagicMock()
+    secret_store.put.return_value = "local-encrypted://22222222222222222222222222222222"
+    secret_store.get.return_value = {"token": "new-sensitive-token"}
+    secret_store.encrypt_text.return_value = "encrypted-account-reference"
+    oanda_client = MagicMock()
+    oanda_client.verify_and_list_accounts = AsyncMock(
+        return_value=[
+            OandaAccount(
+                account_id="101-001-12345678-001",
+                alias="Practice",
+                currency="JPY",
+                hedging_enabled=True,
+                margin_rate=Decimal("0.04"),
+                gslo_mode="disabled",
+                usd_jpy_tradeable=True,
+            )
+        ]
+    )
+    override_database(session)
+    app.dependency_overrides[get_secret_store] = lambda: secret_store
+    app.dependency_overrides[get_oanda_practice_client] = lambda: oanda_client
+    try:
+        response = client.put(
+            f"/api/v1/workspaces/{workspace_id}/connections/{connection.id}/credentials",
+            json={"credentials": {"token": "new-sensitive-token"}},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert "sensitive" not in response.text
+    secret_store.put.assert_called_once_with({"token": "new-sensitive-token"})
+    secret_store.delete.assert_called_once_with(
+        "local-encrypted://11111111111111111111111111111111"
+    )
+    assert connection.secret_ref == "local-encrypted://22222222222222222222222222222222"
+    assert connection.status == "verified"
+
+
+def test_update_binance_credentials_replaces_secret_and_reverifies() -> None:
+    workspace_id = uuid4()
+    connection = MagicMock()
+    connection.id = uuid4()
+    connection.workspace_id = workspace_id
+    connection.exchange_id = uuid4()
+    connection.environment = "testnet"
+    connection.api_base_url = "https://testnet.binance.vision"
+    connection.secret_ref = "local-encrypted://33333333333333333333333333333333"
+    connection.capabilities = {}
+    exchange = Exchange(id=connection.exchange_id, code="binance", name="Binance", status="active")
+    session = MagicMock()
+    session.scalar.side_effect = [connection, connection, None]
+    session.get.return_value = exchange
+    secret_store = MagicMock()
+    secret_store.put.return_value = "local-encrypted://44444444444444444444444444444444"
+    secret_store.get.return_value = {
+        "api_key": "new-sensitive-key",
+        "secret_key": "new-sensitive-secret",
+    }
+    secret_store.encrypt_text.return_value = "encrypted-api-key-reference"
+    binance_client = MagicMock()
+    binance_client.verify_account = AsyncMock(
+        return_value=BinanceSpotAccount(
+            account_ref="new-sensitive-key",
+            can_trade=True,
+            can_deposit=False,
+            can_withdraw=False,
+            account_type="SPOT",
+            permissions=("SPOT",),
+            nonzero_asset_count=3,
+            btc_jpy_tradeable=True,
+        )
+    )
+    override_database(session)
+    app.dependency_overrides[get_secret_store] = lambda: secret_store
+    app.dependency_overrides[get_binance_spot_testnet_client] = lambda: binance_client
+    try:
+        response = client.put(
+            f"/api/v1/workspaces/{workspace_id}/connections/{connection.id}/credentials",
+            json={
+                "credentials": {
+                    "api_key": "new-sensitive-key",
+                    "secret_key": "new-sensitive-secret",
+                }
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert "sensitive" not in response.text
+    secret_store.put.assert_called_once_with(
+        {"api_key": "new-sensitive-key", "secret_key": "new-sensitive-secret"}
+    )
+    secret_store.delete.assert_called_once_with(
+        "local-encrypted://33333333333333333333333333333333"
+    )
+    assert connection.secret_ref == "local-encrypted://44444444444444444444444444444444"
+    assert connection.status == "verified"

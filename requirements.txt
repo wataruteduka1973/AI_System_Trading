@@ -42,3 +42,6 @@ pytest>=8.4,<10
 pytest-asyncio>=1.0,<2
 pytest-cov>=7.1.0,<8
 respx>=0.22,<1
+# OANDA / Binance API clients
+oandapyV20>=0.7.2,<1
+python-binance>=1.0.37,<2

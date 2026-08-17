@@ -1,19 +1,18 @@
 import asyncio
+from unittest.mock import MagicMock
 
-import httpx
-import respx
 from app.exchanges.oanda import OandaApiError, OandaPracticeClient, mask_account_id
+from oandapyV20.endpoints.accounts import AccountInstruments, AccountList, AccountSummary
 
 
-@respx.mock
-def test_oanda_practice_client_reads_accounts_and_usd_jpy_capability() -> None:
-    accounts_route = respx.get("https://api-fxpractice.oanda.com/v3/accounts").mock(
-        return_value=httpx.Response(200, json={"accounts": [{"id": "101-001-12345678-001"}]})
-    )
-    respx.get("https://api-fxpractice.oanda.com/v3/accounts/101-001-12345678-001/summary").mock(
-        return_value=httpx.Response(
-            200,
-            json={
+def test_oanda_practice_client_uses_sdk_and_reads_accounts() -> None:
+    sdk_client = MagicMock()
+
+    def request(endpoint: object) -> dict[str, object]:
+        if isinstance(endpoint, AccountList):
+            return {"accounts": [{"id": "101-001-12345678-001"}]}
+        if isinstance(endpoint, AccountSummary):
+            return {
                 "account": {
                     "id": "101-001-12345678-001",
                     "alias": "Practice",
@@ -22,21 +21,25 @@ def test_oanda_practice_client_reads_accounts_and_usd_jpy_capability() -> None:
                     "marginRate": "0.04",
                     "guaranteedStopLossOrderMode": "DISABLED",
                 }
-            },
-        )
-    )
-    respx.get(
-        "https://api-fxpractice.oanda.com/v3/accounts/101-001-12345678-001/instruments",
-        params={"instruments": "USD_JPY"},
-    ).mock(return_value=httpx.Response(200, json={"instruments": [{"name": "USD_JPY"}]}))
+            }
+        if isinstance(endpoint, AccountInstruments):
+            return {"instruments": [{"name": "USD_JPY"}]}
+        raise AssertionError(f"Unexpected endpoint: {endpoint!r}")
 
+    sdk_client.request.side_effect = request
+    api_factory = MagicMock(return_value=sdk_client)
     accounts = asyncio.run(
-        OandaPracticeClient().verify_and_list_accounts(
+        OandaPracticeClient(api_factory=api_factory).verify_and_list_accounts(
             "https://api-fxpractice.oanda.com", "private-token"
         )
     )
 
-    assert accounts_route.calls[0].request.headers["Authorization"] == "Bearer private-token"
+    api_factory.assert_called_once_with(
+        access_token="private-token",
+        environment="practice",
+        request_params={"timeout": 10.0},
+    )
+    sdk_client.client.close.assert_called_once()
     assert accounts[0].currency == "JPY"
     assert accounts[0].usd_jpy_tradeable is True
     assert mask_account_id(accounts[0].account_id) == "****8001"

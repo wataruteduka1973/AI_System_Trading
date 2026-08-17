@@ -1,8 +1,16 @@
+# pyright: reportMissingTypeStubs=false
+
+import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Any
 from urllib.parse import urlparse
 
-import httpx
+from oandapyV20 import API
+from oandapyV20.endpoints.accounts import AccountInstruments, AccountList, AccountSummary
+from oandapyV20.exceptions import V20Error
+from requests import RequestException
 
 PRACTICE_HOST = "api-fxpractice.oanda.com"
 
@@ -33,37 +41,53 @@ def mask_account_id(account_id: str) -> str:
 
 
 class OandaPracticeClient:
-    def __init__(self, timeout_seconds: float = 10.0) -> None:
-        self.timeout = httpx.Timeout(timeout_seconds)
+    def __init__(
+        self, timeout_seconds: float = 10.0, api_factory: Callable[..., API] = API
+    ) -> None:
+        self.timeout_seconds = timeout_seconds
+        self.api_factory = api_factory
 
     async def verify_and_list_accounts(self, base_url: str, token: str) -> list[OandaAccount]:
         self._validate_practice_url(base_url)
-        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-        async with httpx.AsyncClient(
-            base_url=base_url.rstrip("/"), headers=headers, timeout=self.timeout
-        ) as client:
-            account_payload = await self._get_json(client, "/v3/accounts")
+        return await asyncio.to_thread(self._verify_and_list_accounts_sync, token)
+
+    def _verify_and_list_accounts_sync(self, token: str) -> list[OandaAccount]:
+        client = self.api_factory(
+            access_token=token,
+            environment="practice",
+            request_params={"timeout": self.timeout_seconds},
+        )
+        try:
+            account_payload = self._request(client, AccountList())
             account_refs = account_payload.get("accounts")
             if not isinstance(account_refs, list):
                 raise OandaApiError("OANDA account response has an invalid format")
-
             accounts: list[OandaAccount] = []
             for account_ref in account_refs:
                 account_id = account_ref.get("id") if isinstance(account_ref, dict) else None
                 if not isinstance(account_id, str) or not account_id:
                     raise OandaApiError("OANDA account response is missing an account ID")
-                accounts.append(await self._load_account(client, account_id))
+                accounts.append(self._load_account(client, account_id))
             return accounts
+        except V20Error as exc:
+            if exc.code in {401, 403}:
+                raise OandaAuthenticationError("OANDA rejected the access token") from exc
+            raise OandaApiError(f"OANDA request failed with HTTP {exc.code}") from exc
+        except RequestException as exc:
+            raise OandaApiError("OANDA practice API is unreachable") from exc
+        finally:
+            session = getattr(client, "client", None)
+            if session is not None:
+                session.close()
 
-    async def _load_account(self, client: httpx.AsyncClient, account_id: str) -> OandaAccount:
-        summary_payload = await self._get_json(client, f"/v3/accounts/{account_id}/summary")
+    def _load_account(self, client: API, account_id: str) -> OandaAccount:
+        summary_payload = self._request(client, AccountSummary(accountID=account_id))
         summary = summary_payload.get("account")
         if not isinstance(summary, dict):
             raise OandaApiError("OANDA account summary has an invalid format")
-        instruments_payload = await self._get_json(
+        instruments_payload = self._request(
             client,
-            f"/v3/accounts/{account_id}/instruments",
-            params={"instruments": "USD_JPY"},
+            AccountInstruments(accountID=account_id, params={"instruments": "USD_JPY"}),
         )
         instruments = instruments_payload.get("instruments", [])
         usd_jpy_tradeable = any(
@@ -91,24 +115,9 @@ class OandaPracticeClient:
             usd_jpy_tradeable=usd_jpy_tradeable,
         )
 
-    async def _get_json(
-        self,
-        client: httpx.AsyncClient,
-        path: str,
-        params: dict[str, str] | None = None,
-    ) -> dict[str, object]:
-        try:
-            response = await client.get(path, params=params)
-        except httpx.RequestError as exc:
-            raise OandaApiError("OANDA practice API is unreachable") from exc
-        if response.status_code == 401:
-            raise OandaAuthenticationError("OANDA rejected the access token")
-        if response.status_code >= 400:
-            raise OandaApiError(f"OANDA request failed with HTTP {response.status_code}")
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise OandaApiError("OANDA returned invalid JSON") from exc
+    @staticmethod
+    def _request(client: API, endpoint: object) -> dict[str, Any]:
+        payload = client.request(endpoint)
         if not isinstance(payload, dict):
             raise OandaApiError("OANDA returned an invalid response")
         return payload
