@@ -3,7 +3,7 @@
 # Version policy: accept compatible patch/minor updates, block breaking major updates.
 
 # Web API / configuration
-fastapi>=0.139,<0.140
+fastapi>=0.139,<0.142
 uvicorn[standard]>=0.51,<0.53
 pydantic-settings>=2.14,<3
 python-multipart>=0.0.20,<1
