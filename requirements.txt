@@ -31,7 +31,7 @@ pandas>=2.3,<4
 scipy>=1.15,<2
 scikit-learn>=1.7,<2
 joblib>=1.4,<2
-torch>=2.10,<3
+torch>=2.13.0,<3
 
 # Structured event logging and metrics
 structlog>=25,<26
