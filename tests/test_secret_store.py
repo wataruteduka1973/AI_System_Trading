@@ -12,5 +12,9 @@ def test_local_secret_store_encrypts_round_trip(tmp_path) -> None:
     assert b"very-sensitive" not in encrypted_files[0].read_bytes()
     assert store.get(secret_ref) == {"token": "very-sensitive"}
 
+    encrypted_value = store.encrypt_text("101-001-private")
+    assert "101-001-private" not in encrypted_value
+    assert store.decrypt_text(encrypted_value) == "101-001-private"
+
     store.delete(secret_ref)
     assert not encrypted_files[0].exists()

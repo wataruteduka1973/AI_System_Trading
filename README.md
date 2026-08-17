@@ -71,10 +71,13 @@ npm run dev
 - `GET /api/v1/workspaces/{workspace_id}/connections` — 接続一覧（秘密参照は返さない）
 - `POST /api/v1/workspaces/{workspace_id}/connections` — 暗号化した認証情報で接続登録
 - `POST /api/v1/workspaces/{workspace_id}/connections/{connection_id}/disable` — 接続無効化
+- `POST /api/v1/workspaces/{workspace_id}/connections/{connection_id}/verify` — OANDA practice Token検証・口座同期
 - `GET /api/v1/exchanges` — 対応取引所一覧
 - `GET /api/v1/markets` — 対応市場一覧
 
 Workspaceと接続APIでは`X-Owner-Token`ヘッダーが必要です。これはローカル開発専用の認証であり、第三者配布前にOIDC認証へ置き換えます。取引所認証情報は`.secrets/`へFernet暗号化して保存し、DBには`local-encrypted://...`形式の参照だけを保存します。
+
+OANDA検証は公式practice APIの口座一覧、口座summary、USD/JPY instrumentを読取専用で取得します。口座IDは暗号化・ハッシュ・マスクして保存し、画面とAPIにはマスク値だけを返します。外部注文endpointは呼び出しません。
 
 ### 接続トラブルの確認順
 

@@ -47,6 +47,15 @@ class LocalEncryptedSecretStore:
     def delete(self, secret_ref: str) -> None:
         self._path_for(secret_ref).unlink(missing_ok=True)
 
+    def encrypt_text(self, value: str) -> str:
+        return self.cipher.encrypt(value.encode("utf-8")).decode("ascii")
+
+    def decrypt_text(self, value: str) -> str:
+        try:
+            return self.cipher.decrypt(value.encode("ascii")).decode("utf-8")
+        except (InvalidToken, UnicodeError) as exc:
+            raise ValueError("Encrypted value cannot be decrypted") from exc
+
     def _path_for(self, secret_ref: str) -> Path:
         if not secret_ref.startswith(SECRET_REF_PREFIX):
             raise ValueError("Unsupported secret reference")

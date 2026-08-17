@@ -74,13 +74,29 @@ h1 {
 }
 
 .workspace-controls input,
-.workspace-controls select {
+.workspace-controls select,
+.registration-grid input {
   width: 100%;
   padding: 11px 12px;
   border: 1px solid #38506f;
   border-radius: 9px;
   color: #eaf2ff;
   background: #07111f;
+}
+
+.registration-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(280px, 1.4fr) auto;
+  gap: 14px;
+  align-items: end;
+  margin: 22px 0;
+}
+
+.registration-grid label {
+  display: grid;
+  gap: 7px;
+  color: #9fb0c6;
+  font-size: 0.85rem;
 }
 
 button:disabled {
@@ -97,9 +113,26 @@ button:disabled {
 
 .connection-list li {
   display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  gap: 16px;
+  padding: 12px;
+  border-radius: 9px;
+  background: #07111f;
+}
+
+.account-list {
+  display: grid;
+  gap: 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.account-list li {
+  display: grid;
   grid-template-columns: 1fr auto auto;
   gap: 16px;
   padding: 12px;
+  border: 1px solid #1c8c68;
   border-radius: 9px;
   background: #07111f;
 }
@@ -186,7 +219,9 @@ button:hover {
   }
 
   .workspace-controls,
-  .connection-list li {
+  .registration-grid,
+  .connection-list li,
+  .account-list li {
     grid-template-columns: 1fr;
   }
 }

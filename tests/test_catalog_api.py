@@ -1,8 +1,10 @@
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
+from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 from app.db.session import get_db
+from app.exchanges.oanda import OandaAccount, get_oanda_practice_client
 from app.main import app
 from app.models.catalog import Exchange, Market, Workspace
 from app.security.auth import require_owner
@@ -131,3 +133,53 @@ def test_disable_connection() -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "disabled"
+
+
+def test_verify_oanda_connection_syncs_masked_account() -> None:
+    workspace_id = uuid4()
+    connection = MagicMock()
+    connection.id = uuid4()
+    connection.workspace_id = workspace_id
+    connection.exchange_id = uuid4()
+    connection.environment = "practice"
+    connection.api_base_url = "https://api-fxpractice.oanda.com"
+    connection.secret_ref = "local-encrypted://0123456789abcdef0123456789abcdef"
+    connection.capabilities = {}
+    exchange = Exchange(id=connection.exchange_id, code="oanda", name="OANDA", status="active")
+    session = MagicMock()
+    session.scalar.side_effect = [connection, None]
+    session.get.return_value = exchange
+    secret_store = MagicMock()
+    secret_store.get.return_value = {"token": "sensitive-token"}
+    secret_store.encrypt_text.return_value = "encrypted-account-reference"
+    oanda_client = MagicMock()
+    oanda_client.verify_and_list_accounts = AsyncMock(
+        return_value=[
+            OandaAccount(
+                account_id="101-001-12345678-001",
+                alias="Practice",
+                currency="JPY",
+                hedging_enabled=True,
+                margin_rate=Decimal("0.04"),
+                gslo_mode="disabled",
+                usd_jpy_tradeable=True,
+            )
+        ]
+    )
+    override_database(session)
+    app.dependency_overrides[get_secret_store] = lambda: secret_store
+    app.dependency_overrides[get_oanda_practice_client] = lambda: oanda_client
+    try:
+        response = client.post(
+            f"/api/v1/workspaces/{workspace_id}/connections/{connection.id}/verify"
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["accounts"][0]["account_ref_masked"] == "****8001"
+    assert "12345678" not in response.text
+    assert connection.status == "verified"
+    external_account = session.add.call_args.args[0]
+    assert external_account.external_account_ref_encrypted == "encrypted-account-reference"
+    assert external_account.external_account_ref_hash != "101-001-12345678-001"

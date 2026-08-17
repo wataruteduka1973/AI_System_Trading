@@ -57,3 +57,19 @@ class ExchangeConnectionCreate(BaseModel):
 
     def revealed_credentials(self) -> dict[str, str]:
         return {name: value.get_secret_value() for name, value in self.credentials.items()}
+
+
+class OandaAccountRead(BaseModel):
+    account_ref_masked: str
+    alias: str | None
+    currency: str
+    hedging_enabled: bool | None
+    margin_rate: str | None
+    gslo_mode: str | None
+    usd_jpy_tradeable: bool
+
+
+class OandaVerificationRead(BaseModel):
+    connection_id: UUID
+    status: str
+    accounts: list[OandaAccountRead]

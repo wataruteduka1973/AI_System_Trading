@@ -19,6 +19,16 @@ type ConnectionSummary = {
   status: string
 }
 
+type OandaVerification = {
+  status: string
+  accounts: Array<{
+    account_ref_masked: string
+    alias: string | null
+    currency: string
+    usd_jpy_tradeable: boolean
+  }>
+}
+
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000').replace(
   /\/$/,
   '',
@@ -76,6 +86,12 @@ function App() {
   const [workspaceMessage, setWorkspaceMessage] = useState(
     '開発用Owner tokenを入力してWorkspaceを読み込みます。',
   )
+  const [connectionLabel, setConnectionLabel] = useState('OANDA practice')
+  const [oandaToken, setOandaToken] = useState('')
+  const [registrationMessage, setRegistrationMessage] = useState(
+    'OANDA practice Tokenは登録後すぐに暗号化され、検証後に入力欄から消去されます。',
+  )
+  const [verifiedAccounts, setVerifiedAccounts] = useState<OandaVerification['accounts']>([])
 
   const loadHealth = useCallback(async () => {
     const [api, database] = await fetchHealth()
@@ -130,6 +146,63 @@ function App() {
       setWorkspaceMessage(`選択中のWorkspaceには${loaded.length}件の取引所接続があります。`)
     } catch {
       setWorkspaceMessage('接続一覧APIへ接続できません。')
+    }
+  }
+
+  const verifyOandaConnection = async (connectionId: string) => {
+    if (!selectedWorkspaceId) return
+    setRegistrationMessage('TokenをOANDA practiceで検証しています。')
+    setVerifiedAccounts([])
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/connections/${connectionId}/verify`,
+        { method: 'POST', headers: ownerHeaders },
+      )
+      if (!response.ok) {
+        setRegistrationMessage(`OANDA検証に失敗しました（HTTP ${response.status}）。`)
+        await loadConnections(selectedWorkspaceId)
+        return
+      }
+      const verification = (await response.json()) as OandaVerification
+      setVerifiedAccounts(verification.accounts)
+      setRegistrationMessage(
+        `OANDA接続を検証し、${verification.accounts.length}件の口座を同期しました。`,
+      )
+      await loadConnections(selectedWorkspaceId)
+    } catch {
+      setRegistrationMessage('OANDA APIへの通信に失敗しました。')
+    }
+  }
+
+  const registerAndVerifyOanda = async () => {
+    if (!selectedWorkspaceId || !oandaToken || !connectionLabel.trim()) return
+    setRegistrationMessage('接続情報を暗号化して登録しています。')
+    setVerifiedAccounts([])
+    try {
+      const createResponse = await fetch(
+        `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/connections`,
+        {
+          method: 'POST',
+          headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            exchange_code: 'oanda',
+            label: connectionLabel.trim(),
+            environment: 'practice',
+            api_base_url: 'https://api-fxpractice.oanda.com',
+            credentials: { token: oandaToken },
+          }),
+        },
+      )
+      setOandaToken('')
+      if (!createResponse.ok) {
+        setRegistrationMessage(`接続登録に失敗しました（HTTP ${createResponse.status}）。`)
+        return
+      }
+      const connection = (await createResponse.json()) as ConnectionSummary
+      await verifyOandaConnection(connection.id)
+    } catch {
+      setOandaToken('')
+      setRegistrationMessage('接続登録またはOANDA APIへの通信に失敗しました。')
     }
   }
 
@@ -204,11 +277,63 @@ function App() {
                 <strong>{connection.label}</strong>
                 <span>{connection.environment}</span>
                 <span>{connection.status}</span>
+                <button type="button" onClick={() => void verifyOandaConnection(connection.id)}>
+                  検証
+                </button>
               </li>
             ))}
           </ul>
         )}
       </section>
+
+      {selectedWorkspaceId && (
+        <section className="workspace-panel connection-registration">
+          <div>
+            <p className="eyebrow">OANDA PRACTICE</p>
+            <h2>取引所接続を登録</h2>
+            <p className="panel-description">
+              読取専用の口座確認を行います。外部注文は送信しません。
+            </p>
+          </div>
+          <div className="registration-grid">
+            <label>
+              接続名
+              <input
+                value={connectionLabel}
+                onChange={(event) => setConnectionLabel(event.target.value)}
+              />
+            </label>
+            <label>
+              OANDA personal access token
+              <input
+                type="password"
+                value={oandaToken}
+                onChange={(event) => setOandaToken(event.target.value)}
+                autoComplete="off"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => void registerAndVerifyOanda()}
+              disabled={!oandaToken || !connectionLabel.trim()}
+            >
+              暗号化保存して検証
+            </button>
+          </div>
+          <p className="workspace-message">{registrationMessage}</p>
+          {verifiedAccounts.length > 0 && (
+            <ul className="account-list">
+              {verifiedAccounts.map((account) => (
+                <li key={account.account_ref_masked}>
+                  <strong>{account.alias || account.account_ref_masked}</strong>
+                  <span>{account.currency}</span>
+                  <span>USD/JPY: {account.usd_jpy_tradeable ? '利用可能' : '利用不可'}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
 
       <button type="button" onClick={refreshHealth}>
         再確認
