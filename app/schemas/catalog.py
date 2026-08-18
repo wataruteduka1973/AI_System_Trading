@@ -46,6 +46,11 @@ class ExchangeConnectionRead(OrmModel):
     status: str
     capabilities: dict[str, object]
     last_verified_at: datetime | None
+    credentials_status: Literal["saved", "missing"]
+    credentials_updated_at: datetime | None
+    verification_outcome: Literal[
+        "not_verified", "success", "authentication_failed", "communication_failed"
+    ]
 
 
 class ExchangeConnectionCreate(BaseModel):
@@ -97,3 +102,28 @@ class BinanceVerificationRead(BaseModel):
     connection_id: UUID
     status: str
     accounts: list[BinanceAccountRead]
+
+
+class WorkspaceAccountRead(BaseModel):
+    id: UUID
+    connection_id: UUID
+    exchange_id: UUID
+    exchange_code: str
+    connection_label: str
+    account_ref_masked: str
+    alias: str | None
+    environment: str
+    currency: str
+    status: str
+    selected: bool
+
+
+class WorkspaceAccountSelectionUpdate(BaseModel):
+    external_account_id: UUID
+
+
+class WorkspaceAccountSelectionRead(BaseModel):
+    workspace_id: UUID
+    exchange_id: UUID
+    external_account_id: UUID
+    selected_at: datetime

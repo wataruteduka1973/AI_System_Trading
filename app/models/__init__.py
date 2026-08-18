@@ -1,3 +1,19 @@
-from app.models.catalog import Exchange, ExchangeConnection, ExternalAccount, Market, Workspace
+from app.models.catalog import (
+    AuditLog,
+    Exchange,
+    ExchangeConnection,
+    ExternalAccount,
+    Market,
+    Workspace,
+    WorkspaceAccountSelection,
+)
 
-__all__ = ["Exchange", "ExchangeConnection", "ExternalAccount", "Market", "Workspace"]
+__all__ = [
+    "AuditLog",
+    "Exchange",
+    "ExchangeConnection",
+    "ExternalAccount",
+    "Market",
+    "Workspace",
+    "WorkspaceAccountSelection",
+]

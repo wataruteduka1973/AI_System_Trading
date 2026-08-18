@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -69,12 +69,18 @@ class ExchangeConnection(Base):
     status: Mapped[str] = mapped_column(Text, server_default="pending_credentials")
     capabilities: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}")
     last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    credentials_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    verification_outcome: Mapped[str] = mapped_column(Text, server_default="not_verified")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     workspace: Mapped[Workspace] = relationship(back_populates="connections")
     exchange: Mapped[Exchange] = relationship(back_populates="connections")
     external_accounts: Mapped[list["ExternalAccount"]] = relationship(back_populates="connection")
+
+    @property
+    def credentials_status(self) -> str:
+        return "saved" if self.secret_ref else "missing"
 
 
 class ExternalAccount(Base):
@@ -102,3 +108,50 @@ class ExternalAccount(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     connection: Mapped[ExchangeConnection] = relationship(back_populates="external_accounts")
+
+
+class WorkspaceAccountSelection(Base):
+    __tablename__ = "workspace_account_selection"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "exchange_id", name="uq_workspace_exchange_selection"),
+        {"schema": SCHEMA},
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, server_default=func.gen_random_uuid())
+    workspace_id: Mapped[UUID] = mapped_column(
+        ForeignKey(f"{SCHEMA}.workspace.id", ondelete="CASCADE")
+    )
+    exchange_id: Mapped[UUID] = mapped_column(
+        ForeignKey(f"{SCHEMA}.exchange.id", ondelete="RESTRICT")
+    )
+    external_account_id: Mapped[UUID] = mapped_column(
+        ForeignKey(f"{SCHEMA}.external_account.id", ondelete="CASCADE")
+    )
+    selected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_log"
+    __table_args__ = {"schema": SCHEMA}
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, server_default=func.gen_random_uuid())
+    workspace_id: Mapped[UUID] = mapped_column(
+        ForeignKey(f"{SCHEMA}.workspace.id", ondelete="RESTRICT")
+    )
+    actor_id: Mapped[UUID | None] = mapped_column(ForeignKey(f"{SCHEMA}.app_user.id"))
+    action: Mapped[str] = mapped_column(Text)
+    resource_type: Mapped[str] = mapped_column(Text)
+    resource_id: Mapped[UUID | None]
+    before_data: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    after_data: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    correlation_id: Mapped[UUID]
+    ip_address: Mapped[str | None]
+    user_agent: Mapped[str | None] = mapped_column(Text)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

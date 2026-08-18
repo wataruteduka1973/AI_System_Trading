@@ -14,9 +14,28 @@ type WorkspaceSummary = {
 
 type ConnectionSummary = {
   id: string
+  exchange_id: string
   label: string
   environment: string
   status: string
+  credentials_status: 'saved' | 'missing'
+  credentials_updated_at: string | null
+  verification_outcome:
+    | 'not_verified'
+    | 'success'
+    | 'authentication_failed'
+    | 'communication_failed'
+}
+
+type WorkspaceAccount = {
+  id: string
+  exchange_code: 'oanda' | 'binance'
+  connection_label: string
+  account_ref_masked: string
+  alias: string | null
+  currency: string
+  status: string
+  selected: boolean
 }
 
 type OandaVerification = {
@@ -79,6 +98,14 @@ const apiErrorMessage = async (response: Response, fallback: string) => {
   }
 }
 
+const verificationLabel = (outcome: ConnectionSummary['verification_outcome']) =>
+  ({
+    not_verified: '未検証',
+    success: '認証成功',
+    authentication_failed: '認証失敗',
+    communication_failed: '通信失敗',
+  })[outcome]
+
 function StatusCard({ title, state }: { title: string; state: HealthState }) {
   return (
     <article className={`status-card status-${state.status}`}>
@@ -104,6 +131,7 @@ function App() {
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState('')
   const [connections, setConnections] = useState<ConnectionSummary[]>([])
+  const [workspaceAccounts, setWorkspaceAccounts] = useState<WorkspaceAccount[]>([])
   const [workspaceMessage, setWorkspaceMessage] = useState(
     '開発用Owner tokenを入力してWorkspaceを読み込みます。',
   )
@@ -161,6 +189,7 @@ function App() {
   const loadConnections = async (workspaceId: string) => {
     setSelectedWorkspaceId(workspaceId)
     setConnections([])
+    setWorkspaceAccounts([])
     setSelectedOandaConnectionId('')
     setSelectedBinanceConnectionId('')
     if (!workspaceId) return
@@ -175,10 +204,53 @@ function App() {
       }
       const loaded = (await response.json()) as ConnectionSummary[]
       setConnections(loaded)
+      const accountsResponse = await fetch(
+        `${apiBaseUrl}/api/v1/workspaces/${workspaceId}/accounts`,
+        { headers: ownerHeaders },
+      )
+      if (accountsResponse.ok) {
+        setWorkspaceAccounts((await accountsResponse.json()) as WorkspaceAccount[])
+      }
       setWorkspaceMessage(`選択中のWorkspaceには${loaded.length}件の取引所接続があります。`)
     } catch {
       setWorkspaceMessage('接続一覧APIへ接続できません。')
     }
+  }
+
+  const manageConnection = async (connection: ConnectionSummary, action: 'disable' | 'delete') => {
+    if (!selectedWorkspaceId) return
+    const response = await fetch(
+      `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/connections/${connection.id}${
+        action === 'disable' ? '/disable' : ''
+      }`,
+      { method: action === 'disable' ? 'POST' : 'DELETE', headers: ownerHeaders },
+    )
+    setWorkspaceMessage(
+      response.ok
+        ? action === 'disable'
+          ? '接続を無効化しました。選択中だった口座も解除しました。'
+          : '接続と暗号化済み資格情報を削除しました。'
+        : await apiErrorMessage(response, action === 'disable' ? '無効化に失敗しました' : '削除に失敗しました'),
+    )
+    await loadConnections(selectedWorkspaceId)
+  }
+
+  const selectAccount = async (account: WorkspaceAccount) => {
+    if (!selectedWorkspaceId) return
+    const response = await fetch(
+      `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/account-selections/${account.exchange_code}`,
+      {
+        method: 'PUT',
+        headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ external_account_id: account.id }),
+      },
+    )
+    setWorkspaceMessage(
+      response.ok
+        ? `${account.exchange_code.toUpperCase()}で利用する口座を選択しました。`
+        : await apiErrorMessage(response, '口座選択に失敗しました'),
+    )
+    await loadConnections(selectedWorkspaceId)
   }
 
   const verifyOandaConnection = async (connectionId: string) => {
@@ -408,7 +480,12 @@ function App() {
               <li key={connection.id}>
                 <strong>{connection.label}</strong>
                 <span>{connection.environment}</span>
-                <span>{connection.status}</span>
+                <span className={`connection-badge credential-${connection.credentials_status}`}>
+                  {connection.credentials_status === 'saved' ? '資格情報保存済み' : '資格情報未保存'}
+                </span>
+                <span className={`connection-badge verification-${connection.verification_outcome}`}>
+                  {verificationLabel(connection.verification_outcome)}
+                </span>
                 <button
                   type="button"
                   onClick={() =>
@@ -419,9 +496,46 @@ function App() {
                 >
                   検証
                 </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={connection.status === 'disabled'}
+                  onClick={() => void manageConnection(connection, 'disable')}
+                >
+                  無効化
+                </button>
+                <button
+                  type="button"
+                  className="danger-button"
+                  disabled={!['disabled', 'invalid', 'revoked', 'pending_credentials'].includes(connection.status)}
+                  onClick={() => void manageConnection(connection, 'delete')}
+                >
+                  削除
+                </button>
               </li>
             ))}
           </ul>
+        )}
+        {workspaceAccounts.length > 0 && (
+          <div className="account-selection">
+            <h3>Workspaceで利用する口座</h3>
+            <ul className="account-list">
+              {workspaceAccounts.map((account) => (
+                <li key={account.id}>
+                  <strong>{account.alias || account.account_ref_masked}</strong>
+                  <span>{account.exchange_code.toUpperCase()} / {account.connection_label}</span>
+                  <span>{account.currency}</span>
+                  <button
+                    type="button"
+                    disabled={account.selected || account.status !== 'active'}
+                    onClick={() => void selectAccount(account)}
+                  >
+                    {account.selected ? '選択中' : 'この口座を利用'}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
       </section>
 

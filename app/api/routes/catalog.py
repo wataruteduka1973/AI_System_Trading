@@ -1,7 +1,7 @@
 import hashlib
 from datetime import UTC, datetime
 from typing import Annotated
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -23,7 +23,15 @@ from app.exchanges.oanda import (
     get_oanda_practice_client,
     mask_account_id,
 )
-from app.models.catalog import Exchange, ExchangeConnection, ExternalAccount, Market, Workspace
+from app.models.catalog import (
+    AuditLog,
+    Exchange,
+    ExchangeConnection,
+    ExternalAccount,
+    Market,
+    Workspace,
+    WorkspaceAccountSelection,
+)
 from app.schemas.catalog import (
     BinanceAccountRead,
     BinanceVerificationRead,
@@ -34,6 +42,9 @@ from app.schemas.catalog import (
     MarketRead,
     OandaAccountRead,
     OandaVerificationRead,
+    WorkspaceAccountRead,
+    WorkspaceAccountSelectionRead,
+    WorkspaceAccountSelectionUpdate,
     WorkspaceCreate,
     WorkspaceRead,
 )
@@ -121,10 +132,20 @@ def create_exchange_connection(
         api_base_url=str(payload.api_base_url),
         secret_ref=secret_ref,
         status="verifying",
+        credentials_updated_at=datetime.now(UTC),
+        verification_outcome="not_verified",
         capabilities={},
     )
     try:
         db.add(connection)
+        db.flush()
+        _add_audit(
+            db,
+            workspace_id,
+            "connection.credentials_created",
+            connection.id,
+            after={"credentials_status": "saved", "verification_outcome": "not_verified"},
+        )
         db.commit()
         db.refresh(connection)
     except Exception as exc:
@@ -158,10 +179,59 @@ def disable_exchange_connection(
     )
     if connection is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connection not found")
+    previous_status = connection.status
     connection.status = "disabled"
+    db.execute(
+        WorkspaceAccountSelection.__table__.delete().where(
+            WorkspaceAccountSelection.external_account_id.in_(
+                select(ExternalAccount.id).where(ExternalAccount.connection_id == connection.id)
+            )
+        )
+    )
+    _add_audit(
+        db,
+        workspace_id,
+        "connection.disabled",
+        connection.id,
+        before={"status": previous_status},
+        after={"status": "disabled"},
+    )
     db.commit()
     db.refresh(connection)
     return connection
+
+
+@router.delete(
+    "/workspaces/{workspace_id}/connections/{connection_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["connections"],
+)
+def delete_exchange_connection(
+    workspace_id: UUID,
+    connection_id: UUID,
+    db: DatabaseSession,
+    secret_store: SecretStore,
+    _owner: Owner,
+) -> None:
+    connection = _get_connection(db, workspace_id, connection_id)
+    if connection.status not in {"disabled", "invalid", "revoked", "pending_credentials"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Disable a verified or active connection before deleting it",
+        )
+    secret_ref = connection.secret_ref
+    _add_audit(
+        db,
+        workspace_id,
+        "connection.deleted",
+        connection.id,
+        before={"status": connection.status, "credentials_status": connection.credentials_status},
+        after=None,
+    )
+    db.delete(connection)
+    db.commit()
+    if secret_ref:
+        secret_store.delete(secret_ref)
 
 
 @router.put(
@@ -197,6 +267,16 @@ async def update_connection_credentials_and_verify(
     old_secret_ref = connection.secret_ref
     connection.secret_ref = new_secret_ref
     connection.status = "verifying"
+    connection.credentials_updated_at = datetime.now(UTC)
+    connection.verification_outcome = "not_verified"
+    _add_audit(
+        db,
+        workspace_id,
+        "connection.credentials_updated",
+        connection.id,
+        before={"credentials_status": "saved" if old_secret_ref else "missing"},
+        after={"credentials_status": "saved", "verification_outcome": "not_verified"},
+    )
     try:
         db.commit()
     except Exception:
@@ -289,9 +369,16 @@ async def verify_exchange_connection(
     except OandaAuthenticationError as exc:
         connection.status = "invalid"
         connection.last_verified_at = datetime.now(UTC)
+        connection.verification_outcome = "authentication_failed"
+        _audit_verification(db, connection)
         db.commit()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     except OandaApiError as exc:
+        connection.status = "invalid"
+        connection.last_verified_at = datetime.now(UTC)
+        connection.verification_outcome = "communication_failed"
+        _audit_verification(db, connection)
+        db.commit()
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
     now = datetime.now(UTC)
@@ -335,11 +422,13 @@ async def verify_exchange_connection(
 
     connection.status = "verified"
     connection.last_verified_at = now
+    connection.verification_outcome = "success"
     connection.capabilities = {
         "account_count": len(accounts),
         "usd_jpy_tradeable": any(account.usd_jpy_tradeable for account in accounts),
         "read_only_verified": True,
     }
+    _audit_verification(db, connection, account_count=len(accounts))
     db.commit()
     return OandaVerificationRead(
         connection_id=connection.id,
@@ -372,9 +461,16 @@ async def _verify_binance_connection(
     except BinanceAuthenticationError as exc:
         connection.status = "invalid"
         connection.last_verified_at = datetime.now(UTC)
+        connection.verification_outcome = "authentication_failed"
+        _audit_verification(db, connection)
         db.commit()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     except BinanceApiError as exc:
+        connection.status = "invalid"
+        connection.last_verified_at = datetime.now(UTC)
+        connection.verification_outcome = "communication_failed"
+        _audit_verification(db, connection)
+        db.commit()
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
     now = datetime.now(UTC)
@@ -410,11 +506,13 @@ async def _verify_binance_connection(
 
     connection.status = "verified"
     connection.last_verified_at = now
+    connection.verification_outcome = "success"
     connection.capabilities = {
         **external_account.capabilities,
         "account_count": 1,
         "read_only_verified": True,
     }
+    _audit_verification(db, connection, account_count=1)
     db.commit()
     return BinanceVerificationRead(
         connection_id=connection.id,
@@ -431,6 +529,163 @@ async def _verify_binance_connection(
                 btc_jpy_tradeable=account.btc_jpy_tradeable,
             )
         ],
+    )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/accounts",
+    response_model=list[WorkspaceAccountRead],
+    tags=["accounts"],
+)
+def list_workspace_accounts(
+    workspace_id: UUID, db: DatabaseSession, _owner: Owner
+) -> list[WorkspaceAccountRead]:
+    if db.get(Workspace, workspace_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+    rows = db.execute(
+        select(ExternalAccount, ExchangeConnection, Exchange, WorkspaceAccountSelection)
+        .join(ExchangeConnection, ExternalAccount.connection_id == ExchangeConnection.id)
+        .join(Exchange, ExchangeConnection.exchange_id == Exchange.id)
+        .outerjoin(
+            WorkspaceAccountSelection,
+            (WorkspaceAccountSelection.workspace_id == workspace_id)
+            & (WorkspaceAccountSelection.external_account_id == ExternalAccount.id),
+        )
+        .where(ExchangeConnection.workspace_id == workspace_id)
+        .order_by(Exchange.code, ExternalAccount.created_at)
+    ).all()
+    return [
+        WorkspaceAccountRead(
+            id=account.id,
+            connection_id=connection.id,
+            exchange_id=exchange.id,
+            exchange_code=exchange.code,
+            connection_label=connection.label,
+            account_ref_masked=account.external_account_ref_masked,
+            alias=account.alias,
+            environment=account.environment,
+            currency=account.currency,
+            status=account.status,
+            selected=selection is not None,
+        )
+        for account, connection, exchange, selection in rows
+    ]
+
+
+@router.put(
+    "/workspaces/{workspace_id}/account-selections/{exchange_code}",
+    response_model=WorkspaceAccountSelectionRead,
+    tags=["accounts"],
+)
+def select_workspace_account(
+    workspace_id: UUID,
+    exchange_code: str,
+    payload: WorkspaceAccountSelectionUpdate,
+    db: DatabaseSession,
+    _owner: Owner,
+) -> WorkspaceAccountSelection:
+    row = db.execute(
+        select(ExternalAccount, ExchangeConnection, Exchange)
+        .join(ExchangeConnection, ExternalAccount.connection_id == ExchangeConnection.id)
+        .join(Exchange, ExchangeConnection.exchange_id == Exchange.id)
+        .where(
+            ExternalAccount.id == payload.external_account_id,
+            ExchangeConnection.workspace_id == workspace_id,
+            Exchange.code == exchange_code,
+            ExchangeConnection.status == "verified",
+            ExternalAccount.status == "active",
+        )
+    ).one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only an active account from a verified workspace connection can be selected",
+        )
+    account, _connection, exchange = row
+    selection = db.scalar(
+        select(WorkspaceAccountSelection).where(
+            WorkspaceAccountSelection.workspace_id == workspace_id,
+            WorkspaceAccountSelection.exchange_id == exchange.id,
+        )
+    )
+    previous_account_id = selection.external_account_id if selection else None
+    now = datetime.now(UTC)
+    if selection is None:
+        selection = WorkspaceAccountSelection(
+            workspace_id=workspace_id,
+            exchange_id=exchange.id,
+            external_account_id=account.id,
+            selected_at=now,
+            updated_at=now,
+        )
+        db.add(selection)
+    else:
+        selection.external_account_id = account.id
+        selection.selected_at = now
+        selection.updated_at = now
+    _add_audit(
+        db,
+        workspace_id,
+        "workspace.account_selected",
+        account.id,
+        before={"external_account_id": str(previous_account_id)} if previous_account_id else None,
+        after={"exchange_code": exchange.code, "external_account_id": str(account.id)},
+    )
+    db.commit()
+    db.refresh(selection)
+    return selection
+
+
+def _get_connection(db: Session, workspace_id: UUID, connection_id: UUID) -> ExchangeConnection:
+    connection = db.scalar(
+        select(ExchangeConnection).where(
+            ExchangeConnection.id == connection_id,
+            ExchangeConnection.workspace_id == workspace_id,
+        )
+    )
+    if connection is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connection not found")
+    return connection
+
+
+def _add_audit(
+    db: Session,
+    workspace_id: UUID,
+    action: str,
+    resource_id: UUID,
+    *,
+    before: dict[str, object] | None = None,
+    after: dict[str, object] | None = None,
+) -> None:
+    db.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_id=None,
+            action=action,
+            resource_type="exchange_connection",
+            resource_id=resource_id,
+            before_data=before,
+            after_data=after,
+            correlation_id=uuid4(),
+            ip_address=None,
+            user_agent=None,
+        )
+    )
+
+
+def _audit_verification(
+    db: Session, connection: ExchangeConnection, *, account_count: int | None = None
+) -> None:
+    after: dict[str, object] = {"verification_outcome": connection.verification_outcome}
+    if account_count is not None:
+        after["account_count"] = account_count
+    _add_audit(
+        db,
+        connection.workspace_id,
+        "connection.verification_completed",
+        connection.id,
+        before=None,
+        after=after,
     )
 
 

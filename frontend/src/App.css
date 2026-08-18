@@ -114,11 +114,53 @@ button:disabled {
 
 .connection-list li {
   display: grid;
-  grid-template-columns: 1fr auto auto auto;
+  grid-template-columns: minmax(160px, 1fr) repeat(7, auto);
   gap: 16px;
   padding: 12px;
   border-radius: 9px;
   background: #07111f;
+}
+
+.connection-badge {
+  align-self: center;
+  padding: 5px 9px;
+  border-radius: 999px;
+  color: #b9c7d9;
+  background: #263851;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.credential-saved,
+.verification-success {
+  color: #7df0c6;
+  background: #124b3d;
+}
+
+.verification-authentication_failed {
+  color: #ffb2bb;
+  background: #5b2730;
+}
+
+.verification-communication_failed {
+  color: #ffd28d;
+  background: #61451f;
+}
+
+.secondary-button {
+  color: #eaf2ff;
+  background: #38506f;
+}
+
+.danger-button {
+  color: #fff;
+  background: #8f3340;
+}
+
+.account-selection {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid #263851;
 }
 
 .account-list {
