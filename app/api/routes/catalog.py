@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -196,8 +196,15 @@ def disable_exchange_connection(
         before={"status": previous_status},
         after={"status": "disabled"},
     )
-    db.commit()
-    db.refresh(connection)
+    try:
+        db.commit()
+        db.refresh(connection)
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Connection could not be disabled",
+        ) from exc
     return connection
 
 
@@ -229,7 +236,14 @@ def delete_exchange_connection(
         after=None,
     )
     db.delete(connection)
-    db.commit()
+    try:
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Connection could not be deleted",
+        ) from exc
     if secret_ref:
         secret_store.delete(secret_ref)
 
@@ -380,6 +394,16 @@ async def verify_exchange_connection(
         _audit_verification(db, connection)
         db.commit()
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    except Exception as exc:
+        connection.status = "invalid"
+        connection.last_verified_at = datetime.now(UTC)
+        connection.verification_outcome = "communication_failed"
+        _audit_verification(db, connection)
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="OANDA verification could not be completed",
+        ) from exc
 
     now = datetime.now(UTC)
     response_accounts: list[OandaAccountRead] = []
@@ -429,7 +453,7 @@ async def verify_exchange_connection(
         "read_only_verified": True,
     }
     _audit_verification(db, connection, account_count=len(accounts))
-    db.commit()
+    _commit_verification_result(db)
     return OandaVerificationRead(
         connection_id=connection.id,
         status=connection.status,
@@ -472,6 +496,16 @@ async def _verify_binance_connection(
         _audit_verification(db, connection)
         db.commit()
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    except Exception as exc:
+        connection.status = "invalid"
+        connection.last_verified_at = datetime.now(UTC)
+        connection.verification_outcome = "communication_failed"
+        _audit_verification(db, connection)
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Binance verification could not be completed",
+        ) from exc
 
     now = datetime.now(UTC)
     account_hash = hashlib.sha256(account.account_ref.encode("utf-8")).hexdigest()
@@ -513,7 +547,7 @@ async def _verify_binance_connection(
         "read_only_verified": True,
     }
     _audit_verification(db, connection, account_count=1)
-    db.commit()
+    _commit_verification_result(db)
     return BinanceVerificationRead(
         connection_id=connection.id,
         status=connection.status,
@@ -561,6 +595,7 @@ def list_workspace_accounts(
             exchange_id=exchange.id,
             exchange_code=exchange.code,
             connection_label=connection.label,
+            connection_status=connection.status,
             account_ref_masked=account.external_account_ref_masked,
             alias=account.alias,
             environment=account.environment,
@@ -646,6 +681,17 @@ def _get_connection(db: Session, workspace_id: UUID, connection_id: UUID) -> Exc
     if connection is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connection not found")
     return connection
+
+
+def _commit_verification_result(db: Session) -> None:
+    try:
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Verification succeeded, but its result could not be saved",
+        ) from exc
 
 
 def _add_audit(

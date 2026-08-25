@@ -29,5 +29,7 @@ Thumbs.db
 # Frontend
 frontend/node_modules/
 frontend/dist/
+frontend/dist-*/
 frontend/.env.local
+.npm-cache/
 .secrets/

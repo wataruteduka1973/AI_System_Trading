@@ -54,3 +54,35 @@ def test_oanda_client_rejects_non_practice_host() -> None:
         assert "practice" in str(exc)
     else:
         raise AssertionError("Non-practice host was accepted")
+
+
+def test_oanda_client_reads_usd_jpy_instrument_rules() -> None:
+    sdk_client = MagicMock()
+    sdk_client.request.return_value = {
+        "instruments": [
+            {
+                "name": "USD_JPY",
+                "type": "CURRENCY",
+                "displayPrecision": 3,
+                "tradeUnitsPrecision": 0,
+                "pipLocation": -2,
+                "minimumTradeSize": "1",
+                "maximumOrderUnits": "100000000",
+            }
+        ]
+    }
+    client = OandaPracticeClient(api_factory=MagicMock(return_value=sdk_client))
+
+    rules = asyncio.run(
+        client.get_instrument_rules(
+            "https://api-fxpractice.oanda.com", "private-token", "private-account-id"
+        )
+    )
+
+    endpoint = sdk_client.request.call_args.args[0]
+    assert isinstance(endpoint, AccountInstruments)
+    assert rules.symbol == "USD_JPY"
+    assert str(rules.tick_size) == "0.001"
+    assert str(rules.step_size) == "1"
+    assert str(rules.min_quantity) == "1"
+    sdk_client.client.close.assert_called_once()

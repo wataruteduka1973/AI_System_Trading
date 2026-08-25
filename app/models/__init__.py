@@ -1,19 +1,31 @@
 from app.models.catalog import (
+    AppUser,
     AuditLog,
+    BackfillJob,
+    Candle,
     Exchange,
     ExchangeConnection,
     ExternalAccount,
+    Instrument,
     Market,
+    MarketDataGap,
+    MarketDataSubscription,
     Workspace,
     WorkspaceAccountSelection,
 )
 
 __all__ = [
+    "AppUser",
     "AuditLog",
+    "BackfillJob",
+    "Candle",
     "Exchange",
     "ExchangeConnection",
     "ExternalAccount",
+    "Instrument",
     "Market",
+    "MarketDataGap",
+    "MarketDataSubscription",
     "Workspace",
     "WorkspaceAccountSelection",
 ]

@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useState } from 'react'
+import {
+  CandlestickSeries,
+  ColorType,
+  CrosshairMode,
+  createChart,
+  type Time,
+  type UTCTimestamp,
+} from 'lightweight-charts'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
 
 type HealthState = {
@@ -31,11 +39,75 @@ type WorkspaceAccount = {
   id: string
   exchange_code: 'oanda' | 'binance'
   connection_label: string
+  connection_status: string
   account_ref_masked: string
   alias: string | null
   currency: string
   status: string
   selected: boolean
+}
+
+type WorkspaceInstrument = {
+  id: string
+  exchange_code: string
+  market_code: string
+  symbol: string
+  quote_asset: string
+  price_scale: number
+  tick_size: string
+  step_size: string
+  min_quantity: string | null
+  min_notional: string | null
+  status: string
+  rules_synced_at: string | null
+}
+
+type Timeframe = '1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d'
+
+type Candle = {
+  open_time: string
+  close_time: string
+  open: string
+  high: string
+  low: string
+  close: string
+  volume: string | null
+  source: string
+  quality_status: string
+}
+
+type BackfillJob = {
+  id: string
+  instrument_id: string
+  timeframe: string
+  status: 'queued' | 'running' | 'succeeded' | 'failed'
+  rows_written: number
+  error_code: string | null
+  created_at: string
+}
+
+type MarketDataSubscription = {
+  id: string
+  instrument_id: string
+  timeframe: string
+  enabled: boolean
+  poll_interval_seconds: number
+  last_polled_at: string | null
+  last_success_at: string | null
+  last_error_code: string | null
+}
+
+type CandleCoverage = {
+  timeframe: Timeframe
+  requested_from: string | null
+  requested_to: string | null
+  actual_from: string | null
+  actual_to: string | null
+  stored_count: number
+  expected_count: number | null
+  missing_count: number | null
+  coverage_status: 'complete' | 'partial_source_limit' | 'partial_gaps' | 'empty' | 'checking'
+  source_limitation: string | null
 }
 
 type OandaVerification = {
@@ -106,6 +178,15 @@ const verificationLabel = (outcome: ConnectionSummary['verification_outcome']) =
     communication_failed: '通信失敗',
   })[outcome]
 
+const connectionStatusLabel = (status: string) =>
+  ({
+    verified: '認証成功',
+    verifying: '検証中（再検証が必要）',
+    invalid: '認証または通信に失敗',
+    disabled: '無効',
+    pending_credentials: '資格情報待ち',
+  })[status] ?? status
+
 function StatusCard({ title, state }: { title: string; state: HealthState }) {
   return (
     <article className={`status-card status-${state.status}`}>
@@ -115,6 +196,89 @@ function StatusCard({ title, state }: { title: string; state: HealthState }) {
       </div>
       <p>{state.message}</p>
     </article>
+  )
+}
+
+function CandleChart({ candles, instrument }: { candles: Candle[]; instrument: WorkspaceInstrument }) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [hovered, setHovered] = useState<Candle | null>(null)
+
+  useEffect(() => {
+    if (!containerRef.current || candles.length === 0) return
+    const dateTime = new Intl.DateTimeFormat('ja-JP', {
+      timeZone: 'Asia/Tokyo',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+    const chart = createChart(containerRef.current, {
+      autoSize: true,
+      height: 360,
+      layout: { background: { type: ColorType.Solid, color: '#081426' }, textColor: '#b9cbe0' },
+      grid: {
+        vertLines: { color: 'rgba(75, 104, 139, 0.2)' },
+        horzLines: { color: 'rgba(75, 104, 139, 0.2)' },
+      },
+      crosshair: { mode: CrosshairMode.Normal },
+      rightPriceScale: { borderColor: '#38506f' },
+      timeScale: {
+        borderColor: '#38506f',
+        timeVisible: true,
+        secondsVisible: false,
+        tickMarkFormatter: (time: Time) => dateTime.format(new Date(Number(time) * 1000)),
+      },
+      localization: {
+        timeFormatter: (time: Time) =>
+          new Date(Number(time) * 1000).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }),
+      },
+    })
+    const series = chart.addSeries(CandlestickSeries, {
+      upColor: '#26a69a',
+      downColor: '#ef5350',
+      borderVisible: false,
+      wickUpColor: '#26a69a',
+      wickDownColor: '#ef5350',
+      priceFormat: {
+        type: 'price',
+        precision: instrument.price_scale,
+        minMove: Number(instrument.tick_size),
+      },
+      title: `${instrument.symbol} / ${instrument.quote_asset}`,
+    })
+    const indexed = new Map<number, Candle>()
+    const chartData = candles.map((candle) => {
+      const time = Math.floor(new Date(candle.open_time).getTime() / 1000) as UTCTimestamp
+      indexed.set(time, candle)
+      return {
+        time,
+        open: Number(candle.open),
+        high: Number(candle.high),
+        low: Number(candle.low),
+        close: Number(candle.close),
+      }
+    })
+    series.setData(chartData)
+    chart.timeScale().fitContent()
+    chart.subscribeCrosshairMove((parameter) => {
+      const time = typeof parameter.time === 'number' ? parameter.time : null
+      setHovered(time === null ? null : indexed.get(time) ?? null)
+    })
+    return () => chart.remove()
+  }, [candles, instrument])
+
+  if (candles.length === 0) return <p className="chart-empty">表示できる確定足がまだありません。</p>
+  const detail = hovered ?? candles[candles.length - 1]
+  return (
+    <div className="candle-chart" role="img" aria-label={`${instrument.symbol}のローソク足`}>
+      <div className="chart-tooltip" aria-live="polite">
+        <strong>{new Date(detail.open_time).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })}</strong>
+        <span>始値 {detail.open}</span><span>高値 {detail.high}</span>
+        <span>安値 {detail.low}</span><span>終値 {detail.close}</span>
+        <span>出来高 {detail.volume ?? '未提供'}</span>
+      </div>
+      <div ref={containerRef} className="candle-chart-canvas" />
+    </div>
   )
 }
 
@@ -132,6 +296,10 @@ function App() {
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState('')
   const [connections, setConnections] = useState<ConnectionSummary[]>([])
   const [workspaceAccounts, setWorkspaceAccounts] = useState<WorkspaceAccount[]>([])
+  const [workspaceInstruments, setWorkspaceInstruments] = useState<WorkspaceInstrument[]>([])
+  const [instrumentMessage, setInstrumentMessage] = useState(
+    '利用口座を選択すると、取引所から最新の銘柄ルールを同期できます。',
+  )
   const [workspaceMessage, setWorkspaceMessage] = useState(
     '開発用Owner tokenを入力してWorkspaceを読み込みます。',
   )
@@ -150,6 +318,15 @@ function App() {
   )
   const [binanceAccounts, setBinanceAccounts] = useState<BinanceVerification['accounts']>([])
   const [selectedBinanceConnectionId, setSelectedBinanceConnectionId] = useState('')
+  const [selectedInstrumentId, setSelectedInstrumentId] = useState('')
+  const [timeframe, setTimeframe] = useState<Timeframe>('1m')
+  const [candles, setCandles] = useState<Candle[]>([])
+  const [backfillJobs, setBackfillJobs] = useState<BackfillJob[]>([])
+  const [subscriptions, setSubscriptions] = useState<MarketDataSubscription[]>([])
+  const [coverage, setCoverage] = useState<CandleCoverage | null>(null)
+  const [marketDataMessage, setMarketDataMessage] = useState(
+    '銘柄と時間足を選ぶと、確定済みローソク足を表示できます。',
+  )
 
   const loadHealth = useCallback(async () => {
     const [api, database] = await fetchHealth()
@@ -190,6 +367,12 @@ function App() {
     setSelectedWorkspaceId(workspaceId)
     setConnections([])
     setWorkspaceAccounts([])
+    setWorkspaceInstruments([])
+    setSelectedInstrumentId('')
+    setCandles([])
+    setBackfillJobs([])
+    setSubscriptions([])
+    setCoverage(null)
     setSelectedOandaConnectionId('')
     setSelectedBinanceConnectionId('')
     if (!workspaceId) return
@@ -211,46 +394,162 @@ function App() {
       if (accountsResponse.ok) {
         setWorkspaceAccounts((await accountsResponse.json()) as WorkspaceAccount[])
       }
+      const instrumentsResponse = await fetch(
+        `${apiBaseUrl}/api/v1/workspaces/${workspaceId}/instruments`,
+        { headers: ownerHeaders },
+      )
+      if (instrumentsResponse.ok) {
+        const instruments = (await instrumentsResponse.json()) as WorkspaceInstrument[]
+        setWorkspaceInstruments(instruments)
+        setSelectedInstrumentId(instruments[0]?.id ?? '')
+      }
       setWorkspaceMessage(`選択中のWorkspaceには${loaded.length}件の取引所接続があります。`)
     } catch {
       setWorkspaceMessage('接続一覧APIへ接続できません。')
     }
   }
 
+  const syncInstruments = async () => {
+    if (!selectedWorkspaceId) return
+    setInstrumentMessage('選択済み口座から銘柄ルールを同期しています。')
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/instruments/sync`,
+        { method: 'POST', headers: ownerHeaders },
+      )
+      if (!response.ok) {
+        setInstrumentMessage(await apiErrorMessage(response, '銘柄ルールの同期に失敗しました'))
+        return
+      }
+      const payload = (await response.json()) as { instruments: WorkspaceInstrument[] }
+      setWorkspaceInstruments(payload.instruments)
+      setSelectedInstrumentId((current) => current || payload.instruments[0]?.id || '')
+      setInstrumentMessage(`${payload.instruments.length}件の銘柄ルールを同期しました。`)
+    } catch {
+      setInstrumentMessage('取引所または銘柄同期APIへ接続できません。')
+    }
+  }
+
+  const loadMarketData = useCallback(async (workspaceId: string, instrumentId: string, frame: Timeframe) => {
+    if (!workspaceId || !instrumentId || !ownerToken) return
+    try {
+      const headers = { 'X-Owner-Token': ownerToken }
+      const [candleResponse, jobResponse, subscriptionResponse, coverageResponse] = await Promise.all([
+        fetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/instruments/${instrumentId}/candles?timeframe=${frame}&limit=500`, { headers }),
+        fetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/candle-backfills?instrument_id=${instrumentId}&limit=10`, { headers }),
+        fetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/market-data-subscriptions`, { headers }),
+        fetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/instruments/${instrumentId}/candle-coverage?timeframe=${frame}`, { headers }),
+      ])
+      if (candleResponse.ok) setCandles((await candleResponse.json()) as Candle[])
+      if (jobResponse.ok) setBackfillJobs((await jobResponse.json()) as BackfillJob[])
+      if (subscriptionResponse.ok) {
+        setSubscriptions((await subscriptionResponse.json()) as MarketDataSubscription[])
+      }
+      if (coverageResponse.ok) setCoverage((await coverageResponse.json()) as CandleCoverage)
+    } catch {
+      setMarketDataMessage('ローソク足APIへ接続できません。')
+    }
+  }, [ownerToken])
+
+  const startBackfill = async () => {
+    if (!selectedWorkspaceId || !selectedInstrumentId) return
+    setMarketDataMessage('過去1年分の取得を開始しています。処理中も画面を閉じられます。')
+    const response = await fetch(
+      `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/candle-backfills`,
+      {
+        method: 'POST',
+        headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instrument_id: selectedInstrumentId, timeframe, days: 365 }),
+      },
+    )
+    if (!response.ok) {
+      setMarketDataMessage(await apiErrorMessage(response, '過去データ取得の開始に失敗しました'))
+      return
+    }
+    setMarketDataMessage('過去1年分の取得を受け付けました。進捗はこの画面に自動反映されます。')
+    await loadMarketData(selectedWorkspaceId, selectedInstrumentId, timeframe)
+  }
+
+  const setAutomaticCollection = async (enabled: boolean) => {
+    if (!selectedWorkspaceId || !selectedInstrumentId) return
+    const response = await fetch(
+      `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/market-data-subscription`,
+      {
+        method: 'PUT',
+        headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instrument_id: selectedInstrumentId, timeframe, enabled }),
+      },
+    )
+    setMarketDataMessage(
+      response.ok
+        ? enabled
+          ? '1分間隔の自動取得を有効にしました。画面を閉じてもバックエンドで継続します。'
+          : '自動取得を停止しました。保存済みデータは残ります。'
+        : await apiErrorMessage(response, enabled ? '自動取得の開始に失敗しました' : '自動取得の停止に失敗しました'),
+    )
+    await loadMarketData(selectedWorkspaceId, selectedInstrumentId, timeframe)
+  }
+
+  useEffect(() => {
+    if (!selectedWorkspaceId || !selectedInstrumentId) return
+    const initialLoad = window.setTimeout(() => {
+      void loadMarketData(selectedWorkspaceId, selectedInstrumentId, timeframe)
+    }, 0)
+    const timer = window.setInterval(() => {
+      void loadMarketData(selectedWorkspaceId, selectedInstrumentId, timeframe)
+    }, 5000)
+    return () => {
+      window.clearTimeout(initialLoad)
+      window.clearInterval(timer)
+    }
+  }, [loadMarketData, selectedWorkspaceId, selectedInstrumentId, timeframe])
+
   const manageConnection = async (connection: ConnectionSummary, action: 'disable' | 'delete') => {
     if (!selectedWorkspaceId) return
-    const response = await fetch(
+    try {
+      const response = await fetch(
       `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/connections/${connection.id}${
         action === 'disable' ? '/disable' : ''
       }`,
       { method: action === 'disable' ? 'POST' : 'DELETE', headers: ownerHeaders },
     )
-    setWorkspaceMessage(
+      setWorkspaceMessage(
       response.ok
         ? action === 'disable'
           ? '接続を無効化しました。選択中だった口座も解除しました。'
           : '接続と暗号化済み資格情報を削除しました。'
         : await apiErrorMessage(response, action === 'disable' ? '無効化に失敗しました' : '削除に失敗しました'),
     )
-    await loadConnections(selectedWorkspaceId)
+      await loadConnections(selectedWorkspaceId)
+    } catch {
+      setWorkspaceMessage(
+        action === 'disable'
+          ? '接続の無効化APIへ接続できません。バックエンドのログを確認してください。'
+          : '接続の削除APIへ接続できません。バックエンドのログを確認してください。',
+      )
+    }
   }
 
   const selectAccount = async (account: WorkspaceAccount) => {
     if (!selectedWorkspaceId) return
-    const response = await fetch(
-      `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/account-selections/${account.exchange_code}`,
-      {
-        method: 'PUT',
-        headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ external_account_id: account.id }),
-      },
-    )
-    setWorkspaceMessage(
-      response.ok
-        ? `${account.exchange_code.toUpperCase()}で利用する口座を選択しました。`
-        : await apiErrorMessage(response, '口座選択に失敗しました'),
-    )
-    await loadConnections(selectedWorkspaceId)
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/account-selections/${account.exchange_code}`,
+        {
+          method: 'PUT',
+          headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ external_account_id: account.id }),
+        },
+      )
+      setWorkspaceMessage(
+        response.ok
+          ? `${account.exchange_code.toUpperCase()}で利用する口座を選択しました。`
+          : await apiErrorMessage(response, '口座選択に失敗しました'),
+      )
+      await loadConnections(selectedWorkspaceId)
+    } catch {
+      setWorkspaceMessage('口座選択APIへ接続できません。')
+    }
   }
 
   const verifyOandaConnection = async (connectionId: string) => {
@@ -508,6 +807,11 @@ function App() {
                   type="button"
                   className="danger-button"
                   disabled={!['disabled', 'invalid', 'revoked', 'pending_credentials'].includes(connection.status)}
+                  title={
+                    ['disabled', 'invalid', 'revoked', 'pending_credentials'].includes(connection.status)
+                      ? '保存済み資格情報を含む接続を削除します'
+                      : '先に接続を無効化してください'
+                  }
                   onClick={() => void manageConnection(connection, 'delete')}
                 >
                   削除
@@ -524,13 +828,22 @@ function App() {
                 <li key={account.id}>
                   <strong>{account.alias || account.account_ref_masked}</strong>
                   <span>{account.exchange_code.toUpperCase()} / {account.connection_label}</span>
+                  <span>接続状態: {connectionStatusLabel(account.connection_status)}</span>
                   <span>{account.currency}</span>
                   <button
                     type="button"
-                    disabled={account.selected || account.status !== 'active'}
+                    disabled={
+                      account.selected ||
+                      account.status !== 'active' ||
+                      account.connection_status !== 'verified'
+                    }
                     onClick={() => void selectAccount(account)}
                   >
-                    {account.selected ? '選択中' : 'この口座を利用'}
+                    {account.selected
+                      ? '選択中'
+                      : account.connection_status !== 'verified'
+                        ? '接続を再検証してください'
+                        : 'この口座を利用'}
                   </button>
                 </li>
               ))}
@@ -538,6 +851,139 @@ function App() {
           </div>
         )}
       </section>
+
+      {selectedWorkspaceId && (
+        <section className="workspace-panel instrument-panel">
+          <div>
+            <p className="eyebrow">MARKET RULES</p>
+            <h2>銘柄同期</h2>
+            <p className="panel-description">
+              OANDA USD/JPY・Binance BTC/JPYの価格刻みと最小数量を参照専用APIから取得します。
+              注文は送信しません。
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void syncInstruments()}
+            disabled={!workspaceAccounts.some((account) => account.selected)}
+          >
+            選択済み口座から同期
+          </button>
+          <p className="workspace-message">{instrumentMessage}</p>
+          {workspaceInstruments.length > 0 && (
+            <ul className="instrument-list">
+              {workspaceInstruments.map((instrument) => (
+                <li key={instrument.id}>
+                  <strong>{instrument.exchange_code.toUpperCase()} {instrument.symbol}</strong>
+                  <span>価格刻み: {instrument.tick_size}</span>
+                  <span>数量刻み: {instrument.step_size}</span>
+                  <span>最小数量: {instrument.min_quantity ?? '未提供'}</span>
+                  <span>最小金額: {instrument.min_notional ?? '未提供'}</span>
+                  <span>
+                    同期: {instrument.rules_synced_at
+                      ? new Date(instrument.rules_synced_at).toLocaleString('ja-JP')
+                      : '未同期'}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+
+      {selectedWorkspaceId && workspaceInstruments.length > 0 && (
+        <section className="workspace-panel market-data-panel">
+          <div>
+            <p className="eyebrow">CANDLE DATA</p>
+            <h2>ローソク足取得・保存</h2>
+            <p className="panel-description">
+              確定済みデータだけを保存します。過去取得は最大1年、自動取得はバックエンドで1分ごとに続きます。
+            </p>
+          </div>
+          <div className="market-data-controls">
+            <label>
+              銘柄
+              <select value={selectedInstrumentId} onChange={(event) => setSelectedInstrumentId(event.target.value)}>
+                {workspaceInstruments.map((instrument) => (
+                  <option key={instrument.id} value={instrument.id}>
+                    {instrument.exchange_code.toUpperCase()} {instrument.symbol}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              時間足
+              <select value={timeframe} onChange={(event) => setTimeframe(event.target.value as Timeframe)}>
+                {(['1m', '5m', '15m', '30m', '1h', '4h', '1d'] as Timeframe[]).map((frame) => (
+                  <option key={frame} value={frame}>{frame}</option>
+                ))}
+              </select>
+            </label>
+            <button type="button" onClick={() => void startBackfill()}>過去1年を取得</button>
+            {subscriptions.some(
+              (item) => item.instrument_id === selectedInstrumentId && item.timeframe === timeframe && item.enabled,
+            ) ? (
+              <button type="button" className="secondary-button" onClick={() => void setAutomaticCollection(false)}>
+                自動取得を停止
+              </button>
+            ) : (
+              <button type="button" onClick={() => void setAutomaticCollection(true)}>1分ごとの自動取得を開始</button>
+            )}
+          </div>
+          <p className="workspace-message">{marketDataMessage}</p>
+          {subscriptions
+            .filter((item) => item.instrument_id === selectedInstrumentId && item.timeframe === timeframe)
+            .map((item) => (
+              <div className={`collection-status ${item.enabled ? 'enabled' : 'disabled'}`} key={item.id}>
+                <strong>{item.enabled ? '自動取得中' : '自動取得停止中'}</strong>
+                <span>最終成功: {item.last_success_at ? new Date(item.last_success_at).toLocaleString('ja-JP') : 'まだありません'}</span>
+                {item.last_error_code && <span>直近エラー: {item.last_error_code}</span>}
+              </div>
+            ))}
+          {backfillJobs.length > 0 && (
+            <div className="backfill-status">
+              <strong>過去取得: {backfillJobs[0].status}</strong>
+              <span>保存件数: {backfillJobs[0].rows_written.toLocaleString()}</span>
+              {backfillJobs[0].error_code && <span>エラー: {backfillJobs[0].error_code}</span>}
+            </div>
+          )}
+          {coverage && (
+            <div className={`coverage-summary coverage-${coverage.coverage_status}`}>
+              <strong>取得範囲: {coverage.coverage_status}</strong>
+              <span>
+                要求: {coverage.requested_from ? new Date(coverage.requested_from).toLocaleDateString('ja-JP') : '指定なし'}
+                {' 〜 '}
+                {coverage.requested_to ? new Date(coverage.requested_to).toLocaleDateString('ja-JP') : '指定なし'}
+              </span>
+              <span>
+                保存済み: {coverage.actual_from ? new Date(coverage.actual_from).toLocaleString('ja-JP') : 'データなし'}
+                {' 〜 '}
+                {coverage.actual_to ? new Date(coverage.actual_to).toLocaleString('ja-JP') : 'データなし'}
+              </span>
+              <span>保存件数: {coverage.stored_count.toLocaleString()}</span>
+              {coverage.source_limitation === 'binance_testnet_periodic_reset' && (
+                <span>Binance Testnetの定期リセットにより、要求した1年より短い範囲です。</span>
+              )}
+            </div>
+          )}
+          {workspaceInstruments.find((item) => item.id === selectedInstrumentId) && (
+            <CandleChart
+              candles={candles}
+              instrument={workspaceInstruments.find((item) => item.id === selectedInstrumentId)!}
+            />
+          )}
+          {candles.length > 0 && (
+            <div className="latest-candle">
+              <strong>最新の確定足</strong>
+              <span>{new Date(candles[candles.length - 1].open_time).toLocaleString('ja-JP')}</span>
+              <span>始値 {candles[candles.length - 1].open}</span>
+              <span>高値 {candles[candles.length - 1].high}</span>
+              <span>安値 {candles[candles.length - 1].low}</span>
+              <span>終値 {candles[candles.length - 1].close}</span>
+            </div>
+          )}
+        </section>
+      )}
 
       {selectedWorkspaceId && (
         <section className="workspace-panel connection-registration">

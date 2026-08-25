@@ -163,6 +163,112 @@ button:disabled {
   border-top: 1px solid #263851;
 }
 
+.instrument-panel > button {
+  margin-top: 16px;
+}
+
+.instrument-list {
+  display: grid;
+  gap: 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.market-data-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem;
+  align-items: end;
+}
+
+.market-data-controls label {
+  min-width: 150px;
+}
+
+.candle-chart {
+  padding: 1rem;
+  border: 1px solid rgba(113, 145, 185, 0.28);
+  border-radius: 14px;
+  background: rgba(8, 20, 38, 0.7);
+}
+
+.candle-chart-canvas {
+  width: 100%;
+  min-height: 360px;
+}
+
+.chart-tooltip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1rem;
+  margin-bottom: 0.75rem;
+  color: #dce9f7;
+  font-variant-numeric: tabular-nums;
+}
+
+.coverage-summary {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.9rem 1rem;
+  border-left: 4px solid #63b3ff;
+  border-radius: 12px;
+  background: rgba(15, 31, 54, 0.72);
+}
+
+.coverage-complete {
+  border-left-color: #56d6b2;
+}
+
+.coverage-partial_source_limit,
+.coverage-partial_gaps {
+  border-left-color: #f5b84b;
+}
+
+.coverage-empty {
+  border-left-color: #ef5350;
+}
+
+.chart-range,
+.collection-status,
+.backfill-status,
+.latest-candle {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.collection-status,
+.backfill-status,
+.latest-candle {
+  padding: 0.85rem 1rem;
+  border-radius: 12px;
+  background: rgba(15, 31, 54, 0.72);
+}
+
+.collection-status.enabled {
+  border-left: 4px solid #56d6b2;
+}
+
+.collection-status.disabled {
+  border-left: 4px solid #8ba0b8;
+}
+
+.chart-empty {
+  color: #9fb1c7;
+}
+
+.instrument-list li {
+  display: grid;
+  grid-template-columns: minmax(170px, 1fr) repeat(5, auto);
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid #38506f;
+  border-radius: 9px;
+  background: #07111f;
+}
+
 .account-list {
   display: grid;
   gap: 8px;
@@ -265,6 +371,10 @@ button:hover {
   .registration-grid,
   .connection-list li,
   .account-list li {
+    grid-template-columns: 1fr;
+  }
+
+  .instrument-list li {
     grid-template-columns: 1fr;
   }
 }

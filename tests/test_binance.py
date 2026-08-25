@@ -56,3 +56,45 @@ def test_binance_client_rejects_non_testnet_host() -> None:
         assert "Testnet" in str(exc)
     else:
         raise AssertionError("Non-testnet host was accepted")
+
+
+def test_binance_client_reads_btc_jpy_instrument_rules() -> None:
+    sdk_client = MagicMock()
+    sdk_client.get_symbol_info = AsyncMock(
+        return_value={
+            "symbol": "BTCJPY",
+            "status": "TRADING",
+            "baseAsset": "BTC",
+            "quoteAsset": "JPY",
+            "baseAssetPrecision": 8,
+            "quotePrecision": 8,
+            "orderTypes": ["LIMIT", "MARKET"],
+            "filters": [
+                {"filterType": "PRICE_FILTER", "tickSize": "1.00000000"},
+                {
+                    "filterType": "LOT_SIZE",
+                    "stepSize": "0.00001000",
+                    "minQty": "0.00001000",
+                    "maxQty": "100.00000000",
+                },
+                {"filterType": "MIN_NOTIONAL", "minNotional": "1000.00000000"},
+            ],
+        }
+    )
+    sdk_client.close_connection = AsyncMock()
+    client = BinanceSpotTestnetClient(client_factory=AsyncMock(return_value=sdk_client))
+
+    rules = asyncio.run(
+        client.get_instrument_rules(
+            "https://testnet.binance.vision", "public-api-key", "private-secret"
+        )
+    )
+
+    sdk_client.get_symbol_info.assert_awaited_once_with("BTCJPY")
+    sdk_client.close_connection.assert_awaited_once()
+    assert rules.symbol == "BTCJPY"
+    assert str(rules.step_size) == "0.00001000"
+    assert str(rules.min_notional) == "1000.00000000"
+    assert rules.price_scale == 0
+    assert rules.quantity_scale == 5
+    assert rules.allowed_order_types == ("LIMIT", "MARKET")
