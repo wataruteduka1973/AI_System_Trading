@@ -29,7 +29,7 @@ cryptography>=45,<47
 numpy>=2.2,<3
 pandas>=3.0.5,<4
 scipy>=1.15,<2
-scikit-learn>=1.7,<2
+scikit-learn>=1.9.0,<2
 joblib>=1.4,<2
 torch>=2.13.0,<3
 
