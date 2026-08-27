@@ -7,6 +7,13 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Route, Routes, useLocation, useNavigate } from 'react-router'
+import AppShell from './app/AppShell'
+import { connectionPath, resolveAppRoute } from './app/routes'
+import ConnectionManagementPage from './pages/ConnectionManagementPage'
+import ExchangeMarketPage from './pages/ExchangeMarketPage'
+import HomePage from './pages/HomePage'
+import NotFoundPage from './pages/NotFoundPage'
 import './App.css'
 
 type HealthState = {
@@ -283,6 +290,9 @@ function CandleChart({ candles, instrument }: { candles: Candle[]; instrument: W
 }
 
 function App() {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const route = resolveAppRoute(location.pathname)
   const [apiHealth, setApiHealth] = useState<HealthState>({
     status: 'loading',
     message: 'FastAPIへ接続しています。',
@@ -293,7 +303,7 @@ function App() {
   })
   const [ownerToken, setOwnerToken] = useState('')
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
-  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState('')
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(route.workspaceId ?? '')
   const [connections, setConnections] = useState<ConnectionSummary[]>([])
   const [workspaceAccounts, setWorkspaceAccounts] = useState<WorkspaceAccount[]>([])
   const [workspaceInstruments, setWorkspaceInstruments] = useState<WorkspaceInstrument[]>([])
@@ -327,6 +337,12 @@ function App() {
   const [marketDataMessage, setMarketDataMessage] = useState(
     '銘柄と時間足を選ぶと、確定済みローソク足を表示できます。',
   )
+  const visibleInstruments = route.kind === 'market'
+    ? workspaceInstruments.filter((instrument) => instrument.exchange_code === route.exchange)
+    : workspaceInstruments
+  const activeInstrumentId = visibleInstruments.some(
+    (instrument) => instrument.id === selectedInstrumentId,
+  ) ? selectedInstrumentId : visibleInstruments[0]?.id ?? ''
 
   const loadHealth = useCallback(async () => {
     const [api, database] = await fetchHealth()
@@ -354,10 +370,15 @@ function App() {
       }
       const loaded = (await response.json()) as WorkspaceSummary[]
       setWorkspaces(loaded)
-      setSelectedWorkspaceId('')
-      setWorkspaceMessage(
-        loaded.length > 0 ? `${loaded.length}件のWorkspaceを取得しました。` : 'Workspaceは未登録です。',
-      )
+      const routedWorkspace = route.workspaceId
+      if (routedWorkspace && loaded.some((workspace) => workspace.id === routedWorkspace)) {
+        await loadConnections(routedWorkspace)
+      } else {
+        setSelectedWorkspaceId('')
+        setWorkspaceMessage(
+          loaded.length > 0 ? `${loaded.length}件のWorkspaceを取得しました。` : 'Workspaceは未登録です。',
+        )
+      }
     } catch {
       setWorkspaceMessage('Workspace APIへ接続できません。')
     }
@@ -409,6 +430,11 @@ function App() {
     }
   }
 
+  const selectWorkspace = async (workspaceId: string) => {
+    await loadConnections(workspaceId)
+    navigate(workspaceId ? connectionPath(workspaceId) : '/')
+  }
+
   const syncInstruments = async () => {
     if (!selectedWorkspaceId) return
     setInstrumentMessage('選択済み口座から銘柄ルールを同期しています。')
@@ -452,14 +478,14 @@ function App() {
   }, [ownerToken])
 
   const startBackfill = async () => {
-    if (!selectedWorkspaceId || !selectedInstrumentId) return
+    if (!selectedWorkspaceId || !activeInstrumentId) return
     setMarketDataMessage('過去1年分の取得を開始しています。処理中も画面を閉じられます。')
     const response = await fetch(
       `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/candle-backfills`,
       {
         method: 'POST',
         headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ instrument_id: selectedInstrumentId, timeframe, days: 365 }),
+        body: JSON.stringify({ instrument_id: activeInstrumentId, timeframe, days: 365 }),
       },
     )
     if (!response.ok) {
@@ -467,17 +493,17 @@ function App() {
       return
     }
     setMarketDataMessage('過去1年分の取得を受け付けました。進捗はこの画面に自動反映されます。')
-    await loadMarketData(selectedWorkspaceId, selectedInstrumentId, timeframe)
+    await loadMarketData(selectedWorkspaceId, activeInstrumentId, timeframe)
   }
 
   const setAutomaticCollection = async (enabled: boolean) => {
-    if (!selectedWorkspaceId || !selectedInstrumentId) return
+    if (!selectedWorkspaceId || !activeInstrumentId) return
     const response = await fetch(
       `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/market-data-subscription`,
       {
         method: 'PUT',
         headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ instrument_id: selectedInstrumentId, timeframe, enabled }),
+        body: JSON.stringify({ instrument_id: activeInstrumentId, timeframe, enabled }),
       },
     )
     setMarketDataMessage(
@@ -487,22 +513,22 @@ function App() {
           : '自動取得を停止しました。保存済みデータは残ります。'
         : await apiErrorMessage(response, enabled ? '自動取得の開始に失敗しました' : '自動取得の停止に失敗しました'),
     )
-    await loadMarketData(selectedWorkspaceId, selectedInstrumentId, timeframe)
+    await loadMarketData(selectedWorkspaceId, activeInstrumentId, timeframe)
   }
 
   useEffect(() => {
-    if (!selectedWorkspaceId || !selectedInstrumentId) return
+    if (!selectedWorkspaceId || !activeInstrumentId) return
     const initialLoad = window.setTimeout(() => {
-      void loadMarketData(selectedWorkspaceId, selectedInstrumentId, timeframe)
+      void loadMarketData(selectedWorkspaceId, activeInstrumentId, timeframe)
     }, 0)
     const timer = window.setInterval(() => {
-      void loadMarketData(selectedWorkspaceId, selectedInstrumentId, timeframe)
+      void loadMarketData(selectedWorkspaceId, activeInstrumentId, timeframe)
     }, 5000)
     return () => {
       window.clearTimeout(initialLoad)
       window.clearInterval(timer)
     }
-  }, [loadMarketData, selectedWorkspaceId, selectedInstrumentId, timeframe])
+  }, [loadMarketData, selectedWorkspaceId, activeInstrumentId, timeframe])
 
   const manageConnection = async (connection: ConnectionSummary, action: 'disable' | 'delete') => {
     if (!selectedWorkspaceId) return
@@ -723,18 +749,41 @@ function App() {
   }, [])
 
   return (
+    <AppShell workspaceId={selectedWorkspaceId}>
     <main className="dashboard-shell">
-      <header>
-        <p className="eyebrow">AI SYSTEM TRADING</p>
-        <h1>開発環境ステータス</h1>
-        <p className="subtitle">React → FastAPI → PostgreSQL の接続状態</p>
-      </header>
+      <Routes>
+        <Route
+          path="/"
+          element={(
+            <HomePage>
+              <header>
+                <p className="eyebrow">AI SYSTEM TRADING</p>
+                <h1>開発環境ステータス</h1>
+                <p className="subtitle">React → FastAPI → PostgreSQL の接続状態</p>
+              </header>
+              <section className="status-grid" aria-live="polite">
+                <StatusCard title="Backend API" state={apiHealth} />
+                <StatusCard title="Database" state={dbHealth} />
+              </section>
+            </HomePage>
+          )}
+        />
+        <Route
+          path="/workspaces/:workspaceId/connections"
+          element={<ConnectionManagementPage>{null}</ConnectionManagementPage>}
+        />
+        <Route
+          path="/workspaces/:workspaceId/markets/oanda"
+          element={<ExchangeMarketPage exchange="oanda">{null}</ExchangeMarketPage>}
+        />
+        <Route
+          path="/workspaces/:workspaceId/markets/binance"
+          element={<ExchangeMarketPage exchange="binance">{null}</ExchangeMarketPage>}
+        />
+        <Route path="*" element={<NotFoundPage />} />
+      </Routes>
 
-      <section className="status-grid" aria-live="polite">
-        <StatusCard title="Backend API" state={apiHealth} />
-        <StatusCard title="Database" state={dbHealth} />
-      </section>
-
+      {route.kind !== 'not-found' && (
       <section className="workspace-panel">
         <div>
           <p className="eyebrow">DEVELOPMENT OWNER</p>
@@ -760,7 +809,7 @@ function App() {
             Workspace
             <select
               value={selectedWorkspaceId}
-              onChange={(event) => void loadConnections(event.target.value)}
+              onChange={(event) => void selectWorkspace(event.target.value)}
               disabled={workspaces.length === 0}
             >
               <option value="">選択してください</option>
@@ -773,7 +822,7 @@ function App() {
           </label>
         </div>
         <p className="workspace-message">{workspaceMessage}</p>
-        {connections.length > 0 && (
+        {route.kind === 'connections' && connections.length > 0 && (
           <ul className="connection-list">
             {connections.map((connection) => (
               <li key={connection.id}>
@@ -820,7 +869,7 @@ function App() {
             ))}
           </ul>
         )}
-        {workspaceAccounts.length > 0 && (
+        {route.kind === 'connections' && workspaceAccounts.length > 0 && (
           <div className="account-selection">
             <h3>Workspaceで利用する口座</h3>
             <ul className="account-list">
@@ -851,8 +900,9 @@ function App() {
           </div>
         )}
       </section>
+      )}
 
-      {selectedWorkspaceId && (
+      {route.kind === 'connections' && selectedWorkspaceId && (
         <section className="workspace-panel instrument-panel">
           <div>
             <p className="eyebrow">MARKET RULES</p>
@@ -891,7 +941,7 @@ function App() {
         </section>
       )}
 
-      {selectedWorkspaceId && workspaceInstruments.length > 0 && (
+      {route.kind === 'market' && selectedWorkspaceId && visibleInstruments.length > 0 && (
         <section className="workspace-panel market-data-panel">
           <div>
             <p className="eyebrow">CANDLE DATA</p>
@@ -903,8 +953,8 @@ function App() {
           <div className="market-data-controls">
             <label>
               銘柄
-              <select value={selectedInstrumentId} onChange={(event) => setSelectedInstrumentId(event.target.value)}>
-                {workspaceInstruments.map((instrument) => (
+              <select value={activeInstrumentId} onChange={(event) => setSelectedInstrumentId(event.target.value)}>
+                {visibleInstruments.map((instrument) => (
                   <option key={instrument.id} value={instrument.id}>
                     {instrument.exchange_code.toUpperCase()} {instrument.symbol}
                   </option>
@@ -921,7 +971,7 @@ function App() {
             </label>
             <button type="button" onClick={() => void startBackfill()}>過去1年を取得</button>
             {subscriptions.some(
-              (item) => item.instrument_id === selectedInstrumentId && item.timeframe === timeframe && item.enabled,
+              (item) => item.instrument_id === activeInstrumentId && item.timeframe === timeframe && item.enabled,
             ) ? (
               <button type="button" className="secondary-button" onClick={() => void setAutomaticCollection(false)}>
                 自動取得を停止
@@ -932,7 +982,7 @@ function App() {
           </div>
           <p className="workspace-message">{marketDataMessage}</p>
           {subscriptions
-            .filter((item) => item.instrument_id === selectedInstrumentId && item.timeframe === timeframe)
+            .filter((item) => item.instrument_id === activeInstrumentId && item.timeframe === timeframe)
             .map((item) => (
               <div className={`collection-status ${item.enabled ? 'enabled' : 'disabled'}`} key={item.id}>
                 <strong>{item.enabled ? '自動取得中' : '自動取得停止中'}</strong>
@@ -966,10 +1016,10 @@ function App() {
               )}
             </div>
           )}
-          {workspaceInstruments.find((item) => item.id === selectedInstrumentId) && (
+          {visibleInstruments.find((item) => item.id === activeInstrumentId) && (
             <CandleChart
               candles={candles}
-              instrument={workspaceInstruments.find((item) => item.id === selectedInstrumentId)!}
+              instrument={visibleInstruments.find((item) => item.id === activeInstrumentId)!}
             />
           )}
           {candles.length > 0 && (
@@ -985,7 +1035,14 @@ function App() {
         </section>
       )}
 
-      {selectedWorkspaceId && (
+      {route.kind === 'market' && selectedWorkspaceId && visibleInstruments.length === 0 && (
+        <section className="workspace-panel market-empty-state">
+          <h2>表示できる銘柄がありません</h2>
+          <p>接続管理ページで利用口座を選択し、銘柄ルールを同期してください。</p>
+        </section>
+      )}
+
+      {route.kind === 'connections' && selectedWorkspaceId && (
         <section className="workspace-panel connection-registration">
           <div>
             <p className="eyebrow">OANDA PRACTICE</p>
@@ -1051,7 +1108,7 @@ function App() {
         </section>
       )}
 
-      {selectedWorkspaceId && (
+      {route.kind === 'connections' && selectedWorkspaceId && (
         <section className="workspace-panel connection-registration">
           <div>
             <p className="eyebrow">BINANCE SPOT TESTNET</p>
@@ -1133,11 +1190,12 @@ function App() {
         </section>
       )}
 
-      <button type="button" onClick={refreshHealth}>
+      {route.kind === 'home' && <button type="button" onClick={refreshHealth}>
         再確認
-      </button>
-      <p className="endpoint">API: {apiBaseUrl}</p>
+      </button>}
+      {route.kind === 'home' && <p className="endpoint">API: {apiBaseUrl}</p>}
     </main>
+    </AppShell>
   )
 }
 

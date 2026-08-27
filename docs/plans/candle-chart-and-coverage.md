@@ -1,93 +1,112 @@
-# Candle chart and historical coverage implementation plan
+# Market data, chart, and real-time implementation roadmap
 
-## Objective
+Last reviewed: 2026-08-27
 
-- Show real OHLC candles with concrete time and price axes.
-- Show timestamp and OHLCV values under a crosshair.
-- Distinguish the requested historical range from the range actually returned by the source.
-- Never describe a partial response as "one year acquired".
+## Purpose
 
-## Agreed product boundary
+This document is the current implementation roadmap for market-data acquisition and visualization.
+It distinguishes implemented runtime behavior from target design and defines the order, entry
+conditions, and completion criteria for the remaining work.
 
-The existing screen remains a development and connection-validation screen. Binance Spot Testnet's
-currently available range is acceptable there; it does not need to simulate a full production
-history.
+The system remains paper-only. Account verification and any future order execution are restricted to
+OANDA Practice and Binance Spot Testnet. No production order endpoint is introduced by this roadmap.
 
-Production-grade market visualization is separated from connection administration:
+## Status legend
 
-- Connection page: workspace/account selection, credential state, verification, disable/delete,
-  instrument-rule sync, and a small validation-data preview.
-- OANDA market page: OANDA instruments, historical candles, real-time updates, coverage, and market
-  status.
-- Binance market page: Binance instruments, historical candles, real-time updates, coverage, and
-  market status.
+- `[x]` implemented and verified in the repository
+- `[~]` partially implemented; listed completion work remains
+- `[ ]` not implemented
+- `Approval gate` requires an explicit product/data-source decision before implementation
 
-The three requested corrections are implemented only after the page/data boundaries below are
-approved. No public/live execution endpoint is introduced by this design.
+## Product and page boundaries
 
-## Navigation and page architecture
+- Development page: API/DB status, owner-token entry, and Workspace selection.
+- Connection page: credentials, verification results, account selection, disable/delete, and
+  instrument-rule synchronization.
+- OANDA market page: OANDA instruments, historical candles, coverage, and future real-time status.
+- Binance market page: Binance instruments, historical candles, Testnet limitations, coverage, and
+  future real-time status.
 
-Adopt React Router 7 in declarative mode. The current application is a client-rendered Vite SPA, so
-framework mode and server rendering are unnecessary.
+Routes implemented in Phase 0:
 
 ```text
-/                                      -> development status / entry page
-/workspaces/:workspaceId/connections   -> connection and Testnet/Practice validation
-/workspaces/:workspaceId/markets/oanda -> OANDA market visualization
+/                                        -> development status / entry page
+/workspaces/:workspaceId/connections     -> connection and account management
+/workspaces/:workspaceId/markets/oanda   -> OANDA market visualization
 /workspaces/:workspaceId/markets/binance -> Binance market visualization
 ```
 
-Use a shared application shell containing workspace selection and navigation. Exchange pages are
-separate route modules but compose shared primitives:
+The Workspace ID may appear in the URL. Owner tokens and exchange credentials must never appear in
+URLs, browser storage, logs, ordinary database columns, or API responses.
+
+## Current implementation baseline
+
+### Connection and instrument foundation
+
+- [x] Workspace-scoped OANDA Practice and Binance Spot Testnet connections.
+- [x] Encrypted local credential storage and masked account identifiers.
+- [x] Credential replacement, re-verification, disable, and delete operations.
+- [x] Distinct saved, authentication-success, authentication-failure, and communication-failure
+  states.
+- [x] Workspace account selection and verified-connection enforcement.
+- [x] Read-only OANDA USD/JPY and Binance BTC/JPY instrument-rule synchronization.
+- [x] Audit events without credential or secret-reference disclosure.
+
+### Candle ingestion and coverage
+
+- [x] Manual backfill jobs for supported timeframes.
+- [x] Periodic backend collection subscriptions.
+- [x] Final-candle upsert storage.
+- [x] Requested and actually stored ranges are calculated separately.
+- [x] Coverage statuses include `complete`, `partial_source_limit`, `partial_gaps`, and `empty`.
+- [x] Binance Testnet periodic-reset limitations are visible and are not reported as one year
+  acquired.
+- [x] Coverage results are stored in `backfill_job.validation_result` for new completed jobs.
+- [~] Detailed ingestion accounting, gap persistence, duplicate-job rejection, and cursor pagination
+  remain in Phase A.
+
+### Chart and page architecture
+
+- [x] React Router 8.3 declarative routing and shared navigation shell.
+- [x] Separate connection, OANDA market, Binance market, and not-found routes.
+- [x] Exchange-specific instrument filtering and source/environment notices.
+- [x] Lightweight Charts 5.2 candlestick series replaced the raw SVG close-price line.
+- [x] JST time axis, precision-aware price axis, crosshair, and OHLCV display.
+- [x] Requested and stored coverage are shown on the market page.
+- [~] The chart still loads only the latest API page and does not request older rows while scrolling.
+- [~] Displayed range, chart-specific tests, and complete tooltip provenance remain in Phase B.
+
+React Router 8.3 replaced the originally proposed 7.x line because the available 7.x release
+produced unresolved high-severity dependency audit findings on 2026-08-26. The chosen 8.3 release
+passed the dependency audit and provides the required declarative APIs.
+
+## Architecture boundaries
+
+### Historical data
 
 ```text
-AppShell
-├── ConnectionManagementPage
-└── ExchangeMarketPage
-    ├── MarketHeader
-    ├── InstrumentTimeframeSelector
-    ├── CoverageSummary
-    ├── CandlestickChart
-    ├── RealtimeStatus
-    └── MarketDataTable
+Exchange REST -> normalized final candles -> PostgreSQL -> paginated HTTP API -> chart
 ```
 
-`ExchangeMarketPage` receives an exchange descriptor rather than duplicating chart and fetching
-logic. Exchange-specific symbol rules, market calendars, data source badges, and error messages stay
-in adapter/configuration modules.
+- Candle responses never contain credentials or secret references.
+- Every stored candle retains its source and quality status.
+- Testnet source limitations are expected and must remain visible.
+- A public historical source may not silently overwrite or mix with Testnet data.
 
-## Data-source and execution boundaries
-
-- Account verification and all future order execution remain OANDA Practice / Binance Spot Testnet.
-- The existing Testnet/Practice validation preview continues to use its selected connection.
-- Historical and real-time sources for the market pages are selected independently from execution.
-- Every candle carries visible source and environment provenance.
-- Production public market data may be read without enabling production order APIs or storing
-  production trading credentials.
-- Mixing sources under one candle business key requires an approved precedence rule and audit entry.
-
-The initial market pages may start with Testnet/Practice data, but must show the source limitation.
-A full-history public adapter remains a later approval gate.
-
-## Real-time update design
-
-Browser clients do not connect directly to exchanges. The backend owns exchange connections,
-normalization, reconnection, rate limits, and auditing.
+### Future real-time data
 
 ```text
-Exchange REST -> historical backfill -> PostgreSQL final candles
-Exchange stream -> backend normalizer -> provisional candle update -> browser WebSocket
+Exchange stream -> backend normalizer -> provisional WebSocket update -> browser chart
                                       -> finalized candle upsert -> PostgreSQL
 ```
 
-- One backend stream is shared by subscribers for the same exchange/symbol/timeframe.
-- Provisional updates modify only the current visual candle.
-- Only finalized candles are persisted as final data.
-- Reconnect resumes from the latest stored close time and runs a bounded REST gap fill.
-- Heartbeat, reconnecting, delayed, and disconnected states are visible on the market page.
-- The chart uses `series.update(...)` for current/new candles rather than replacing all data.
-- Browser WebSocket authentication uses a short-lived, one-time stream ticket issued through the
-  existing authenticated HTTP API; the owner token is never placed in a URL.
+- The browser never connects to an exchange with account credentials.
+- One backend stream is shared for the same exchange, symbol, and timeframe where practical.
+- Provisional events update only the current visual candle.
+- Only finalized candles are persisted as final.
+- Reconnection runs a bounded REST gap fill from the latest stored close time.
+- Browser WebSocket authorization uses a short-lived, one-time ticket. The owner token is never
+  placed in a WebSocket URL.
 
 Proposed endpoints:
 
@@ -96,182 +115,195 @@ POST /workspaces/{workspace_id}/market-stream-tickets
 WS   /ws/v1/market-stream?ticket=<one-time-ticket>
 ```
 
-The ticket is scoped to workspace, exchange, symbol, and timeframe and expires within one minute.
+The ticket is scoped to Workspace, exchange, symbol, and timeframe and expires within one minute.
 
-## Confirmed current state
+## Delivery roadmap
 
-The UI draws a normalized close-price polyline in a raw SVG. It has no time labels, price labels,
-candle bodies, crosshair, or tooltip. The API initially returns at most 500 stored rows, which is a
-display limit and is separate from ingestion.
+### Phase 0 — page separation and navigation: complete
 
-Database inspection on 2026-08-25 confirmed that Binance BTCJPY data starts around 2026-08-05 for
-every timeframe. A 365-day 1D job requested 2025-08-25 through 2026-08-25 but stored only 20 rows.
-Other timeframes cover the same roughly 20-day source range. The loop traversed the requested period
-and marked the job `succeeded`, but did not validate the actual first/last candle or continuity.
+- [x] Add React Router 8.3 in declarative mode.
+- [x] Add the shared application shell and Workspace-scoped navigation.
+- [x] Separate connection management from OANDA and Binance market pages.
+- [x] Preserve Workspace navigation without persisting the owner token.
+- [x] Add route, navigation, unknown-route, and responsive-navigation coverage.
+- [x] Verify direct market URL and 404 behavior in a browser without console errors.
 
-This matches the official Binance Spot Test Network behavior: Testnet is reset to a blank state
-approximately monthly. A one-year request therefore does not imply one year of available history.
+Completion evidence: frontend lint, five route/navigation tests, production build, dependency audit,
+backend regression tests, and unauthenticated browser route checks passed during Phase 0 delivery.
 
-## Library decision
+### Phase A — coverage correctness and historical API completion: next
 
-Use TradingView Lightweight Charts 5.2.x directly from React instead of maintaining the custom SVG.
-It provides a native candlestick series, time/price scales, crosshair, zoom, pan, and TypeScript APIs.
-Direct integration avoids depending on a separately maintained React wrapper.
+Status: `[~]` foundation implemented; completion work remains.
 
-```text
-lightweight-charts ^5.2.0
-```
+#### Deliverables
 
-Pin the resolved version in `package-lock.json` and run license and production-build checks.
-
-## UX specification
-
-- Render OHLC candles, not a close-only line.
-- Horizontal axis: date/time labels in Asia/Tokyo.
-- Vertical axis: price values using instrument precision and quote currency.
-- Crosshair tooltip: timestamp, open, high, low, close, volume, source, and quality status.
-- Header: exchange, symbol, timeframe, displayed first/last timestamp, displayed row count.
-- Responsive resize using `ResizeObserver`, with cleanup on component unmount.
-- Zoom and horizontal scrolling load older rows on demand.
-
-Show these ranges separately:
-
-1. Requested range, such as 2025-08-25 through 2026-08-25.
-2. Stored range, such as 2026-08-05 through 2026-08-24.
-3. Displayed range, the subset currently loaded into the chart.
-
-Coverage labels are `complete`, `partial_source_limit`, `partial_gaps`, `empty`, and `checking`.
-For Testnet, show that periodic resets limit historical availability.
-
-## Backend changes
-
-Replace the integer-only ingestion result with an `IngestionReport` containing:
-
-- requested start/end
-- actual first/last open time
-- rows received and rows inserted or updated
-- empty source windows
-- expected/stored/missing candle counts
-- bounded gap samples
-- coverage status and safe reason code
-
-Persist the report in `backfill_job.validation_result`. Keep job status `succeeded` when the request
-completed technically, but use `coverage_status` to distinguish complete and partial data.
-
-Validation rules:
-
-- Validate the stored range after upsert, not only provider response counts.
-- Binance expected counts use continuous time; OANDA must account for its trading-week closure.
-- Record actionable discontinuities in `market_data_gap`.
-- Reject concurrent duplicate jobs for the same workspace, instrument, timeframe, and range.
-
-Preserve the existing endpoint and add cursor pagination and coverage:
+- [ ] Introduce an `IngestionReport` containing:
+  - requested start/end
+  - actual first/last candle time
+  - source rows received
+  - rows inserted or updated
+  - empty source windows
+  - expected/stored/missing counts
+  - bounded gap samples
+  - coverage status and safe reason code
+- [ ] Persist actionable discontinuities in `market_data_gap`.
+- [ ] Account for OANDA trading-week closures so weekends do not become false gaps.
+- [ ] Reject concurrent duplicate backfills for the same Workspace, instrument, timeframe, and
+  overlapping range.
+- [ ] Add cursor pagination to the candle API:
 
 ```text
 GET /workspaces/{workspace_id}/instruments/{instrument_id}/candles
     ?timeframe=1d&limit=500&before=<timestamp>
-
-GET /workspaces/{workspace_id}/instruments/{instrument_id}/candle-coverage
-    ?timeframe=1d&requested_from=<timestamp>&requested_to=<timestamp>
 ```
 
-Neither response contains credentials or secret references.
+- [ ] Preserve the current coverage endpoint and add explicit requested-range parameters where
+  needed.
+- [ ] Add complete, source-limited, empty, duplicate-job, internal-gap, and Workspace-isolation
+  tests.
 
-## Historical source policy
+#### Entry condition
 
-Execution and account operations remain on OANDA Practice and Binance Spot Testnet.
+- Phase 0 routes remain stable and the current backfill/coverage regression suite passes.
 
-1. First report Testnet coverage accurately.
-2. If one-year Binance history is required, use a separate read-only public historical adapter only
-   after verifying exact symbol and interval availability.
-3. Store source provenance on every candle and define precedence before mixing sources.
-4. Never enable production trading credentials or production order endpoints.
+#### Completion criteria
 
-The public-data adapter is a separate approval gate. Chart and coverage work does not depend on it.
+- Technical job success and data completeness are separate states.
+- A 365-day request returning roughly 20 Testnet daily candles is `partial_source_limit`.
+- Internal missing candles are `partial_gaps`, not source limitations.
+- Duplicate overlapping jobs do not run concurrently.
+- More than 500 stored rows can be traversed without loading the entire dataset at once.
 
-## Delivery sequence
+### Phase B — chart interaction and large-history completion
 
-### Approved implementation-order amendment (2026-08-25)
+Status: `[~]` candlestick replacement implemented; incremental history remains.
 
-At the user's direction, coverage correctness and chart replacement are implemented before page
-separation. Phase 0 remains the next structural step after this work. The separate one-year public
-data adapter is not added during Testnet connection validation: the UI reports the requested and
-actually stored ranges, and Phase C remains an explicit approval gate.
+#### Deliverables
 
-### Phase 0: page separation
+- [ ] Extract the chart from the application container into a dedicated, testable component.
+- [ ] Show requested, stored, and currently displayed ranges separately.
+- [ ] Include source and quality status in the crosshair details.
+- [ ] Load older candles when the user scrolls toward the left boundary.
+- [ ] Merge paginated rows without duplicate timestamps or viewport jumps.
+- [ ] Show initial-loading, loading-older, empty, and API-failure states.
+- [ ] Verify OANDA and Binance price precision and timezone formatting.
+- [ ] Add component tests and browser checks for crosshair, pan, zoom, incremental loading, and
+  responsive layout.
 
-- Add React Router 7 in declarative mode and the shared application shell.
-- Move current account/connection features to `ConnectionManagementPage` without behavior changes.
-- Add empty OANDA and Binance market route modules with source/environment notices.
-- Preserve workspace selection across navigation without persisting the owner token.
-- Add route, direct-navigation, refresh, and responsive-navigation tests.
+#### Entry condition
 
-### Phase A: coverage correctness
+- Phase A cursor pagination and stable candle ordering are complete.
 
-- Add `IngestionReport` and post-ingestion validation.
-- Store coverage results on each backfill job.
-- Add coverage and cursor-pagination API schemas.
-- Display actual stored coverage instead of requested days.
-- Test complete, source-limited, empty, duplicate, and internal-gap cases.
+#### Completion criteria
 
-### Phase B: chart replacement
+- The chart can navigate beyond the latest 500 rows.
+- A one-minute year is never sent to or rendered by the browser in one response.
+- Loading older rows keeps the visible logical position stable.
+- Exact JST timestamp and OHLCV/source/quality values are available for a selected candle.
 
-- Add Lightweight Charts 5.2.x.
-- Replace the SVG with a lifecycle-safe React candlestick component.
-- Add axes, crosshair tooltip, JST/precision formatting, zoom, and pan.
-- Load older candles on demand instead of rendering a full one-minute year.
-- Add component tests and browser interaction checks.
+### Phase B2 — real-time market updates
 
-The connection page keeps only a compact validation preview. The complete axes, crosshair, history
-navigation, and real-time controls live on the exchange market pages.
+Status: `[ ]` not implemented.
 
-### Phase B2: real-time market updates
+#### Deliverables
 
-- Add backend exchange-stream adapters and normalized provisional candle events.
-- Add short-lived WebSocket stream tickets and workspace authorization.
-- Add reconnect, heartbeat, deduplication, bounded gap-fill, and final-candle persistence.
-- Connect chart `update()` behavior and visible connection-state indicators.
-- Test disconnect/reconnect, duplicate events, late events, rollover, and workspace isolation.
+- [ ] Add OANDA and Binance backend stream adapters and normalized provisional candle events.
+- [ ] Add short-lived stream tickets and Workspace authorization.
+- [ ] Add heartbeat, reconnect, delayed, and disconnected states.
+- [ ] Deduplicate events and handle late events and timeframe rollover.
+- [ ] Reconcile missing final candles through bounded REST gap fill after reconnect.
+- [ ] Update the chart with `series.update(...)` rather than replacing all chart data.
+- [ ] Persist only finalized candles as final data.
+- [ ] Test disconnect/reconnect, duplicates, late events, rollover, ticket expiry, and Workspace
+  isolation.
 
-### Phase C: optional one-year Binance history
+#### Entry condition
 
-- Verify exact BTCJPY public historical availability.
-- Approve source precedence and provenance.
-- Implement the read-only historical adapter and gap backfill.
-- Re-run coverage validation and expose the actual final range.
+- Phase A coverage/gap detection and Phase B incremental chart loading are complete.
 
-## Acceptance criteria
+#### Completion criteria
 
-- Both axes show exact time and price values.
-- Hovering a candle shows exact JST timestamp and OHLCV.
-- A 20-row 1D result displays roughly 20 days stored even when 365 days were requested.
-- Incomplete successful jobs are labeled `partial_source_limit`, not complete.
-- Pagination navigates past 500 rows without loading an entire one-minute year.
-- Duplicate requests do not run concurrently.
-- Workspace isolation, paper-only execution, audit, and secret non-disclosure remain intact.
-- Backend tests, PostgreSQL integration, frontend checks, and browser visual verification pass.
-- OANDA and Binance have distinct, directly addressable market URLs.
-- Reloading a market URL restores the page without exposing or persisting the owner token.
-- A stream disconnect is visible and automatically reconciles missing final candles after reconnect.
+- The current candle updates without a full chart reload.
+- Stream state is visible to the user.
+- A disconnect automatically reconnects and reconciles missing finalized candles.
+- No owner token or exchange credential is exposed to the WebSocket URL or browser payload.
 
-## Risks
+### Phase C — optional one-year Binance historical source
 
-- Testnet history can disappear during periodic resets; locally collected data is the durable record.
-- One year of one-minute continuous data is about 525,600 rows per instrument and must be paged.
-- OANDA needs a market calendar to avoid false weekend gaps.
-- Mixing Testnet and public data without visible provenance is prohibited.
+Status: `Approval gate`; not required for Testnet connection validation.
 
-## Approval checklist before implementation
+#### Decision required before implementation
 
-The following decisions are proposed for approval:
+- Confirm that one-year Binance BTC/JPY history is a product requirement.
+- Verify exact public symbol and interval availability.
+- Approve source provenance, precedence, and conflict behavior.
+- Decide whether public data fills gaps only or forms a separate dataset.
 
-1. Keep the current screen focused on connection and Testnet/Practice validation.
-2. Create separate workspace-scoped OANDA and Binance market URLs.
-3. Share one chart/page implementation while keeping exchange adapters separate.
-4. Use React Router 7 declarative mode and Lightweight Charts 5.2.x.
-5. Route real-time data through the backend; never expose exchange credentials to the browser.
-6. Keep order execution paper-only even if a later market page reads public production data.
-7. Implement the approved amendment first: coverage correctness and chart replacement, then page
-   separation and real-time stream. One-year public history remains optional and separately approved.
+#### Deliverables after approval
 
-Implementation starts only after these seven points are accepted or amended.
+- [ ] Add a separate read-only public historical adapter.
+- [ ] Record source provenance on every candle.
+- [ ] Audit source-mixing or precedence decisions without secrets.
+- [ ] Backfill approved gaps and re-run Phase A validation.
+- [ ] Keep order execution and account credentials on Testnet/Practice only.
+
+#### Completion criteria
+
+- The UI identifies the source and final available range accurately.
+- Public data cannot enable production order execution.
+- Conflicts are deterministic, tested, and auditable.
+
+### Phase D — paper-trading foundation
+
+Status: `[ ]` future design phase; implementation requires a separate approved specification.
+
+Phase D starts only after reliable historical and real-time market data are complete. Proposed scope:
+
+- paper-order model and state machine
+- simulated fills, fees, spread, and slippage
+- positions, balances, and margin representation
+- Workspace-scoped risk limits and emergency stop
+- order/fill audit events
+- deterministic replay and test fixtures
+
+External production orders remain out of scope. Before implementation, define order types, fill
+rules, portfolio accounting, risk limits, idempotency, and acceptance tests in a separate design
+document.
+
+## Global quality and security requirements
+
+Every phase must preserve:
+
+- Workspace isolation for reads, writes, streams, and background jobs.
+- OANDA Practice / Binance Spot Testnet execution boundaries.
+- No credentials, plaintext secrets, or `secret_ref` values in logs, ordinary DB columns, audit
+  payloads, URLs, or API responses.
+- Safe error codes that distinguish authentication, communication, configuration, and data-quality
+  failures.
+- Auditability for credential, connection, source-precedence, subscription, and future order state
+  changes.
+- Backend lint/tests, frontend lint/tests/typecheck/build, dependency audit, migration checks where
+  applicable, and browser verification for UI changes.
+
+## Known risks
+
+- Binance Testnet may reset periodically; locally collected data is the durable Testnet record.
+- One year of one-minute continuous data is about 525,600 rows per instrument and requires cursor
+  pagination and bounded browser rendering.
+- OANDA requires a trading calendar to avoid false weekend and holiday gaps.
+- Mixing Testnet and public data without explicit provenance and precedence is prohibited.
+- Background polling and future streams must not create duplicate writes or exceed provider limits.
+
+## Immediate next implementation slice
+
+The next approved development slice should complete the Phase A/B dependency boundary:
+
+1. Add cursor pagination and deterministic candle ordering.
+2. Add duplicate-backfill rejection and persistent internal-gap reporting.
+3. Complete `IngestionReport` and OANDA calendar-aware coverage validation.
+4. Add chart-side incremental history loading and displayed-range reporting.
+5. Add API, service, component, Workspace-isolation, and browser regression tests.
+
+After this slice meets the Phase A and Phase B completion criteria, proceed to Phase B2 real-time
+market updates. Phase C remains optional and requires explicit approval. Phase D requires its own
+requirements and design review.
