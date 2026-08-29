@@ -62,8 +62,8 @@ URLs, browser storage, logs, ordinary database columns, or API responses.
 - [x] Binance Testnet periodic-reset limitations are visible and are not reported as one year
   acquired.
 - [x] Coverage results are stored in `backfill_job.validation_result` for new completed jobs.
-- [~] Detailed ingestion accounting, gap persistence, duplicate-job rejection, and cursor pagination
-  remain in Phase A.
+- [x] Detailed ingestion accounting, gap persistence, duplicate-job rejection, and cursor pagination
+  are implemented in Phase A.
 
 ### Chart and page architecture
 
@@ -137,7 +137,7 @@ Status: `[~]` foundation implemented; completion work remains.
 
 #### Deliverables
 
-- [ ] Introduce an `IngestionReport` containing:
+- [x] Introduce an `IngestionReport` containing:
   - requested start/end
   - actual first/last candle time
   - source rows received
@@ -146,16 +146,19 @@ Status: `[~]` foundation implemented; completion work remains.
   - expected/stored/missing counts
   - bounded gap samples
   - coverage status and safe reason code
-- [ ] Persist actionable discontinuities in `market_data_gap`.
-- [ ] Account for OANDA trading-week closures so weekends do not become false gaps.
-- [ ] Reject concurrent duplicate backfills for the same Workspace, instrument, timeframe, and
+- [x] Persist actionable discontinuities in `market_data_gap`.
+- [x] Account for OANDA trading-week closures so weekends do not become false gaps.
+- [x] Reject concurrent duplicate backfills for the same Workspace, instrument, timeframe, and
   overlapping range.
-- [ ] Add cursor pagination to the candle API:
+- [x] Add cursor pagination to the candle API:
 
 ```text
 GET /workspaces/{workspace_id}/instruments/{instrument_id}/candles
     ?timeframe=1d&limit=500&before=<timestamp>
 ```
+
+`before` is an exclusive, timezone-aware `open_time` cursor. Responses remain chronological
+(oldest to newest); the next request uses the first row's `open_time` as its `before` value.
 
 - [ ] Preserve the current coverage endpoint and add explicit requested-range parameters where
   needed.
@@ -180,15 +183,21 @@ Status: `[~]` candlestick replacement implemented; incremental history remains.
 
 #### Deliverables
 
-- [ ] Extract the chart from the application container into a dedicated, testable component.
-- [ ] Show requested, stored, and currently displayed ranges separately.
-- [ ] Include source and quality status in the crosshair details.
-- [ ] Load older candles when the user scrolls toward the left boundary.
-- [ ] Merge paginated rows without duplicate timestamps or viewport jumps.
-- [ ] Show initial-loading, loading-older, empty, and API-failure states.
-- [ ] Verify OANDA and Binance price precision and timezone formatting.
-- [ ] Add component tests and browser checks for crosshair, pan, zoom, incremental loading, and
+- [x] Extract the chart from the application container into a dedicated, testable component.
+- [x] Show requested, stored, and currently displayed ranges separately.
+- [x] Include source and quality status in the crosshair details.
+- [x] Load older candles when the user scrolls toward the left boundary.
+- [x] Merge paginated rows without duplicate timestamps or viewport jumps.
+- [x] Show initial-loading, loading-older, empty, and API-failure states.
+- [~] Verify OANDA and Binance price precision and timezone formatting. Binance BTC/JPY
+  `price_scale=0` and JST formatting are verified; OANDA verification is intentionally deferred.
+- [x] Add component tests and browser checks for crosshair, pan, zoom, incremental loading, and
   responsive layout.
+
+Browser regression evidence: the initial chart remains at 500 rows until a pointer, wheel, or touch
+interaction moves toward the left boundary; subsequent pages load in 500-row increments without a
+viewport jump. BTC/JPY tooltip prices follow `price_scale=0` instead of exposing database decimal
+padding.
 
 #### Entry condition
 
@@ -298,10 +307,10 @@ Every phase must preserve:
 
 The next approved development slice should complete the Phase A/B dependency boundary:
 
-1. Add cursor pagination and deterministic candle ordering.
-2. Add duplicate-backfill rejection and persistent internal-gap reporting.
-3. Complete `IngestionReport` and OANDA calendar-aware coverage validation.
-4. Add chart-side incremental history loading and displayed-range reporting.
+1. Add cursor pagination and deterministic candle ordering. **Complete.**
+2. Add duplicate-backfill rejection and persistent internal-gap reporting. **Complete.**
+3. Complete `IngestionReport` and OANDA calendar-aware coverage validation. **Complete.**
+4. Add chart-side incremental history loading and displayed-range reporting. **Complete.**
 5. Add API, service, component, Workspace-isolation, and browser regression tests.
 
 After this slice meets the Phase A and Phase B completion criteria, proceed to Phase B2 real-time

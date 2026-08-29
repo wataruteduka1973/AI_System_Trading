@@ -30,7 +30,12 @@ from app.schemas.catalog import (
     Timeframe,
 )
 from app.security.auth import require_owner
-from app.services.market_data import build_candle_coverage, run_backfill_job
+from app.services.market_data import (
+    DuplicateBackfillError,
+    build_candle_coverage,
+    ensure_no_overlapping_backfill,
+    run_backfill_job,
+)
 
 router = APIRouter()
 DatabaseSession = Annotated[Session, Depends(get_db)]
@@ -87,11 +92,24 @@ def create_candle_backfill(
     _require_workspace(db, workspace_id)
     _require_instrument_access(db, workspace_id, payload.instrument_id)
     now = datetime.now(UTC)
+    requested_from = now - timedelta(days=payload.days)
+    try:
+        ensure_no_overlapping_backfill(
+            db,
+            workspace_id=workspace_id,
+            instrument_id=payload.instrument_id,
+            timeframe=payload.timeframe,
+            requested_from=requested_from,
+            requested_to=now,
+        )
+    except DuplicateBackfillError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     job = BackfillJob(
         workspace_id=workspace_id,
         instrument_id=payload.instrument_id,
         timeframe=payload.timeframe,
-        from_time=now - timedelta(days=payload.days),
+        from_time=requested_from,
         to_time=now,
         requested_by=None,
         trigger_type="manual",
@@ -147,21 +165,25 @@ def list_candles(
     db: DatabaseSession,
     _: Owner,
     timeframe: Timeframe = "1m",
-    limit: Annotated[int, Query(ge=1, le=5000)] = 500,
+    limit: Annotated[int, Query(ge=1, le=500)] = 500,
+    before: datetime | None = None,
 ) -> list[CandleRead]:
     _require_workspace(db, workspace_id)
     _require_instrument_access(db, workspace_id, instrument_id)
+    if before is not None and before.tzinfo is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="The before cursor must include a timezone offset",
+        )
+    statement = select(Candle).where(
+        Candle.instrument_id == instrument_id,
+        Candle.timeframe == timeframe,
+        Candle.is_final.is_(True),
+    )
+    if before is not None:
+        statement = statement.where(Candle.open_time < before.astimezone(UTC))
     candles = list(
-        db.scalars(
-            select(Candle)
-            .where(
-                Candle.instrument_id == instrument_id,
-                Candle.timeframe == timeframe,
-                Candle.is_final.is_(True),
-            )
-            .order_by(Candle.open_time.desc())
-            .limit(limit)
-        ).all()
+        db.scalars(statement.order_by(Candle.open_time.desc(), Candle.id.desc()).limit(limit)).all()
     )
     return [_candle_read(candle) for candle in reversed(candles)]
 

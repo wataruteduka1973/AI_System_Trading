@@ -13,8 +13,8 @@ AIモデルとテクニカル分析指標を利用し、複数の取引所にま
 - Git
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+python -m venv .venv313
+.\.venv313\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
@@ -38,8 +38,8 @@ DATABASE_URL=postgresql+psycopg://postgres:実際のパスワード@localhost:54
 開発用Owner認証とローカル暗号化Secret Storeには、それぞれ別のランダム値を設定します。次のコマンドで値を生成し、表示された値を`.env`の`DEV_OWNER_TOKEN`と`SECRET_ENCRYPTION_KEY`へ設定してください。値はコミット、チャット送信、スクリーンショット共有をしないでください。
 
 ```powershell
-.\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(32))"
-.\.venv\Scripts\python.exe -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+.\.venv313\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(32))"
+.\.venv313\Scripts\python.exe -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
 ```dotenv
@@ -103,12 +103,18 @@ pytest
 ## ディレクトリ構成
 
 ```text
-src/ai_system_trading/
-  core/        # 共通設定・ドメインロジック
-  exchanges/   # 取引所ごとの接続処理
-  strategies/  # 売買戦略・AIモデル
-tests/         # 自動テスト
+app/                         # FastAPIバックエンドの実行コード
+  api/                       # HTTP入出力
+  connections/application/   # 接続管理ユースケース
+  exchanges/                 # OANDA Practice / Binance Testnetクライアント
+  services/                  # 未分割のアプリケーションサービス
+frontend/                    # Reactフロントエンド
+src/ai_system_trading/       # 配布パッケージ用シェル（統合予定）
+tests/                       # 自動テスト
 ```
+
+現在構造、目標構造、依存方向、段階的な移行方針は
+`docs/architecture/current-and-target.md` を参照してください。
 
 ## CI/CD
 

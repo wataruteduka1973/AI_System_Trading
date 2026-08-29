@@ -12,6 +12,7 @@ build/
 
 # Virtual environments
 .venv/
+.venv313/
 venv/
 .codex-test-deps/
 

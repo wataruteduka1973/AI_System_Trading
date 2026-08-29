@@ -1,10 +1,13 @@
 import asyncio
+import hashlib
 from contextlib import suppress
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, literal_column, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -23,6 +26,7 @@ from app.models.catalog import (
     ExchangeConnection,
     ExternalAccount,
     Instrument,
+    MarketDataGap,
     MarketDataSubscription,
     WorkspaceAccountSelection,
 )
@@ -31,6 +35,277 @@ from app.services.secrets import LocalEncryptedSecretStore, get_secret_store
 
 class MarketDataAccessError(RuntimeError):
     pass
+
+
+class DuplicateBackfillError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class GapWindow:
+    from_time: datetime
+    to_time: datetime
+    expected_count: int
+    missing_count: int
+    reason_code: str = "internal_missing_candles"
+
+    def as_dict(self) -> dict[str, object]:
+        values = asdict(self)
+        values["from_time"] = self.from_time.isoformat()
+        values["to_time"] = self.to_time.isoformat()
+        return values
+
+
+@dataclass
+class IngestionReport:
+    requested_from: datetime
+    requested_to: datetime
+    actual_first_candle_time: datetime | None = None
+    actual_last_candle_time: datetime | None = None
+    source_rows_received: int = 0
+    rows_inserted: int = 0
+    rows_updated: int = 0
+    empty_source_window_count: int = 0
+    empty_source_window_samples: list[dict[str, str]] = field(default_factory=list)
+
+    @property
+    def rows_written(self) -> int:
+        return self.rows_inserted + self.rows_updated
+
+    def record_empty_window(self, start: datetime, end: datetime) -> None:
+        self.empty_source_window_count += 1
+        if len(self.empty_source_window_samples) < 20:
+            self.empty_source_window_samples.append(
+                {"from_time": start.isoformat(), "to_time": end.isoformat()}
+            )
+
+    def record_candles(self, points: list[CandlePoint]) -> None:
+        if not points:
+            return
+        first = min(point.open_time for point in points)
+        last = max(point.open_time for point in points)
+        if self.actual_first_candle_time is None or first < self.actual_first_candle_time:
+            self.actual_first_candle_time = first
+        if self.actual_last_candle_time is None or last > self.actual_last_candle_time:
+            self.actual_last_candle_time = last
+
+    def as_validation_result(
+        self, coverage: dict[str, object], gaps: list[GapWindow]
+    ) -> dict[str, object]:
+        coverage_status = coverage.get("coverage_status")
+        safe_reason_code = coverage.get("source_limitation")
+        if safe_reason_code is None and coverage_status == "partial_gaps":
+            safe_reason_code = "internal_missing_candles"
+        elif safe_reason_code is None and coverage_status == "empty":
+            safe_reason_code = "empty_source_response"
+        return {
+            "requested_from": self.requested_from.isoformat(),
+            "requested_to": self.requested_to.isoformat(),
+            "actual_first_candle_time": (
+                self.actual_first_candle_time.isoformat() if self.actual_first_candle_time else None
+            ),
+            "actual_last_candle_time": (
+                self.actual_last_candle_time.isoformat() if self.actual_last_candle_time else None
+            ),
+            "source_rows_received": self.source_rows_received,
+            "rows_inserted": self.rows_inserted,
+            "rows_updated": self.rows_updated,
+            "rows_written": self.rows_written,
+            "empty_source_window_count": self.empty_source_window_count,
+            "empty_source_window_samples": self.empty_source_window_samples,
+            "final_candles_only": True,
+            "duplicates": "upserted",
+            "internal_gap_count": len(gaps),
+            "internal_gap_samples": [gap.as_dict() for gap in gaps[:20]],
+            "safe_reason_code": safe_reason_code,
+            **coverage,
+        }
+
+
+def ensure_no_overlapping_backfill(
+    db: Session,
+    *,
+    workspace_id: UUID,
+    instrument_id: UUID,
+    timeframe: str,
+    requested_from: datetime,
+    requested_to: datetime,
+) -> None:
+    lock_key = _advisory_lock_key("backfill", workspace_id, instrument_id, timeframe)
+    db.execute(select(func.pg_advisory_xact_lock(lock_key)))
+    duplicate_id = db.scalar(
+        select(BackfillJob.id).where(
+            BackfillJob.workspace_id == workspace_id,
+            BackfillJob.instrument_id == instrument_id,
+            BackfillJob.timeframe == timeframe,
+            BackfillJob.status.in_(("queued", "running")),
+            BackfillJob.from_time < requested_to,
+            BackfillJob.to_time > requested_from,
+        )
+    )
+    if duplicate_id is not None:
+        raise DuplicateBackfillError("An overlapping backfill is already queued or running")
+
+
+def find_internal_gaps(
+    open_times: list[datetime], timeframe: str, exchange_code: str
+) -> list[GapWindow]:
+    delta = timeframe_delta(timeframe)
+    ordered = sorted(set(open_times))
+    gaps: list[GapWindow] = []
+    for previous, current in zip(ordered, ordered[1:], strict=False):
+        missing_times: list[datetime] = []
+        candidate = previous + delta
+        while candidate < current:
+            if _is_expected_market_time(exchange_code, candidate):
+                missing_times.append(candidate)
+            candidate += delta
+        if not missing_times:
+            continue
+        segment_start = missing_times[0]
+        segment_count = 1
+        for prior_missing, missing in zip(missing_times, missing_times[1:], strict=False):
+            if missing != prior_missing + delta:
+                gaps.append(
+                    GapWindow(
+                        from_time=segment_start,
+                        to_time=prior_missing + delta,
+                        expected_count=segment_count,
+                        missing_count=segment_count,
+                    )
+                )
+                segment_start = missing
+                segment_count = 1
+            else:
+                segment_count += 1
+        gaps.append(
+            GapWindow(
+                from_time=segment_start,
+                to_time=missing_times[-1] + delta,
+                expected_count=segment_count,
+                missing_count=segment_count,
+            )
+        )
+    return gaps
+
+
+def persist_internal_gaps(
+    db: Session,
+    *,
+    instrument_id: UUID,
+    timeframe: str,
+    requested_from: datetime,
+    requested_to: datetime,
+) -> list[GapWindow]:
+    db.execute(
+        select(
+            func.pg_advisory_xact_lock(
+                _advisory_lock_key("market-data-gap", instrument_id, timeframe)
+            )
+        )
+    )
+    exchange_code = db.scalar(
+        select(Exchange.code)
+        .join(Instrument, Instrument.exchange_id == Exchange.id)
+        .where(Instrument.id == instrument_id)
+    )
+    open_times = list(
+        db.scalars(
+            select(Candle.open_time)
+            .where(
+                Candle.instrument_id == instrument_id,
+                Candle.timeframe == timeframe,
+                Candle.is_final.is_(True),
+                Candle.open_time >= requested_from,
+                Candle.open_time < requested_to,
+            )
+            .order_by(Candle.open_time)
+        ).all()
+    )
+    gaps = find_internal_gaps(open_times, timeframe, exchange_code or "unknown")
+    existing = list(
+        db.scalars(
+            select(MarketDataGap).where(
+                MarketDataGap.instrument_id == instrument_id,
+                MarketDataGap.timeframe == timeframe,
+                MarketDataGap.reason_code == "internal_missing_candles",
+                MarketDataGap.status == "open",
+                MarketDataGap.from_time < requested_to,
+                MarketDataGap.to_time > requested_from,
+            )
+        ).all()
+    )
+    gaps_by_key = {(gap.from_time, gap.to_time): gap for gap in gaps}
+    existing_by_key = {(gap.from_time, gap.to_time): gap for gap in existing}
+    stored_open_times = set(open_times)
+    now = datetime.now(UTC)
+    for key, existing_gap in existing_by_key.items():
+        overlapping_replacement = any(
+            gap.from_time < existing_gap.to_time and gap.to_time > existing_gap.from_time
+            for gap in gaps
+        )
+        if key not in gaps_by_key and (
+            overlapping_replacement
+            or _gap_is_filled(
+                existing_gap, stored_open_times, timeframe, exchange_code or "unknown"
+            )
+        ):
+            existing_gap.status = "resolved"
+            existing_gap.resolved_at = now
+    for key, gap in gaps_by_key.items():
+        existing_gap = existing_by_key.get(key)
+        if existing_gap is not None:
+            existing_gap.expected_count = gap.expected_count
+            existing_gap.missing_count = gap.missing_count
+            continue
+        db.add(
+            MarketDataGap(
+                instrument_id=instrument_id,
+                timeframe=timeframe,
+                from_time=gap.from_time,
+                to_time=gap.to_time,
+                expected_count=gap.expected_count,
+                missing_count=gap.missing_count,
+                reason_code=gap.reason_code,
+                status="open",
+            )
+        )
+    return gaps
+
+
+def _is_expected_market_time(exchange_code: str, candle_open_time: datetime) -> bool:
+    if exchange_code != "oanda":
+        return True
+    new_york_time = candle_open_time.astimezone(ZoneInfo("America/New_York"))
+    weekday = new_york_time.weekday()
+    if weekday == 5:
+        return False
+    if weekday == 4 and new_york_time.hour >= 17:
+        return False
+    return not (weekday == 6 and new_york_time.hour < 17)
+
+
+def _gap_is_filled(
+    gap: MarketDataGap,
+    stored_open_times: set[datetime],
+    timeframe: str,
+    exchange_code: str,
+) -> bool:
+    delta = timeframe_delta(timeframe)
+    candidate = gap.from_time
+    expected = 0
+    while candidate < gap.to_time:
+        if _is_expected_market_time(exchange_code, candidate):
+            expected += 1
+            if candidate not in stored_open_times:
+                return False
+        candidate += delta
+    return expected > 0
+
+
+def _advisory_lock_key(namespace: str, *parts: object) -> int:
+    lock_material = ":".join((namespace, *(str(part) for part in parts))).encode()
+    return int.from_bytes(hashlib.blake2b(lock_material, digest_size=8).digest(), signed=True)
 
 
 def classify_candle_coverage(
@@ -42,17 +317,20 @@ def classify_candle_coverage(
     stored_count: int,
     actual_from: datetime | None,
     actual_to: datetime | None,
+    internal_missing_count: int | None = None,
 ) -> dict[str, object]:
     delta = timeframe_delta(timeframe)
     expected_count: int | None = None
     missing_count: int | None = None
     coverage_status = "empty"
     if stored_count and actual_from is not None and actual_to is not None:
+        missing_count = internal_missing_count
         if exchange_code == "binance":
             if requested_from is not None and requested_to is not None:
                 expected_count = max(0, int((requested_to - requested_from) / delta))
-            actual_expected = max(1, int((actual_to - actual_from) / delta))
-            missing_count = max(0, actual_expected - stored_count)
+            if missing_count is None:
+                actual_expected = max(1, int((actual_to - actual_from) / delta))
+                missing_count = max(0, actual_expected - stored_count)
         starts_in_range = requested_from is None or actual_from <= requested_from + delta
         ends_in_range = requested_to is None or actual_to >= requested_to - delta
         if starts_in_range and ends_in_range and (missing_count in {None, 0}):
@@ -106,6 +384,10 @@ def build_candle_coverage(
         .join(Instrument, Instrument.exchange_id == Exchange.id)
         .where(Instrument.id == instrument_id)
     )
+    open_times = list(
+        db.scalars(select(Candle.open_time).where(*filters).order_by(Candle.open_time)).all()
+    )
+    gaps = find_internal_gaps(open_times, timeframe, exchange_code or "unknown")
     return classify_candle_coverage(
         exchange_code=exchange_code,
         timeframe=timeframe,
@@ -114,6 +396,7 @@ def build_candle_coverage(
         stored_count=stored_count,
         actual_from=actual_from,
         actual_to=actual_to,
+        internal_missing_count=sum(gap.missing_count for gap in gaps),
     )
 
 
@@ -138,14 +421,14 @@ class CandleIngestionService:
         start: datetime,
         end: datetime,
         quality_status: str,
-    ) -> int:
+    ) -> IngestionReport:
         instrument, exchange, connection = self._resolve_access(workspace_id, instrument_id)
         credentials = self._load_credentials(connection)
         cursor = start.astimezone(UTC)
         end = end.astimezone(UTC)
         page_size = 4900 if exchange.code == "oanda" else 950
         delta = timeframe_delta(timeframe)
-        rows_written = 0
+        report = IngestionReport(requested_from=cursor, requested_to=end)
         while cursor < end:
             page_end = min(end, cursor + delta * page_size)
             points = await self._fetch_page(
@@ -157,14 +440,19 @@ class CandleIngestionService:
                 cursor,
                 page_end,
             )
+            report.source_rows_received += len(points)
+            if not points:
+                report.record_empty_window(cursor, page_end)
             final_points = [point for point in points if point.is_final and point.close_time <= end]
             if final_points:
-                self._upsert_points(
+                report.record_candles(final_points)
+                inserted, updated = self._upsert_points(
                     instrument.id, timeframe, exchange.code, quality_status, final_points
                 )
-                rows_written += len(final_points)
+                report.rows_inserted += inserted
+                report.rows_updated += updated
             cursor = page_end
-        return rows_written
+        return report
 
     def latest_close_time(self, instrument_id: UUID, timeframe: str) -> datetime | None:
         return self.db.scalar(
@@ -250,7 +538,7 @@ class CandleIngestionService:
         source: str,
         quality_status: str,
         points: list[CandlePoint],
-    ) -> None:
+    ) -> tuple[int, int]:
         received_at = datetime.now(UTC)
         values = [
             {
@@ -288,8 +576,10 @@ class CandleIngestionService:
                 "received_at": received_at,
                 "corrected_at": received_at,
             },
-        )
-        self.db.execute(statement)
+        ).returning(literal_column("xmax = 0"))
+        inserted_flags = list(self.db.scalars(statement).all())
+        inserted = sum(bool(flag) for flag in inserted_flags)
+        return inserted, len(inserted_flags) - inserted
 
 
 def market_data_error_code(exc: Exception) -> str:
@@ -316,7 +606,7 @@ async def run_backfill_job(job_id: UUID) -> None:
         try:
             secret_store = get_secret_store()
             service = CandleIngestionService(db, secret_store)
-            job.rows_written = await service.sync(
+            report = await service.sync(
                 job.workspace_id,
                 job.instrument_id,
                 job.timeframe,
@@ -324,18 +614,23 @@ async def run_backfill_job(job_id: UUID) -> None:
                 job.to_time,
                 "backfilled",
             )
+            job.rows_written = report.rows_written
+            gaps = persist_internal_gaps(
+                db,
+                instrument_id=job.instrument_id,
+                timeframe=job.timeframe,
+                requested_from=job.from_time,
+                requested_to=job.to_time,
+            )
             job.status = "succeeded"
-            job.validation_result = {
-                "final_candles_only": True,
-                "duplicates": "upserted",
-                **build_candle_coverage(
-                    db,
-                    job.instrument_id,
-                    job.timeframe,
-                    job.from_time,
-                    job.to_time,
-                ),
-            }
+            coverage = build_candle_coverage(
+                db,
+                job.instrument_id,
+                job.timeframe,
+                job.from_time,
+                job.to_time,
+            )
+            job.validation_result = report.as_validation_result(coverage, gaps)
             job.error_code = None
         except Exception as exc:
             db.rollback()
@@ -375,9 +670,7 @@ class MarketDataPollingWorker:
             now = datetime.now(UTC)
             subscriptions = list(
                 db.scalars(
-                    select(MarketDataSubscription).where(
-                        MarketDataSubscription.enabled.is_(True)
-                    )
+                    select(MarketDataSubscription).where(MarketDataSubscription.enabled.is_(True))
                 ).all()
             )
             for subscription in subscriptions:

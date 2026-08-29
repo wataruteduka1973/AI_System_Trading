@@ -1,12 +1,4 @@
-import {
-  CandlestickSeries,
-  ColorType,
-  CrosshairMode,
-  createChart,
-  type Time,
-  type UTCTimestamp,
-} from 'lightweight-charts'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Route, Routes, useLocation, useNavigate } from 'react-router'
 import AppShell from './app/AppShell'
 import { connectionPath, resolveAppRoute } from './app/routes'
@@ -14,6 +6,8 @@ import ConnectionManagementPage from './pages/ConnectionManagementPage'
 import ExchangeMarketPage from './pages/ExchangeMarketPage'
 import HomePage from './pages/HomePage'
 import NotFoundPage from './pages/NotFoundPage'
+import CandleChart, { type DisplayedRange } from './components/CandleChart'
+import { mergeCandlePages } from './components/marketData'
 import './App.css'
 
 type HealthState = {
@@ -206,89 +200,6 @@ function StatusCard({ title, state }: { title: string; state: HealthState }) {
   )
 }
 
-function CandleChart({ candles, instrument }: { candles: Candle[]; instrument: WorkspaceInstrument }) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const [hovered, setHovered] = useState<Candle | null>(null)
-
-  useEffect(() => {
-    if (!containerRef.current || candles.length === 0) return
-    const dateTime = new Intl.DateTimeFormat('ja-JP', {
-      timeZone: 'Asia/Tokyo',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-    const chart = createChart(containerRef.current, {
-      autoSize: true,
-      height: 360,
-      layout: { background: { type: ColorType.Solid, color: '#081426' }, textColor: '#b9cbe0' },
-      grid: {
-        vertLines: { color: 'rgba(75, 104, 139, 0.2)' },
-        horzLines: { color: 'rgba(75, 104, 139, 0.2)' },
-      },
-      crosshair: { mode: CrosshairMode.Normal },
-      rightPriceScale: { borderColor: '#38506f' },
-      timeScale: {
-        borderColor: '#38506f',
-        timeVisible: true,
-        secondsVisible: false,
-        tickMarkFormatter: (time: Time) => dateTime.format(new Date(Number(time) * 1000)),
-      },
-      localization: {
-        timeFormatter: (time: Time) =>
-          new Date(Number(time) * 1000).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }),
-      },
-    })
-    const series = chart.addSeries(CandlestickSeries, {
-      upColor: '#26a69a',
-      downColor: '#ef5350',
-      borderVisible: false,
-      wickUpColor: '#26a69a',
-      wickDownColor: '#ef5350',
-      priceFormat: {
-        type: 'price',
-        precision: instrument.price_scale,
-        minMove: Number(instrument.tick_size),
-      },
-      title: `${instrument.symbol} / ${instrument.quote_asset}`,
-    })
-    const indexed = new Map<number, Candle>()
-    const chartData = candles.map((candle) => {
-      const time = Math.floor(new Date(candle.open_time).getTime() / 1000) as UTCTimestamp
-      indexed.set(time, candle)
-      return {
-        time,
-        open: Number(candle.open),
-        high: Number(candle.high),
-        low: Number(candle.low),
-        close: Number(candle.close),
-      }
-    })
-    series.setData(chartData)
-    chart.timeScale().fitContent()
-    chart.subscribeCrosshairMove((parameter) => {
-      const time = typeof parameter.time === 'number' ? parameter.time : null
-      setHovered(time === null ? null : indexed.get(time) ?? null)
-    })
-    return () => chart.remove()
-  }, [candles, instrument])
-
-  if (candles.length === 0) return <p className="chart-empty">表示できる確定足がまだありません。</p>
-  const detail = hovered ?? candles[candles.length - 1]
-  return (
-    <div className="candle-chart" role="img" aria-label={`${instrument.symbol}のローソク足`}>
-      <div className="chart-tooltip" aria-live="polite">
-        <strong>{new Date(detail.open_time).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })}</strong>
-        <span>始値 {detail.open}</span><span>高値 {detail.high}</span>
-        <span>安値 {detail.low}</span><span>終値 {detail.close}</span>
-        <span>出来高 {detail.volume ?? '未提供'}</span>
-      </div>
-      <div ref={containerRef} className="candle-chart-canvas" />
-    </div>
-  )
-}
-
 function App() {
   const location = useLocation()
   const navigate = useNavigate()
@@ -331,6 +242,11 @@ function App() {
   const [selectedInstrumentId, setSelectedInstrumentId] = useState('')
   const [timeframe, setTimeframe] = useState<Timeframe>('1m')
   const [candles, setCandles] = useState<Candle[]>([])
+  const [marketDataLoading, setMarketDataLoading] = useState(false)
+  const [olderCandlesLoading, setOlderCandlesLoading] = useState(false)
+  const [hasOlderCandles, setHasOlderCandles] = useState(true)
+  const [candleError, setCandleError] = useState<string | null>(null)
+  const [displayedRange, setDisplayedRange] = useState<DisplayedRange>(null)
   const [backfillJobs, setBackfillJobs] = useState<BackfillJob[]>([])
   const [subscriptions, setSubscriptions] = useState<MarketDataSubscription[]>([])
   const [coverage, setCoverage] = useState<CandleCoverage | null>(null)
@@ -456,8 +372,14 @@ function App() {
     }
   }
 
-  const loadMarketData = useCallback(async (workspaceId: string, instrumentId: string, frame: Timeframe) => {
+  const loadMarketData = useCallback(async (
+    workspaceId: string,
+    instrumentId: string,
+    frame: Timeframe,
+    replaceCandles = false,
+  ) => {
     if (!workspaceId || !instrumentId || !ownerToken) return
+    if (replaceCandles) setMarketDataLoading(true)
     try {
       const headers = { 'X-Owner-Token': ownerToken }
       const [candleResponse, jobResponse, subscriptionResponse, coverageResponse] = await Promise.all([
@@ -466,7 +388,14 @@ function App() {
         fetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/market-data-subscriptions`, { headers }),
         fetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/instruments/${instrumentId}/candle-coverage?timeframe=${frame}`, { headers }),
       ])
-      if (candleResponse.ok) setCandles((await candleResponse.json()) as Candle[])
+      if (candleResponse.ok) {
+        const loaded = (await candleResponse.json()) as Candle[]
+        setCandles((current) => replaceCandles ? loaded : mergeCandlePages(current, loaded))
+        setHasOlderCandles(loaded.length === 500)
+        setCandleError(null)
+      } else {
+        setCandleError(`ローソク足の取得に失敗しました（HTTP ${candleResponse.status}）。`)
+      }
       if (jobResponse.ok) setBackfillJobs((await jobResponse.json()) as BackfillJob[])
       if (subscriptionResponse.ok) {
         setSubscriptions((await subscriptionResponse.json()) as MarketDataSubscription[])
@@ -474,8 +403,46 @@ function App() {
       if (coverageResponse.ok) setCoverage((await coverageResponse.json()) as CandleCoverage)
     } catch {
       setMarketDataMessage('ローソク足APIへ接続できません。')
+      setCandleError('ローソク足APIへ接続できません。')
+    } finally {
+      if (replaceCandles) setMarketDataLoading(false)
     }
   }, [ownerToken])
+
+  const loadOlderCandles = useCallback(async () => {
+    if (
+      !selectedWorkspaceId || !activeInstrumentId || !ownerToken ||
+      olderCandlesLoading || !hasOlderCandles || candles.length === 0
+    ) return
+    setOlderCandlesLoading(true)
+    setCandleError(null)
+    try {
+      const before = encodeURIComponent(candles[0].open_time)
+      const response = await fetch(
+        `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/instruments/${activeInstrumentId}/candles?timeframe=${timeframe}&limit=500&before=${before}`,
+        { headers: { 'X-Owner-Token': ownerToken } },
+      )
+      if (!response.ok) {
+        setCandleError(`古いローソク足の取得に失敗しました（HTTP ${response.status}）。`)
+        return
+      }
+      const loaded = (await response.json()) as Candle[]
+      setCandles((current) => mergeCandlePages(current, loaded))
+      setHasOlderCandles(loaded.length === 500)
+    } catch {
+      setCandleError('古いローソク足を取得できません。')
+    } finally {
+      setOlderCandlesLoading(false)
+    }
+  }, [
+    activeInstrumentId,
+    candles,
+    hasOlderCandles,
+    olderCandlesLoading,
+    ownerToken,
+    selectedWorkspaceId,
+    timeframe,
+  ])
 
   const startBackfill = async () => {
     if (!selectedWorkspaceId || !activeInstrumentId) return
@@ -519,7 +486,11 @@ function App() {
   useEffect(() => {
     if (!selectedWorkspaceId || !activeInstrumentId) return
     const initialLoad = window.setTimeout(() => {
-      void loadMarketData(selectedWorkspaceId, activeInstrumentId, timeframe)
+      setCandles([])
+      setDisplayedRange(null)
+      setHasOlderCandles(true)
+      setCandleError(null)
+      void loadMarketData(selectedWorkspaceId, activeInstrumentId, timeframe, true)
     }, 0)
     const timer = window.setInterval(() => {
       void loadMarketData(selectedWorkspaceId, activeInstrumentId, timeframe)
@@ -1020,7 +991,20 @@ function App() {
             <CandleChart
               candles={candles}
               instrument={visibleInstruments.find((item) => item.id === activeInstrumentId)!}
+              loadingInitial={marketDataLoading}
+              loadingOlder={olderCandlesLoading}
+              error={candleError}
+              hasOlder={hasOlderCandles}
+              onLoadOlder={() => void loadOlderCandles()}
+              onDisplayedRangeChange={setDisplayedRange}
             />
+          )}
+          {displayedRange && (
+            <div className="chart-range">
+              <strong>チャート表示中</strong>
+              <span>{new Date(displayedRange.from).toLocaleString('ja-JP')} 〜 {new Date(displayedRange.to).toLocaleString('ja-JP')}</span>
+              <span>{candles.length.toLocaleString()}件をブラウザに読込済み</span>
+            </div>
           )}
           {candles.length > 0 && (
             <div className="latest-candle">
