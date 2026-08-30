@@ -37,8 +37,8 @@ Implemented safety boundaries:
 
 Current structural limitations:
 
-- API route modules contain HTTP translation, orchestration, persistence, state transitions, and
-  audit behavior.
+- Several API route modules still mix HTTP translation and persistence. Connection verification
+  and market-data enqueue/coverage/subscription orchestration now have Application boundaries.
 - `app/api/routes/catalog.py`, `app/models/catalog.py`, and `app/schemas/catalog.py` group multiple
   business capabilities under the historical catalog name.
 - The market-data worker starts inside the web process, so multiple web processes can duplicate
@@ -120,6 +120,25 @@ Transitional dependencies that remain intentionally:
   demonstrates a concrete need.
 - Credential replacement still coordinates secret rotation in the route before invoking the shared
   verification use case. It should become a separate application use case in a later slice.
+
+## Market-data Application boundary (2026-08-30)
+
+`app/market_data/application/use_cases.py` owns `enqueue_backfill`, `get_coverage` and
+`update_subscriptions`. They accept plain inputs/command dataclasses, enforce workspace scope,
+and return ORM entities or coverage data without importing FastAPI or response schemas.
+Application error codes are translated to the existing HTTP contract by the route.
+Credential preflight is injected; API wiring constructs the existing ingestion service and
+translates secret errors. Disabling collection never needs credential decryption.
+
+Enqueue and subscription writes include their audit records in one transaction and roll back
+on failure. Both legacy single-frame and bulk changes use the same instrument/workspace lock.
+Coverage range validation and latest-job fallback moved out of the route; calculation still
+delegates to the existing service shared with backfill execution.
+
+SQLAlchemy/services are intentional transitional dependencies, as with connection verification.
+Read-only candle/job/subscription listing still lives in the route. Actual backfill execution,
+process-local dispatch and polling remain unchanged: this extraction is not durable Worker delivery.
+See `docs/plans/market-data-application-boundary.md` for transitions and verification limits.
 
 ## Transaction and secret consistency
 

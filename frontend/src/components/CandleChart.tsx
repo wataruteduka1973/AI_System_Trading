@@ -58,7 +58,7 @@ export default function CandleChart({
   const previousVisibleFromRef = useRef<number | null>(null)
   const rangeLoadingReadyRef = useRef(false)
   const hasUserInteractedRef = useRef(false)
-  const hasCandles = candles.length > 0
+  const hasCandles = candles.length > 0 && !loadingInitial
 
   useEffect(() => {
     loadOlderRef.current = onLoadOlder
@@ -198,7 +198,7 @@ export default function CandleChart({
       previousVisibleFromRef.current = chart.timeScale().getVisibleLogicalRange()?.from ?? null
       rangeLoadingReadyRef.current = true
     }
-  }, [candles, instrument])
+  }, [candles, instrument, loadingInitial])
 
   if (loadingInitial) return <p className="chart-state">ローソク足を読み込んでいます。</p>
   if (error && candles.length === 0) return <p className="chart-state chart-error">{error}</p>

@@ -122,6 +122,11 @@ class MarketDataSubscriptionUpdate(BaseModel):
     enabled: bool
 
 
+class MarketDataCollectionUpdate(BaseModel):
+    instrument_id: UUID
+    enabled: bool
+
+
 class MarketDataSubscriptionRead(OrmModel):
     id: UUID
     workspace_id: UUID

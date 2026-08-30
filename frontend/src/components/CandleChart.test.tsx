@@ -13,6 +13,22 @@ import {
 
 afterEach(cleanup)
 
+const chartMock = vi.hoisted(() => ({
+  setData: vi.fn(), remove: vi.fn(), fitContent: vi.fn(),
+  createChart: vi.fn(),
+}))
+vi.mock('lightweight-charts', () => ({
+  CandlestickSeries: {}, ColorType: { Solid: 'solid' }, CrosshairMode: { Normal: 0 },
+  createChart: chartMock.createChart.mockImplementation(() => ({
+    addSeries: () => ({ setData: chartMock.setData }),
+    subscribeCrosshairMove: vi.fn(), remove: chartMock.remove,
+    timeScale: () => ({
+      subscribeVisibleLogicalRangeChange: vi.fn(), getVisibleLogicalRange: () => null,
+      fitContent: chartMock.fitContent, setVisibleLogicalRange: vi.fn(),
+    }),
+  })),
+}))
+
 const candle = (openTime: string, close = '100'): ChartCandle => ({
   open_time: openTime,
   close_time: openTime,
@@ -37,6 +53,16 @@ const baseProps = {
 }
 
 describe('CandleChart', () => {
+  it('initializes when loading ends after candles have already arrived', () => {
+    chartMock.createChart.mockClear()
+    chartMock.setData.mockClear()
+    const rows = [candle('2026-08-27T00:00:00Z')]
+    const { rerender } = render(<CandleChart {...baseProps} candles={rows} loadingInitial />)
+    expect(chartMock.createChart).not.toHaveBeenCalled()
+    rerender(<CandleChart {...baseProps} candles={rows} loadingInitial={false} />)
+    expect(chartMock.createChart).toHaveBeenCalledTimes(1)
+    expect(chartMock.setData).toHaveBeenCalledTimes(1)
+  })
   it('formats tooltip prices with the instrument price scale', () => {
     expect(formatPrice('12567000.000000000000000000', 0)).toBe('12567000')
     expect(formatPrice('147.1', 3)).toBe('147.100')

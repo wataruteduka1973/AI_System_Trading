@@ -3,7 +3,7 @@ import hashlib
 from contextlib import suppress
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
-from uuid import UUID
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
@@ -11,7 +11,7 @@ from sqlalchemy import func, literal_column, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from app.db.session import SessionLocal
+from app.db.session import SessionLocal, engine
 from app.exchanges.binance import (
     BinanceApiError,
     BinanceAuthenticationError,
@@ -20,6 +20,7 @@ from app.exchanges.binance import (
 from app.exchanges.oanda import OandaApiError, OandaAuthenticationError, OandaPracticeClient
 from app.exchanges.types import CandlePoint, timeframe_delta
 from app.models.catalog import (
+    AuditLog,
     BackfillJob,
     Candle,
     Exchange,
@@ -34,7 +35,9 @@ from app.services.secrets import LocalEncryptedSecretStore, get_secret_store
 
 
 class MarketDataAccessError(RuntimeError):
-    pass
+    def __init__(self, message: str, code: str = "configuration_error") -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class DuplicateBackfillError(RuntimeError):
@@ -133,6 +136,9 @@ def ensure_no_overlapping_backfill(
 ) -> None:
     lock_key = _advisory_lock_key("backfill", workspace_id, instrument_id, timeframe)
     db.execute(select(func.pg_advisory_xact_lock(lock_key)))
+    recover_interrupted_backfills(
+        db, workspace_id, instrument_id, timeframe, requested_from, requested_to
+    )
     duplicate_id = db.scalar(
         select(BackfillJob.id).where(
             BackfillJob.workspace_id == workspace_id,
@@ -145,6 +151,52 @@ def ensure_no_overlapping_backfill(
     )
     if duplicate_id is not None:
         raise DuplicateBackfillError("An overlapping backfill is already queued or running")
+
+
+def recover_interrupted_backfills(
+    db: Session,
+    workspace_id: UUID,
+    instrument_id: UUID,
+    timeframe: str,
+    requested_from: datetime,
+    requested_to: datetime,
+) -> None:
+    """Recover old unowned jobs under the caller's overlap-serialization lock."""
+    now = datetime.now(UTC)
+    candidates = db.scalars(
+        select(BackfillJob)
+        .where(
+            BackfillJob.workspace_id == workspace_id,
+            BackfillJob.instrument_id == instrument_id,
+            BackfillJob.timeframe == timeframe,
+            BackfillJob.status.in_(("queued", "running")),
+            func.coalesce(BackfillJob.started_at, BackfillJob.created_at)
+            < now - timedelta(minutes=5),
+            BackfillJob.from_time < requested_to,
+            BackfillJob.to_time > requested_from,
+        )
+        .with_for_update(skip_locked=True)
+    ).all()
+    for job in candidates:
+        key = _advisory_lock_key("backfill-owner", job.id)
+        if not db.scalar(select(func.pg_try_advisory_xact_lock(key))):
+            continue
+        previous_status = job.status
+        job.status = "failed"
+        job.error_code = "worker_interrupted"
+        job.finished_at = now
+        db.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                action="candle.backfill_recovered",
+                resource_type="backfill_job",
+                resource_id=job.id,
+                correlation_id=uuid4(),
+                before_data={"status": previous_status},
+                after_data={"status": "failed", "error_code": "worker_interrupted"},
+            )
+        )
+    db.flush()
 
 
 def find_internal_gaps(
@@ -413,6 +465,16 @@ class CandleIngestionService:
         self.oanda_client = oanda_client or OandaPracticeClient()
         self.binance_client = binance_client or BinanceSpotTestnetClient()
 
+    def validate_configuration(self, workspace_id: UUID, instrument_id: UUID) -> None:
+        """Check local access and decryptability without sending any exchange request."""
+        _instrument, exchange, connection = self._resolve_access(workspace_id, instrument_id)
+        credentials = self._load_credentials(connection)
+        required = ("token",) if exchange.code == "oanda" else ("api_key", "secret_key")
+        if not all(credentials.get(key) for key in required):
+            raise MarketDataAccessError(
+                "Exchange credentials are incomplete", "credentials_missing"
+            )
+
     async def sync(
         self,
         workspace_id: UUID,
@@ -494,11 +556,15 @@ class CandleIngestionService:
 
     def _load_credentials(self, connection: ExchangeConnection) -> dict[str, str]:
         if not connection.secret_ref:
-            raise MarketDataAccessError("Selected connection credentials are missing")
+            raise MarketDataAccessError(
+                "Selected connection credentials are missing", "credentials_missing"
+            )
         try:
             return self.secret_store.get(connection.secret_ref)
-        except (KeyError, ValueError) as exc:
-            raise MarketDataAccessError("Selected connection credentials cannot be loaded") from exc
+        except (KeyError, ValueError, OSError) as exc:
+            raise MarketDataAccessError(
+                "Selected connection credentials cannot be loaded", "credentials_unreadable"
+            ) from exc
 
     async def _fetch_page(
         self,
@@ -588,13 +654,25 @@ def market_data_error_code(exc: Exception) -> str:
     if isinstance(exc, (OandaApiError, BinanceApiError)):
         return "communication_failed"
     if isinstance(exc, MarketDataAccessError):
-        return "configuration_error"
+        return exc.code
     if isinstance(exc, HTTPException):
         return "configuration_error"
     return "internal_error"
 
 
 async def run_backfill_job(job_id: UUID) -> None:
+    # Pin the owning connection: a pooled session may switch connections on commit.
+    key = _advisory_lock_key("backfill-owner", job_id)
+    with engine.connect() as owner:
+        if not owner.scalar(select(func.pg_try_advisory_lock(key))):
+            return
+        try:
+            await _run_owned_backfill_job(job_id)
+        finally:
+            owner.execute(select(func.pg_advisory_unlock(key)))
+
+
+async def _run_owned_backfill_job(job_id: UUID) -> None:
     with SessionLocal() as db:
         job = db.get(BackfillJob, job_id)
         if job is None or job.status != "queued":
@@ -686,6 +764,10 @@ class MarketDataPollingWorker:
     async def _poll_subscription(
         self, db: Session, subscription: MarketDataSubscription, now: datetime
     ) -> None:
+        # The subscription list may have been read before another feed finished polling.
+        db.refresh(subscription)
+        if not subscription.enabled:
+            return
         subscription.last_polled_at = now
         try:
             service = CandleIngestionService(db, get_secret_store())

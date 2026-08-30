@@ -1,79 +1,80 @@
-from datetime import UTC, datetime, timedelta
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Annotated
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.market_data.application import use_cases as market_data_application
 from app.models.catalog import (
-    AuditLog,
     BackfillJob,
     Candle,
-    Exchange,
-    ExchangeConnection,
-    ExternalAccount,
-    Instrument,
     MarketDataSubscription,
-    Workspace,
-    WorkspaceAccountSelection,
 )
 from app.schemas.catalog import (
     BackfillJobRead,
     CandleBackfillCreate,
     CandleCoverageRead,
     CandleRead,
+    MarketDataCollectionUpdate,
     MarketDataSubscriptionRead,
     MarketDataSubscriptionUpdate,
     Timeframe,
 )
 from app.security.auth import require_owner
 from app.services.market_data import (
-    DuplicateBackfillError,
-    build_candle_coverage,
-    ensure_no_overlapping_backfill,
+    CandleIngestionService,
+    MarketDataAccessError,
     run_backfill_job,
 )
+from app.services.secrets import get_secret_store
 
 router = APIRouter()
 DatabaseSession = Annotated[Session, Depends(get_db)]
 Owner = Annotated[str, Depends(require_owner)]
 
 
+def _validate_collection_configuration(
+    db: Session, workspace_id: UUID, instrument_id: UUID
+) -> None:
+    try:
+        CandleIngestionService(db, get_secret_store()).validate_configuration(
+            workspace_id, instrument_id
+        )
+    except MarketDataAccessError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="保存済み資格情報を読み込めません。接続管理でAPI資格情報を更新して再検証してください。",
+        ) from exc
+
+
+@contextmanager
+def _application_errors() -> Iterator[None]:
+    try:
+        yield
+    except market_data_application.MarketDataApplicationError as exc:
+        status_code = {
+            "workspace_not_found": 404,
+            "instrument_unavailable": 409,
+            "overlapping_backfill": 409,
+            "invalid_input": 422,
+        }[exc.code]
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
 def _require_workspace(db: Session, workspace_id: UUID) -> None:
-    if db.get(Workspace, workspace_id) is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+    with _application_errors():
+        market_data_application._require_workspace(db, workspace_id)
 
 
 def _require_instrument_access(db: Session, workspace_id: UUID, instrument_id: UUID) -> None:
-    accessible = db.scalar(
-        select(Instrument.id)
-        .join(Exchange, Instrument.exchange_id == Exchange.id)
-        .join(
-            WorkspaceAccountSelection,
-            (WorkspaceAccountSelection.workspace_id == workspace_id)
-            & (WorkspaceAccountSelection.exchange_id == Exchange.id),
-        )
-        .join(
-            ExternalAccount,
-            ExternalAccount.id == WorkspaceAccountSelection.external_account_id,
-        )
-        .join(ExchangeConnection, ExchangeConnection.id == ExternalAccount.connection_id)
-        .where(
-            Instrument.id == instrument_id,
-            Instrument.status == "active",
-            ExternalAccount.status == "active",
-            ExchangeConnection.workspace_id == workspace_id,
-            ExchangeConnection.status == "verified",
-        )
-    )
-    if accessible is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Select an active account with a verified connection for this instrument",
-        )
+    with _application_errors():
+        market_data_application._require_instrument_access(db, workspace_id, instrument_id)
 
 
 @router.post(
@@ -89,48 +90,15 @@ def create_candle_backfill(
     db: DatabaseSession,
     _: Owner,
 ) -> BackfillJob:
-    _require_workspace(db, workspace_id)
-    _require_instrument_access(db, workspace_id, payload.instrument_id)
-    now = datetime.now(UTC)
-    requested_from = now - timedelta(days=payload.days)
-    try:
-        ensure_no_overlapping_backfill(
+    with _application_errors():
+        job = market_data_application.enqueue_backfill(
             db,
-            workspace_id=workspace_id,
-            instrument_id=payload.instrument_id,
-            timeframe=payload.timeframe,
-            requested_from=requested_from,
-            requested_to=now,
+            workspace_id,
+            market_data_application.BackfillCommand(
+                payload.instrument_id, payload.timeframe, payload.days
+            ),
+            _validate_collection_configuration,
         )
-    except DuplicateBackfillError as exc:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    job = BackfillJob(
-        workspace_id=workspace_id,
-        instrument_id=payload.instrument_id,
-        timeframe=payload.timeframe,
-        from_time=requested_from,
-        to_time=now,
-        requested_by=None,
-        trigger_type="manual",
-        status="queued",
-    )
-    db.add(job)
-    db.flush()
-    _audit(
-        db,
-        workspace_id,
-        "candle.backfill_queued",
-        "backfill_job",
-        job.id,
-        {
-            "instrument_id": str(payload.instrument_id),
-            "timeframe": payload.timeframe,
-            "days": payload.days,
-        },
-    )
-    db.commit()
-    db.refresh(job)
     background_tasks.add_task(run_backfill_job, job.id)
     return job
 
@@ -145,12 +113,15 @@ def list_candle_backfills(
     db: DatabaseSession,
     _: Owner,
     instrument_id: UUID | None = None,
+    timeframe: Timeframe | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> list[BackfillJob]:
     _require_workspace(db, workspace_id)
     statement = select(BackfillJob).where(BackfillJob.workspace_id == workspace_id)
     if instrument_id is not None:
         statement = statement.where(BackfillJob.instrument_id == instrument_id)
+    if timeframe is not None:
+        statement = statement.where(BackfillJob.timeframe == timeframe)
     return list(db.scalars(statement.order_by(BackfillJob.created_at.desc()).limit(limit)).all())
 
 
@@ -199,26 +170,13 @@ def get_candle_coverage(
     db: DatabaseSession,
     _: Owner,
     timeframe: Timeframe = "1m",
+    requested_from: datetime | None = None,
+    requested_to: datetime | None = None,
 ) -> CandleCoverageRead:
-    _require_workspace(db, workspace_id)
-    _require_instrument_access(db, workspace_id, instrument_id)
-    latest_job = db.scalar(
-        select(BackfillJob)
-        .where(
-            BackfillJob.workspace_id == workspace_id,
-            BackfillJob.instrument_id == instrument_id,
-            BackfillJob.timeframe == timeframe,
+    with _application_errors():
+        report = market_data_application.get_coverage(
+            db, workspace_id, instrument_id, timeframe, requested_from, requested_to
         )
-        .order_by(BackfillJob.created_at.desc())
-        .limit(1)
-    )
-    report = build_candle_coverage(
-        db,
-        instrument_id,
-        timeframe,
-        latest_job.from_time if latest_job else None,
-        latest_job.to_time if latest_job else None,
-    )
     return CandleCoverageRead(timeframe=timeframe, **report)
 
 
@@ -233,44 +191,36 @@ def update_market_data_subscription(
     db: DatabaseSession,
     _: Owner,
 ) -> MarketDataSubscription:
-    _require_workspace(db, workspace_id)
-    _require_instrument_access(db, workspace_id, payload.instrument_id)
-    subscription = db.scalar(
-        select(MarketDataSubscription).where(
-            MarketDataSubscription.workspace_id == workspace_id,
-            MarketDataSubscription.instrument_id == payload.instrument_id,
-            MarketDataSubscription.timeframe == payload.timeframe,
-        )
-    )
-    if subscription is None:
-        subscription = MarketDataSubscription(
-            workspace_id=workspace_id,
-            instrument_id=payload.instrument_id,
+    with _application_errors():
+        return market_data_application.update_subscriptions(
+            db,
+            workspace_id,
+            payload.instrument_id,
+            payload.enabled,
+            _validate_collection_configuration,
             timeframe=payload.timeframe,
+        )[0]
+
+
+@router.put(
+    "/workspaces/{workspace_id}/market-data-subscriptions",
+    response_model=list[MarketDataSubscriptionRead],
+    tags=["market-data"],
+)
+def update_all_market_data_subscriptions(
+    workspace_id: UUID,
+    payload: MarketDataCollectionUpdate,
+    db: DatabaseSession,
+    _: Owner,
+) -> list[MarketDataSubscription]:
+    with _application_errors():
+        return market_data_application.update_subscriptions(
+            db,
+            workspace_id,
+            payload.instrument_id,
+            payload.enabled,
+            _validate_collection_configuration,
         )
-        db.add(subscription)
-        db.flush()
-    before = {"enabled": subscription.enabled}
-    subscription.enabled = payload.enabled
-    subscription.poll_interval_seconds = 60
-    subscription.updated_at = datetime.now(UTC)
-    _audit(
-        db,
-        workspace_id,
-        "market_data.subscription_updated",
-        "market_data_subscription",
-        subscription.id,
-        {
-            "instrument_id": str(payload.instrument_id),
-            "timeframe": payload.timeframe,
-            "enabled": payload.enabled,
-            "poll_interval_seconds": 60,
-            "before": before,
-        },
-    )
-    db.commit()
-    db.refresh(subscription)
-    return subscription
 
 
 @router.get(
@@ -309,27 +259,3 @@ def _candle_read(candle: Candle) -> CandleRead:
 
 def _decimal_text(value: Decimal) -> str:
     return format(value, "f")
-
-
-def _audit(
-    db: Session,
-    workspace_id: UUID,
-    action: str,
-    resource_type: str,
-    resource_id: UUID,
-    after_data: dict[str, object],
-) -> None:
-    db.add(
-        AuditLog(
-            workspace_id=workspace_id,
-            actor_id=None,
-            action=action,
-            resource_type=resource_type,
-            resource_id=resource_id,
-            before_data=None,
-            after_data=after_data,
-            correlation_id=uuid4(),
-            ip_address=None,
-            user_agent=None,
-        )
-    )

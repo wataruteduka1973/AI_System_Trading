@@ -1,6 +1,7 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
@@ -12,10 +13,12 @@ from app.services.market_data import (
     CandleIngestionService,
     IngestionReport,
     MarketDataAccessError,
+    MarketDataPollingWorker,
     classify_candle_coverage,
     find_internal_gaps,
     market_data_error_code,
     persist_internal_gaps,
+    recover_interrupted_backfills,
 )
 
 
@@ -44,6 +47,52 @@ def test_unsupported_timeframe_is_rejected() -> None:
         timeframe_delta("2m")
 
 
+@pytest.mark.parametrize("owned", [True, False])
+def test_interrupted_backfill_recovery_preserves_active_owner(owned: bool) -> None:
+    job = MagicMock(id=uuid4(), status="running")
+    db = MagicMock()
+    db.scalars.return_value.all.return_value = [job]
+    db.scalar.return_value = not owned
+    start = datetime(2026, 8, 25, tzinfo=UTC)
+    recover_interrupted_backfills(db, uuid4(), uuid4(), "1m", start, start + timedelta(days=1))
+    if owned:
+        assert job.status == "running"
+        db.add.assert_not_called()
+    else:
+        assert job.status == "failed"
+        assert job.error_code == "worker_interrupted"
+        assert job.finished_at is not None
+        audit = db.add.call_args.args[0]
+        assert audit.action == "candle.backfill_recovered"
+        assert audit.resource_id == job.id
+        assert audit.correlation_id is not None
+    db.flush.assert_called_once()
+
+
+def test_disabled_subscription_is_rechecked_before_polling() -> None:
+    db = MagicMock()
+    subscription = MagicMock(enabled=False)
+    asyncio.run(MarketDataPollingWorker()._poll_subscription(db, subscription, datetime.now(UTC)))
+    db.refresh.assert_called_once_with(subscription)
+    db.commit.assert_not_called()
+
+
+def test_backfill_owner_lock_is_released_on_failure(monkeypatch) -> None:
+    from app.services import market_data
+
+    owner = MagicMock()
+    owner.scalar.return_value = True
+    connection = MagicMock()
+    connection.connect.return_value.__enter__.return_value = owner
+    monkeypatch.setattr(market_data, "engine", connection)
+    monkeypatch.setattr(
+        market_data, "_run_owned_backfill_job", AsyncMock(side_effect=RuntimeError("test failure"))
+    )
+    with pytest.raises(RuntimeError, match="test failure"):
+        asyncio.run(market_data.run_backfill_job(uuid4()))
+    assert "pg_advisory_unlock" in str(owner.execute.call_args.args[0])
+
+
 def test_oanda_parser_keeps_final_midpoint_candle() -> None:
     candle = OandaPracticeClient._parse_candle(
         {
@@ -58,6 +107,9 @@ def test_oanda_parser_keeps_final_midpoint_candle() -> None:
     assert candle.is_final is True
     assert candle.close_time - candle.open_time == timedelta(minutes=1)
     assert str(candle.close) == "147.180"
+    assert str(candle.open) == "147.100"
+    assert str(candle.high) == "147.200"
+    assert str(candle.low) == "147.050"
 
 
 def test_binance_parser_keeps_trade_count_and_final_state() -> None:
@@ -82,6 +134,20 @@ def test_binance_parser_keeps_trade_count_and_final_state() -> None:
 
 def test_configuration_errors_are_safe_codes() -> None:
     assert market_data_error_code(MarketDataAccessError("secret details")) == "configuration_error"
+
+
+def test_changed_encryption_key_has_an_actionable_safe_error(tmp_path) -> None:
+    from app.services.secrets import LocalEncryptedSecretStore
+    from cryptography.fernet import Fernet
+
+    original = LocalEncryptedSecretStore(tmp_path, Fernet.generate_key().decode())
+    reference = original.put({"api_key": "private-key", "secret_key": "private-secret"})
+    replacement = LocalEncryptedSecretStore(tmp_path, Fernet.generate_key().decode())
+    service = CandleIngestionService(MagicMock(), replacement)
+    with pytest.raises(MarketDataAccessError) as error:
+        service._load_credentials(MagicMock(secret_ref=reference))
+    assert market_data_error_code(error.value) == "credentials_unreadable"
+    assert "private" not in str(error.value)
 
 
 def test_binance_testnet_short_history_is_reported_as_source_limit() -> None:
@@ -179,6 +245,27 @@ def test_oanda_weekend_closure_is_not_reported_as_internal_gap() -> None:
     sunday_reopen = datetime(2026, 8, 30, 21, 0, tzinfo=UTC)
 
     gaps = find_internal_gaps([friday_before_close, sunday_reopen], "1h", "oanda")
+
+    assert gaps == []
+
+
+@pytest.mark.parametrize(
+    ("friday_close", "sunday_reopen"),
+    [
+        (
+            datetime(2026, 1, 9, 22, 0, tzinfo=UTC),
+            datetime(2026, 1, 11, 22, 0, tzinfo=UTC),
+        ),
+        (
+            datetime(2026, 7, 10, 21, 0, tzinfo=UTC),
+            datetime(2026, 7, 12, 21, 0, tzinfo=UTC),
+        ),
+    ],
+)
+def test_oanda_weekend_boundary_follows_new_york_dst(
+    friday_close: datetime, sunday_reopen: datetime
+) -> None:
+    gaps = find_internal_gaps([friday_close - timedelta(hours=1), sunday_reopen], "1h", "oanda")
 
     assert gaps == []
 

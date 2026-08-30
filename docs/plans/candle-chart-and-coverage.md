@@ -1,6 +1,6 @@
 # Market data, chart, and real-time implementation roadmap
 
-Last reviewed: 2026-08-27
+Last reviewed: 2026-08-29
 
 ## Purpose
 
@@ -73,8 +73,8 @@ URLs, browser storage, logs, ordinary database columns, or API responses.
 - [x] Lightweight Charts 5.2 candlestick series replaced the raw SVG close-price line.
 - [x] JST time axis, precision-aware price axis, crosshair, and OHLCV display.
 - [x] Requested and stored coverage are shown on the market page.
-- [~] The chart still loads only the latest API page and does not request older rows while scrolling.
-- [~] Displayed range, chart-specific tests, and complete tooltip provenance remain in Phase B.
+- [x] The chart loads older API pages only after user interaction near the left boundary.
+- [x] Displayed range, chart-specific tests, and tooltip source/quality provenance are implemented.
 
 React Router 8.3 replaced the originally proposed 7.x line because the available 7.x release
 produced unresolved high-severity dependency audit findings on 2026-08-26. The chosen 8.3 release
@@ -131,9 +131,9 @@ The ticket is scoped to Workspace, exchange, symbol, and timeframe and expires w
 Completion evidence: frontend lint, five route/navigation tests, production build, dependency audit,
 backend regression tests, and unauthenticated browser route checks passed during Phase 0 delivery.
 
-### Phase A — coverage correctness and historical API completion: next
+### Phase A — coverage correctness and historical API completion: complete
 
-Status: `[~]` foundation implemented; completion work remains.
+Status: `[x]` implemented and covered by service and API regression tests.
 
 #### Deliverables
 
@@ -160,9 +160,10 @@ GET /workspaces/{workspace_id}/instruments/{instrument_id}/candles
 `before` is an exclusive, timezone-aware `open_time` cursor. Responses remain chronological
 (oldest to newest); the next request uses the first row's `open_time` as its `before` value.
 
-- [ ] Preserve the current coverage endpoint and add explicit requested-range parameters where
-  needed.
-- [ ] Add complete, source-limited, empty, duplicate-job, internal-gap, and Workspace-isolation
+- [x] Preserve the current coverage endpoint and add optional `requested_from` and `requested_to`
+  query parameters. Both boundaries must be timezone-aware, ordered, and supplied together; calls
+  without them retain the latest-backfill fallback for API compatibility.
+- [x] Add complete, source-limited, empty, duplicate-job, internal-gap, and Workspace-isolation
   tests.
 
 #### Entry condition
@@ -179,7 +180,8 @@ GET /workspaces/{workspace_id}/instruments/{instrument_id}/candles
 
 ### Phase B — chart interaction and large-history completion
 
-Status: `[~]` candlestick replacement implemented; incremental history remains.
+Status: `[~]` runtime behavior and automated chart regression coverage are implemented; an
+authenticated OANDA real-data display check remains `NOT VERIFIED`.
 
 #### Deliverables
 
@@ -190,7 +192,9 @@ Status: `[~]` candlestick replacement implemented; incremental history remains.
 - [x] Merge paginated rows without duplicate timestamps or viewport jumps.
 - [x] Show initial-loading, loading-older, empty, and API-failure states.
 - [~] Verify OANDA and Binance price precision and timezone formatting. Binance BTC/JPY
-  `price_scale=0` and JST formatting are verified; OANDA verification is intentionally deferred.
+  `price_scale=0`, JST formatting, OANDA midpoint decimal preservation, and New York DST-aware
+  weekend boundaries are covered by automated tests. Authenticated OANDA real-data display remains
+  `NOT VERIFIED` because it requires external connectivity and a configured Practice account.
 - [x] Add component tests and browser checks for crosshair, pan, zoom, incremental loading, and
   responsive layout.
 
@@ -305,14 +309,23 @@ Every phase must preserve:
 
 ## Immediate next implementation slice
 
+2026-08-30 correction: loading-state chart initialization, stale timeframe responses, job filtering,
+collection-stop visibility, and orphan backfill recovery were repaired and regression-tested.
+See `market-screen-recovery.md` for verification and the API restart requirement. Earlier component
+tests did not cover the data-arrives-before-loading-clears lifecycle; this is now explicitly tested.
+
 The next approved development slice should complete the Phase A/B dependency boundary:
 
 1. Add cursor pagination and deterministic candle ordering. **Complete.**
 2. Add duplicate-backfill rejection and persistent internal-gap reporting. **Complete.**
 3. Complete `IngestionReport` and OANDA calendar-aware coverage validation. **Complete.**
 4. Add chart-side incremental history loading and displayed-range reporting. **Complete.**
-5. Add API, service, component, Workspace-isolation, and browser regression tests.
+5. Add API, service, component, Workspace-isolation, and browser regression tests. **Complete.**
 
-After this slice meets the Phase A and Phase B completion criteria, proceed to Phase B2 real-time
-market updates. Phase C remains optional and requires explicit approval. Phase D requires its own
-requirements and design review.
+The automated Phase A/B dependency boundary is complete. On 2026-08-30 the user explicitly deferred
+authenticated OANDA real-data verification because an API key cannot currently be generated; it
+remains NOT VERIFIED. Binance acquisition was confirmed by the user. The approved Application
+extraction proceeded with that exception: enqueue, coverage range resolution and subscriptions now
+use the shared Application module (see `market-data-application-boundary.md`). The next code unit
+is durable Worker acquisition and independent execution. Phase B2 follows that foundation.
+Phase C remains optional and requires explicit approval. Phase D requires requirements/design review.

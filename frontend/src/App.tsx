@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Route, Routes, useLocation, useNavigate } from 'react-router'
 import AppShell from './app/AppShell'
 import { connectionPath, resolveAppRoute } from './app/routes'
@@ -188,6 +188,13 @@ const connectionStatusLabel = (status: string) =>
     pending_credentials: '資格情報待ち',
   })[status] ?? status
 
+const marketErrorLabel = (code: string) => ({
+  credentials_unreadable: '保存済み資格情報を復号できません。接続管理でAPI資格情報を更新し再検証してください。',
+  credentials_missing: '資格情報が不足しています。接続管理でAPI資格情報を登録してください。',
+  configuration_error: '接続設定を確認してください。暗号化キー変更後はAPI資格情報の再登録が必要です。',
+  worker_interrupted: '前回の取得処理が中断されました。再取得できます。',
+})[code] ?? code
+
 function StatusCard({ title, state }: { title: string; state: HealthState }) {
   return (
     <article className={`status-card status-${state.status}`}>
@@ -250,6 +257,10 @@ function App() {
   const [backfillJobs, setBackfillJobs] = useState<BackfillJob[]>([])
   const [subscriptions, setSubscriptions] = useState<MarketDataSubscription[]>([])
   const [coverage, setCoverage] = useState<CandleCoverage | null>(null)
+  const marketGeneration = useRef(0)
+  const marketRequest = useRef(0)
+  const submissionPending = useRef(false)
+  const [submittingMarketAction, setSubmittingMarketAction] = useState(false)
   const [marketDataMessage, setMarketDataMessage] = useState(
     '銘柄と時間足を選ぶと、確定済みローソク足を表示できます。',
   )
@@ -379,33 +390,40 @@ function App() {
     replaceCandles = false,
   ) => {
     if (!workspaceId || !instrumentId || !ownerToken) return
+    const generation = marketGeneration.current
+    const request = ++marketRequest.current
     if (replaceCandles) setMarketDataLoading(true)
     try {
       const headers = { 'X-Owner-Token': ownerToken }
       const [candleResponse, jobResponse, subscriptionResponse, coverageResponse] = await Promise.all([
         fetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/instruments/${instrumentId}/candles?timeframe=${frame}&limit=500`, { headers }),
-        fetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/candle-backfills?instrument_id=${instrumentId}&limit=10`, { headers }),
+        fetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/candle-backfills?instrument_id=${instrumentId}&timeframe=${frame}&limit=10`, { headers }),
         fetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/market-data-subscriptions`, { headers }),
         fetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/instruments/${instrumentId}/candle-coverage?timeframe=${frame}`, { headers }),
       ])
-      if (candleResponse.ok) {
-        const loaded = (await candleResponse.json()) as Candle[]
+      const [loaded, jobs, feeds, report] = await Promise.all([
+        candleResponse.ok ? candleResponse.json() as Promise<Candle[]> : null,
+        jobResponse.ok ? jobResponse.json() as Promise<BackfillJob[]> : null,
+        subscriptionResponse.ok ? subscriptionResponse.json() as Promise<MarketDataSubscription[]> : null,
+        coverageResponse.ok ? coverageResponse.json() as Promise<CandleCoverage> : null,
+      ])
+      if (generation !== marketGeneration.current || request !== marketRequest.current) return
+      if (loaded !== null) {
         setCandles((current) => replaceCandles ? loaded : mergeCandlePages(current, loaded))
         setHasOlderCandles(loaded.length === 500)
         setCandleError(null)
       } else {
         setCandleError(`ローソク足の取得に失敗しました（HTTP ${candleResponse.status}）。`)
       }
-      if (jobResponse.ok) setBackfillJobs((await jobResponse.json()) as BackfillJob[])
-      if (subscriptionResponse.ok) {
-        setSubscriptions((await subscriptionResponse.json()) as MarketDataSubscription[])
-      }
-      if (coverageResponse.ok) setCoverage((await coverageResponse.json()) as CandleCoverage)
+      if (jobs !== null) setBackfillJobs(jobs.filter((job) => job.timeframe === frame))
+      if (feeds !== null) setSubscriptions(feeds)
+      if (report !== null) setCoverage(report)
     } catch {
+      if (generation !== marketGeneration.current || request !== marketRequest.current) return
       setMarketDataMessage('ローソク足APIへ接続できません。')
       setCandleError('ローソク足APIへ接続できません。')
     } finally {
-      if (replaceCandles) setMarketDataLoading(false)
+      if (replaceCandles && generation === marketGeneration.current) setMarketDataLoading(false)
     }
   }, [ownerToken])
 
@@ -414,6 +432,7 @@ function App() {
       !selectedWorkspaceId || !activeInstrumentId || !ownerToken ||
       olderCandlesLoading || !hasOlderCandles || candles.length === 0
     ) return
+    const generation = marketGeneration.current
     setOlderCandlesLoading(true)
     setCandleError(null)
     try {
@@ -422,17 +441,20 @@ function App() {
         `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/instruments/${activeInstrumentId}/candles?timeframe=${timeframe}&limit=500&before=${before}`,
         { headers: { 'X-Owner-Token': ownerToken } },
       )
+      if (generation !== marketGeneration.current) return
       if (!response.ok) {
         setCandleError(`古いローソク足の取得に失敗しました（HTTP ${response.status}）。`)
         return
       }
       const loaded = (await response.json()) as Candle[]
+      if (generation !== marketGeneration.current) return
       setCandles((current) => mergeCandlePages(current, loaded))
       setHasOlderCandles(loaded.length === 500)
     } catch {
+      if (generation !== marketGeneration.current) return
       setCandleError('古いローソク足を取得できません。')
     } finally {
-      setOlderCandlesLoading(false)
+      if (generation === marketGeneration.current) setOlderCandlesLoading(false)
     }
   }, [
     activeInstrumentId,
@@ -445,48 +467,73 @@ function App() {
   ])
 
   const startBackfill = async () => {
-    if (!selectedWorkspaceId || !activeInstrumentId) return
-    setMarketDataMessage('過去1年分の取得を開始しています。処理中も画面を閉じられます。')
-    const response = await fetch(
-      `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/candle-backfills`,
-      {
-        method: 'POST',
-        headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ instrument_id: activeInstrumentId, timeframe, days: 365 }),
-      },
-    )
-    if (!response.ok) {
-      setMarketDataMessage(await apiErrorMessage(response, '過去データ取得の開始に失敗しました'))
-      return
+    if (!selectedWorkspaceId || !activeInstrumentId || submissionPending.current) return
+    submissionPending.current = true
+    setSubmittingMarketAction(true)
+    const generation = marketGeneration.current
+    try {
+      setMarketDataMessage('過去1年分の取得を開始しています。処理中も画面を閉じられます。')
+      const response = await fetch(
+        `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/candle-backfills`,
+        {
+          method: 'POST',
+          headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ instrument_id: activeInstrumentId, timeframe, days: 365 }),
+        },
+      )
+      if (generation !== marketGeneration.current) return
+      if (!response.ok) {
+        const message = await apiErrorMessage(response, '過去データ取得の開始に失敗しました')
+        if (generation === marketGeneration.current) setMarketDataMessage(message)
+        return
+      }
+      setMarketDataMessage('過去1年分の取得を受け付けました。進捗はこの画面に自動反映されます。')
+      await loadMarketData(selectedWorkspaceId, activeInstrumentId, timeframe)
+    } catch {
+      if (generation === marketGeneration.current) setMarketDataMessage('過去取得APIへ接続できません。')
+    } finally {
+      submissionPending.current = false
+      setSubmittingMarketAction(false)
     }
-    setMarketDataMessage('過去1年分の取得を受け付けました。進捗はこの画面に自動反映されます。')
-    await loadMarketData(selectedWorkspaceId, activeInstrumentId, timeframe)
   }
 
   const setAutomaticCollection = async (enabled: boolean) => {
-    if (!selectedWorkspaceId || !activeInstrumentId) return
-    const response = await fetch(
-      `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/market-data-subscription`,
-      {
-        method: 'PUT',
-        headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ instrument_id: activeInstrumentId, timeframe, enabled }),
-      },
-    )
-    setMarketDataMessage(
-      response.ok
+    if (!selectedWorkspaceId || !activeInstrumentId || submissionPending.current) return
+    submissionPending.current = true
+    setSubmittingMarketAction(true)
+    const generation = marketGeneration.current
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/market-data-subscriptions`,
+        {
+          method: 'PUT',
+          headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ instrument_id: activeInstrumentId, enabled }),
+        },
+      )
+      if (generation !== marketGeneration.current) return
+      const message = response.ok
         ? enabled
-          ? '1分間隔の自動取得を有効にしました。画面を閉じてもバックエンドで継続します。'
-          : '自動取得を停止しました。保存済みデータは残ります。'
-        : await apiErrorMessage(response, enabled ? '自動取得の開始に失敗しました' : '自動取得の停止に失敗しました'),
-    )
-    await loadMarketData(selectedWorkspaceId, activeInstrumentId, timeframe)
+          ? 'この銘柄の全時間足の自動取得を開始しました。'
+          : 'この銘柄の全時間足の自動取得を停止しました。実行中の取得・手動の過去取得は別です。'
+        : await apiErrorMessage(response, '自動取得設定を変更できませんでした')
+      if (generation === marketGeneration.current) setMarketDataMessage(message)
+    } catch {
+      if (generation === marketGeneration.current) setMarketDataMessage('自動取得設定APIへ接続できません。')
+    } finally {
+      if (generation === marketGeneration.current) await loadMarketData(selectedWorkspaceId, activeInstrumentId, timeframe)
+      submissionPending.current = false
+      setSubmittingMarketAction(false)
+    }
   }
 
   useEffect(() => {
     if (!selectedWorkspaceId || !activeInstrumentId) return
     const initialLoad = window.setTimeout(() => {
       setCandles([])
+      setCoverage(null)
+      setBackfillJobs([])
+      setOlderCandlesLoading(false)
       setDisplayedRange(null)
       setHasOlderCandles(true)
       setCandleError(null)
@@ -496,6 +543,7 @@ function App() {
       void loadMarketData(selectedWorkspaceId, activeInstrumentId, timeframe)
     }, 5000)
     return () => {
+      marketGeneration.current += 1
       window.clearTimeout(initialLoad)
       window.clearInterval(timer)
     }
@@ -940,32 +988,28 @@ function App() {
                 ))}
               </select>
             </label>
-            <button type="button" onClick={() => void startBackfill()}>過去1年を取得</button>
-            {subscriptions.some(
-              (item) => item.instrument_id === activeInstrumentId && item.timeframe === timeframe && item.enabled,
-            ) ? (
-              <button type="button" className="secondary-button" onClick={() => void setAutomaticCollection(false)}>
-                自動取得を停止
-              </button>
-            ) : (
-              <button type="button" onClick={() => void setAutomaticCollection(true)}>1分ごとの自動取得を開始</button>
-            )}
+            <button type="button" disabled={submittingMarketAction} onClick={() => void startBackfill()}>過去1年を取得</button>
+            <button type="button" disabled={submittingMarketAction} onClick={() => void setAutomaticCollection(true)}>この銘柄の全時間足を開始</button>
+            <button type="button" disabled={submittingMarketAction} onClick={() => void setAutomaticCollection(false)}>この銘柄の全時間足を停止</button>
           </div>
           <p className="workspace-message">{marketDataMessage}</p>
+          <p>時間足の選択は表示と手動の過去取得に使用します。自動取得の開始・停止は全7時間足に適用します。</p>
+          <p>自動取得中の時間足: {subscriptions.filter((item) => item.instrument_id === activeInstrumentId && item.enabled).map((item) => item.timeframe).join(', ') || 'なし'}。画面の5秒ごとの更新は保存済みデータの読込であり、取引所からの自動取得とは別です。</p>
           {subscriptions
             .filter((item) => item.instrument_id === activeInstrumentId && item.timeframe === timeframe)
             .map((item) => (
               <div className={`collection-status ${item.enabled ? 'enabled' : 'disabled'}`} key={item.id}>
                 <strong>{item.enabled ? '自動取得中' : '自動取得停止中'}</strong>
                 <span>最終成功: {item.last_success_at ? new Date(item.last_success_at).toLocaleString('ja-JP') : 'まだありません'}</span>
-                {item.last_error_code && <span>直近エラー: {item.last_error_code}</span>}
+                {item.last_error_code && <span>直近エラー: {marketErrorLabel(item.last_error_code)}</span>}
               </div>
             ))}
           {backfillJobs.length > 0 && (
             <div className="backfill-status">
-              <strong>過去取得: {backfillJobs[0].status}</strong>
+              <strong>過去取得 ({timeframe}): {backfillJobs[0].status}</strong>
+              <span>完了後は5秒以内に再読込します。古い保存済みデータはチャートを左へ移動して表示できます。</span>
               <span>保存件数: {backfillJobs[0].rows_written.toLocaleString()}</span>
-              {backfillJobs[0].error_code && <span>エラー: {backfillJobs[0].error_code}</span>}
+              {backfillJobs[0].error_code && <span>エラー: {marketErrorLabel(backfillJobs[0].error_code)}</span>}
             </div>
           )}
           {coverage && (
@@ -989,6 +1033,7 @@ function App() {
           )}
           {visibleInstruments.find((item) => item.id === activeInstrumentId) && (
             <CandleChart
+              key={`${selectedWorkspaceId}:${activeInstrumentId}:${timeframe}`}
               candles={candles}
               instrument={visibleInstruments.find((item) => item.id === activeInstrumentId)!}
               loadingInitial={marketDataLoading}
