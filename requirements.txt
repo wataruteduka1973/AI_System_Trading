@@ -8,7 +8,7 @@ uvicorn[standard]>=0.51,<0.53
 pydantic-settings>=2.14,<3
 python-multipart>=0.0.20,<1
 email-validator>=2.2,<3
-orjson>=3.10,<4
+orjson>=3.12.0,<4
 
 # PostgreSQL / schema migrations
 SQLAlchemy>=2.0.51,<2.1
