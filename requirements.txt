@@ -34,7 +34,7 @@ joblib>=1.4,<2
 torch>=2.13.0,<3
 
 # Structured event logging and metrics
-structlog>=25,<26
+structlog>=26.1.0,<27
 prometheus-client>=0.26.0,<1
 
 # Tests used by local development and CI
