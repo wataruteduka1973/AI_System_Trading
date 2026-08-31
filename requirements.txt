@@ -38,6 +38,9 @@ structlog>=25,<26
 prometheus-client>=0.26.0,<1
 
 # Tests used by local development and CI
+mypy>=2.3,<3
+types-requests>=2.32,<3
+ruff==0.16.3
 pytest>=8.4,<10
 pytest-asyncio>=1.4.0,<2
 pytest-cov>=7.1.0,<8

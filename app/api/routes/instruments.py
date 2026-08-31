@@ -107,9 +107,7 @@ async def sync_workspace_instruments(
             detail="Select an active account from a verified OANDA or Binance connection first",
         )
 
-    loaded_rules: list[
-        tuple[Exchange, OandaInstrumentRules | BinanceInstrumentRules, str]
-    ] = []
+    loaded_rules: list[tuple[Exchange, OandaInstrumentRules | BinanceInstrumentRules, str]] = []
     for _selection, account, connection, exchange in selections:
         rules, market_code = await _load_rules(
             workspace_id,
@@ -165,10 +163,10 @@ async def _load_rules(
             return rules, "foreign_fx_spot"
         api_key = credentials["api_key"]
         secret_key = credentials["secret_key"]
-        rules = await binance_client.get_instrument_rules(
+        binance_rules = await binance_client.get_instrument_rules(
             connection.api_base_url, api_key, secret_key
         )
-        return rules, "crypto_spot"
+        return binance_rules, "crypto_spot"
     except (KeyError, ValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

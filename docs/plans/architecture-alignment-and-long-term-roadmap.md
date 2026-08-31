@@ -1,6 +1,6 @@
 # アーキテクチャ整合性調査と長期開発ロードマップ
 
-- 最終確認日: 2026-08-30
+- 最終確認日: 2026-08-31
 - 対象: `AI_System_Trading`
 - 計画期間: 約 12〜18 か月を見通す段階計画
 - 現在地: 市場データ観測基盤の構築段階（実資金を扱わない）
@@ -184,6 +184,13 @@
 状態: `[~]` 最初のApplication境界抽出を実装。詳細は
 `market-data-application-boundary.md`。独立Worker・再起動耐性は未実装。
 
+2026-08-31: ①Worker詳細設計・DB変更計画を作成。
+`durable-market-data-worker.md` と、そこから参照する `docs/design/` の2文書を正とする。
+続いて②の追加Alembic/Worker専用ORMとlease取得・更新・失効処理を実装し、専用PostgreSQLで試験した。
+③区間実行Applicationも追加し、区間保存・利用資格再確認・中断後の再開を専用DBで検証。
+運用DBへのmigration適用・既存Worker切替は未実施。次は④独立プロセスと切替。
+独立Worker全体や再起動後の取得復旧の実装完了ではない。
+
 2026-08-30の利用者判断: OANDA APIキーを生成できないため、Horizon 0のOANDA実データ確認は
 延期（NOT VERIFIED）。Binance取得は利用者から成功報告あり。この残件を明示して、
 Application抽出を先行する。OANDA確認やHorizon 1全体を完了扱いにはしない。
@@ -362,7 +369,7 @@ Application抽出を先行する。OANDA確認やHorizon 1全体を完了扱い�
 
 ### 開発品質
 
-- backend lint/format/test、frontend lint/build/testをCIで維持する
+- backend lint/format/typecheck/test、frontend lint/build/testをCIで維持する
 - 各フェーズでAPI契約、DB状態遷移、ブラウザ操作の回帰試験を追加する
 - 設計文書の完了マークは、実装と検証証拠が揃った時だけ更新する
 - 新しいインフラは、測定された制約を解く場合にのみ追加する
@@ -393,7 +400,8 @@ Application抽出を先行する。OANDA確認やHorizon 1全体を完了扱い�
    `market-data-application-boundary.md` に記載。取得実行の共通入口とWorker移行は次単位。
 
 3. **Durable Workerの導入**（次の実装単位）
-   独立プロセス、DB lease、heartbeat、retry、stale recoveryを実装し、realtimeやPaper Tradingを載せられる運用基盤を作る。
+   ①詳細設計・②DB/lease・③ページ単位保存は実装・専用DB試験済み。
+   次は独立プロセス、切替、起動batへ進む。詳細は `durable-market-data-worker.md`。
 
 Paper Tradingの詳細設計は2と3に並行して作成できるが、実装開始はDurable Workerとデータ品質の完了後とする。
 

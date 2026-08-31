@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
-from sqlalchemy import func, literal_column, select
+from sqlalchemy import Boolean, func, literal_column, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -305,10 +305,10 @@ def persist_internal_gaps(
             existing_gap.status = "resolved"
             existing_gap.resolved_at = now
     for key, gap in gaps_by_key.items():
-        existing_gap = existing_by_key.get(key)
-        if existing_gap is not None:
-            existing_gap.expected_count = gap.expected_count
-            existing_gap.missing_count = gap.missing_count
+        matching_gap = existing_by_key.get(key)
+        if matching_gap is not None:
+            matching_gap.expected_count = gap.expected_count
+            matching_gap.missing_count = gap.missing_count
             continue
         db.add(
             MarketDataGap(
@@ -552,7 +552,8 @@ class CandleIngestionService:
             raise MarketDataAccessError(
                 "Instrument requires a selected active account from a verified connection"
             )
-        return row
+        instrument, exchange, connection = row
+        return instrument, exchange, connection
 
     def _load_credentials(self, connection: ExchangeConnection) -> dict[str, str]:
         if not connection.secret_ref:
@@ -626,7 +627,7 @@ class CandleIngestionService:
             for point in points
         ]
         statement = pg_insert(Candle).values(values)
-        statement = statement.on_conflict_do_update(
+        returning_statement = statement.on_conflict_do_update(
             constraint="uq_candle_business_key",
             set_={
                 "close_time": statement.excluded.close_time,
@@ -642,8 +643,8 @@ class CandleIngestionService:
                 "received_at": received_at,
                 "corrected_at": received_at,
             },
-        ).returning(literal_column("xmax = 0"))
-        inserted_flags = list(self.db.scalars(statement).all())
+        ).returning(literal_column("xmax = 0", Boolean))
+        inserted_flags = list(self.db.scalars(returning_statement).all())
         inserted = sum(bool(flag) for flag in inserted_flags)
         return inserted, len(inserted_flags) - inserted
 

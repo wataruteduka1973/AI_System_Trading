@@ -14,6 +14,22 @@ launcher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(launcher)
 
 
+def test_interactive_keys_reject_non_windows(monkeypatch) -> None:
+    with monkeypatch.context() as context:
+        context.setattr(launcher.sys, "platform", "linux")
+        with pytest.raises(RuntimeError, match="requires Windows"):
+            launcher.read_key()
+
+
+def test_non_windows_stop_uses_sigterm(monkeypatch) -> None:
+    process = MagicMock()
+    process.poll.return_value = None
+    with monkeypatch.context() as context:
+        context.setattr(launcher.sys, "platform", "linux")
+        launcher.stop_processes([process])
+    process.send_signal.assert_called_once_with(launcher.signal.SIGTERM)
+
+
 def test_occupied_port_is_rejected_without_killing_anything(monkeypatch) -> None:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))

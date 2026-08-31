@@ -82,9 +82,7 @@ class OandaPracticeClient:
         self, base_url: str, token: str, account_id: str, symbol: str = "USD_JPY"
     ) -> OandaInstrumentRules:
         self._validate_practice_url(base_url)
-        return await asyncio.to_thread(
-            self._get_instrument_rules_sync, token, account_id, symbol
-        )
+        return await asyncio.to_thread(self._get_instrument_rules_sync, token, account_id, symbol)
 
     async def get_candles(
         self,

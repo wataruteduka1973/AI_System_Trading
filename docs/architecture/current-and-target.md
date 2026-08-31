@@ -161,6 +161,22 @@ count, and stale-lease recovery. The web application may enqueue work but must n
 
 No external queue service is required for the first worker extraction.
 
+The 2026-08-31 detailed design is documented in
+`docs/design/modules/durable-market-data-worker.md` and
+`docs/design/database/durable-market-data-worker.md`, with acceptance tests and sequencing in
+`docs/plans/durable-market-data-worker.md`. It specifies feed-scoped leases, fenced commits,
+page checkpoints and a stop-the-world legacy cutover. These are design decisions, not implemented
+runtime behavior; the in-process worker limitations above still apply.
+
+The following storage-only slice adds revision `20260831_0005` and isolated Worker mappings plus
+lease primitives under `app/market_data/infrastructure/`. It does not wire them into API/lifespan.
+Legacy ORM SQL stays compatible with revision 0004. Storage fencing, concurrent acquisition and
+migration preservation were tested on a dedicated PostgreSQL instance; the production/local-user
+database was not migrated. The next slice adds `ExecuteMarketDataPage`, detached access snapshots,
+fenced page persistence and resumable final validation. SDK calls execute outside transactions.
+It reuses legacy candle persistence/quality helpers through capability infrastructure, without
+changing legacy runtime wiring. Independent dispatch, heartbeat supervision and cutover remain next.
+
 ## Migration sequence
 
 1. Extract connection verification without changing API or database contracts. **Implemented.**

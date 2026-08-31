@@ -28,7 +28,9 @@ dev = [
   "pytest>=8.3",
   "httpx>=0.28,<1",
   "respx>=0.22,<1",
-  "ruff>=0.9",
+  "ruff==0.16.3",
+  "mypy>=2.3,<3",
+  "types-requests>=2.32,<3",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -45,3 +47,16 @@ src = ["app", "src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.13"
+files = ["app", "src", "scripts"]
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+show_error_codes = true
+
+# These installed exchange SDKs do not publish type information.
+[[tool.mypy.overrides]]
+module = ["binance.*", "oandapyV20.*"]
+ignore_missing_imports = true

@@ -188,9 +188,7 @@ class BinanceSpotTestnetClient:
                 await client.close_connection()
 
     @staticmethod
-    def _parse_instrument_rules(
-        payload: object, expected_symbol: str
-    ) -> BinanceInstrumentRules:
+    def _parse_instrument_rules(payload: object, expected_symbol: str) -> BinanceInstrumentRules:
         if not isinstance(payload, dict) or payload.get("symbol") != expected_symbol:
             raise BinanceApiError(f"Binance did not return rules for {expected_symbol}")
         filters = payload.get("filters")
@@ -202,16 +200,12 @@ class BinanceSpotTestnetClient:
         try:
             price_filter = filters_by_type["PRICE_FILTER"]
             lot_filter = filters_by_type["LOT_SIZE"]
-            notional_filter = filters_by_type.get("NOTIONAL") or filters_by_type.get(
-                "MIN_NOTIONAL"
-            )
+            notional_filter = filters_by_type.get("NOTIONAL") or filters_by_type.get("MIN_NOTIONAL")
             tick_size = Decimal(str(price_filter["tickSize"]))
             step_size = Decimal(str(lot_filter["stepSize"]))
             min_quantity = Decimal(str(lot_filter["minQty"]))
             max_quantity = Decimal(str(lot_filter["maxQty"]))
-            min_notional = (
-                Decimal(str(notional_filter["minNotional"])) if notional_filter else None
-            )
+            min_notional = Decimal(str(notional_filter["minNotional"])) if notional_filter else None
             price_scale = BinanceSpotTestnetClient._decimal_scale(tick_size)
             quantity_scale = BinanceSpotTestnetClient._decimal_scale(step_size)
         except (KeyError, TypeError, ValueError, ArithmeticError) as exc:
@@ -237,7 +231,10 @@ class BinanceSpotTestnetClient:
 
     @staticmethod
     def _decimal_scale(value: Decimal) -> int:
-        return max(0, -value.normalize().as_tuple().exponent)
+        exponent = value.normalize().as_tuple().exponent
+        if not isinstance(exponent, int):
+            raise ValueError("Exchange precision must be finite")
+        return max(0, -exponent)
 
     @staticmethod
     def _parse_candle(payload: object) -> CandlePoint:

@@ -115,11 +115,38 @@ OANDA検証は公式practice APIの口座一覧、口座summary、USD/JPY instru
 
 ## ローカルでの確認
 
+プロジェクトのPython 3.13環境を有効にして、開発用ツールを更新します。
+
+```powershell
+python -m pip install -e ".[dev]"
+```
+
 ```powershell
 ruff check .
 ruff format --check .
-pytest
+python -m mypy
+python -m pytest
 ```
+
+整形エラーは `ruff format .` で修正してから、上記チェックを再実行してください。
+Ruffは検証済みの0.16.3に固定し、ローカルとCIで整形結果がずれないようにしています。
+型検査は `pyproject.toml` で `app`・`src`・`scripts` を対象にしています。
+型定義のないBinance/OANDA SDK以外のエラーは無効化しません。
+Windows用分岐も確認する場合は `python -m mypy --platform win32` を実行します。
+テストやmigration自身の厳格な型付けは対象外ですが、整形・lint・実行テストは継続します。
+
+### Worker DB基盤の統合試験（開発者向け）
+
+新WorkerのDB基盤とページ単位の取得・再開処理は、まだ既存の取得経路に接続していません。
+画面やbatの再起動挙動は従来どおりです。追加migration `20260831_0005` を
+運用DBへ適用する前に、`docs/plans/durable-market-data-worker.md` の切替手順を確認してください。
+
+試験は **空の専用PostgreSQLデータベース**（名前は `worker_test_` で始める）で実行します。
+運用の `DATABASE_URL` は使わず、`WORKER_TEST_DATABASE_URL` に専用DBの接続先を設定して
+`python -m pytest tests/test_worker_leases_postgres.py tests/test_worker_lease_contracts.py tests/test_worker_pages.py` を実行します。
+この試験はDDL作成と0005のdowngrade/upgradeを行います。既存テーブルがあるDBは拒否します。
+再実行には新しい空の専用DBを用意してください。試験はDBを自動削除しません。
+環境変数がない場合、PostgreSQL統合試験はskipされます（合格を意味しません）。
 
 ## ディレクトリ構成
 
@@ -139,7 +166,7 @@ tests/                       # 自動テスト
 
 ## CI/CD
 
-- Pull Requestと`main`へのPushで、Ruffとpytestを実行します。
+- Pull Requestと`main`へのPushで、Ruff・mypy・pytestを実行します。
 - DependabotがGitHub ActionsとPython依存関係の更新を週次で確認します。
 - `v1.0.0`のようなタグをPushすると、PythonパッケージをビルドしてGitHub Releaseを作成します。
 

@@ -86,9 +86,7 @@ class Instrument(Base):
     exchange_id: Mapped[UUID] = mapped_column(
         ForeignKey(f"{SCHEMA}.exchange.id", ondelete="RESTRICT")
     )
-    market_id: Mapped[UUID] = mapped_column(
-        ForeignKey(f"{SCHEMA}.market.id", ondelete="RESTRICT")
-    )
+    market_id: Mapped[UUID] = mapped_column(ForeignKey(f"{SCHEMA}.market.id", ondelete="RESTRICT"))
     symbol: Mapped[str] = mapped_column(Text)
     base_asset: Mapped[str] = mapped_column(Text)
     quote_asset: Mapped[str] = mapped_column(Text)
@@ -112,9 +110,7 @@ class Instrument(Base):
 class Candle(Base):
     __tablename__ = "candle"
     __table_args__ = (
-        UniqueConstraint(
-            "instrument_id", "timeframe", "open_time", name="uq_candle_business_key"
-        ),
+        UniqueConstraint("instrument_id", "timeframe", "open_time", name="uq_candle_business_key"),
         {"schema": SCHEMA},
     )
 
@@ -300,9 +296,7 @@ class WorkspaceAccountSelection(Base):
     selected_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class AuditLog(Base):

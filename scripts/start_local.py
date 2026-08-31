@@ -20,7 +20,7 @@ PORTS = (8000, 5173)
 def check_ports() -> None:
     for port in PORTS:
         with socket.socket() as listener:
-            if os.name == "nt":
+            if sys.platform == "win32":
                 listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
             try:
                 listener.bind(("127.0.0.1", port))
@@ -54,7 +54,11 @@ def stop_processes(processes: list[subprocess.Popen]) -> None:
         if process.poll() is not None:
             continue
         try:
-            process.send_signal(signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGTERM)
+            if sys.platform == "win32":
+                stop_signal = signal.CTRL_BREAK_EVENT
+            else:
+                stop_signal = signal.SIGTERM
+            process.send_signal(stop_signal)
             process.wait(timeout=10)
         except (OSError, subprocess.TimeoutExpired):
             if process.poll() is None:
@@ -76,6 +80,8 @@ def ready() -> bool:
 
 
 def read_key() -> str:
+    if sys.platform != "win32":
+        raise RuntimeError("This interactive launcher requires Windows.")
     import msvcrt
 
     return msvcrt.getwch().lower() if msvcrt.kbhit() else ""
@@ -84,6 +90,10 @@ def read_key() -> str:
 def run_once(root: Path, launch_commands: list[list[str]], open_browser: bool) -> bool:
     check_ports()
     processes: list[subprocess.Popen] = []
+    if sys.platform == "win32":
+        creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        creation_flags = 0
     try:
         for command, directory in zip(launch_commands, (root, root / "frontend"), strict=True):
             processes.append(
@@ -91,7 +101,7 @@ def run_once(root: Path, launch_commands: list[list[str]], open_browser: bool) -
                     command,
                     cwd=directory,
                     stdin=subprocess.DEVNULL,
-                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+                    creationflags=creation_flags,
                 )
             )
         print("\n[R] Restart both servers   [Q] Stop and exit   [Ctrl+C] Stop", flush=True)
@@ -132,7 +142,7 @@ def main() -> int:
         if args.check:
             print("Local setup and ports OK. No servers started; database not checked.")
             return 0
-        if os.name != "nt":
+        if sys.platform != "win32":
             raise RuntimeError("This interactive launcher requires Windows.")
         print("Starting local servers. PostgreSQL must already be running.", flush=True)
         while run_once(ROOT, launch_commands, not args.no_browser):

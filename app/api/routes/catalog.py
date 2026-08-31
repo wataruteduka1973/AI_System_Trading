@@ -3,7 +3,7 @@ from typing import Annotated
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import Table, delete, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -180,8 +180,10 @@ def disable_exchange_connection(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connection not found")
     previous_status = connection.status
     connection.status = "disabled"
+    selection_table = WorkspaceAccountSelection.__table__
+    assert isinstance(selection_table, Table)
     db.execute(
-        WorkspaceAccountSelection.__table__.delete().where(
+        delete(selection_table).where(
             WorkspaceAccountSelection.external_account_id.in_(
                 select(ExternalAccount.id).where(ExternalAccount.connection_id == connection.id)
             )

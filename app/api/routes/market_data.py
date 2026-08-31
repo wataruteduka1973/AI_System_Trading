@@ -177,7 +177,7 @@ def get_candle_coverage(
         report = market_data_application.get_coverage(
             db, workspace_id, instrument_id, timeframe, requested_from, requested_to
         )
-    return CandleCoverageRead(timeframe=timeframe, **report)
+    return CandleCoverageRead.model_validate({"timeframe": timeframe, **report})
 
 
 @router.put(

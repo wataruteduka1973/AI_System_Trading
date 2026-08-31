@@ -62,3 +62,13 @@ Verification limits:
 
 Do not label repository-wide DoD or Horizon 1 complete. The next implementation slice remains
 independent durable Worker execution, including real PostgreSQL multi-process/crash tests.
+
+2026-08-31: Worker design and the following DB/lease primitive slice are implemented; see
+`durable-market-data-worker.md`. Revision 0005 is tested only on a dedicated database, with no
+runtime cutover or user-database migration. Checkpointed page execution is now implemented as
+`ExecuteMarketDataPage`, with access revalidation and fenced persistence in infrastructure.
+Legacy API/sync/poller are unchanged; independent dispatch and cutover remain the next unit.
+
+2026-08-31 quality follow-up: the six formatting mismatches above are resolved. Mypy is now
+configured for app/src/scripts and runs in CI, with Linux and Windows branches checked.
+These earlier verification limits are historical; see `python-quality-checks.md` for current results.

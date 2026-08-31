@@ -395,9 +395,7 @@ def test_verification_failures_are_distinguished_and_audited() -> None:
         connection.api_base_url = "https://api-fxpractice.oanda.com"
         connection.secret_ref = "local-encrypted://0123456789abcdef0123456789abcdef"
         connection.capabilities = {}
-        exchange = Exchange(
-            id=connection.exchange_id, code="oanda", name="OANDA", status="active"
-        )
+        exchange = Exchange(id=connection.exchange_id, code="oanda", name="OANDA", status="active")
         session = MagicMock()
         session.scalar.return_value = connection
         session.get.return_value = exchange
@@ -407,8 +405,8 @@ def test_verification_failures_are_distinguished_and_audited() -> None:
         oanda_client.verify_and_list_accounts = AsyncMock(side_effect=exception)
         override_database(session)
         app.dependency_overrides[get_secret_store] = lambda store=secret_store: store
-        app.dependency_overrides[get_oanda_practice_client] = (
-            lambda exchange_client=oanda_client: exchange_client
+        app.dependency_overrides[get_oanda_practice_client] = lambda exchange_client=oanda_client: (
+            exchange_client
         )
         try:
             response = client.post(

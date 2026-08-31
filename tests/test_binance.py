@@ -1,7 +1,20 @@
 import asyncio
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from app.exchanges.binance import BinanceApiError, BinanceSpotTestnetClient, mask_api_key
+
+
+@pytest.mark.parametrize("value,expected", [("0.00100", 3), ("100", 0), ("1", 0)])
+def test_decimal_scale_for_finite_exchange_rules(value, expected):
+    assert BinanceSpotTestnetClient._decimal_scale(Decimal(value)) == expected
+
+
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity"])
+def test_decimal_scale_rejects_nonfinite_exchange_rules(value):
+    with pytest.raises(ValueError, match="finite"):
+        BinanceSpotTestnetClient._decimal_scale(Decimal(value))
 
 
 def test_binance_spot_testnet_client_uses_sdk_and_reads_account() -> None:
@@ -19,9 +32,7 @@ def test_binance_spot_testnet_client_uses_sdk_and_reads_account() -> None:
             ],
         }
     )
-    sdk_client.get_symbol_info = AsyncMock(
-        return_value={"symbol": "BTCJPY", "status": "TRADING"}
-    )
+    sdk_client.get_symbol_info = AsyncMock(return_value={"symbol": "BTCJPY", "status": "TRADING"})
     sdk_client.close_connection = AsyncMock()
     client_factory = AsyncMock(return_value=sdk_client)
 
