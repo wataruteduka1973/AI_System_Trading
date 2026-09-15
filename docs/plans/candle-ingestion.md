@@ -1,5 +1,8 @@
 # Candle ingestion implementation plan
 
+Status: `[x]` implemented. Superseded in part by `durable-market-data-worker.md`, which
+replaces the in-process worker described under Risks with a leased, resumable design.
+
 ## Purpose
 
 Persist confirmed OANDA `USD_JPY` and Binance Spot Testnet `BTCJPY` candles without

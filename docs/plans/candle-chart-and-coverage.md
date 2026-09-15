@@ -311,7 +311,7 @@ Every phase must preserve:
 
 2026-08-30 correction: loading-state chart initialization, stale timeframe responses, job filtering,
 collection-stop visibility, and orphan backfill recovery were repaired and regression-tested.
-See `market-screen-recovery.md` for verification and the API restart requirement. Earlier component
+See `../knowledge/market-screen-recovery.md` for verification and the API restart requirement. Earlier component
 tests did not cover the data-arrives-before-loading-clears lifecycle; this is now explicitly tested.
 
 The next approved development slice should complete the Phase A/B dependency boundary:

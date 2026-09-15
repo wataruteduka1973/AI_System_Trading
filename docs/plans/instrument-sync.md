@@ -1,5 +1,7 @@
 # Instrument sync implementation plan
 
+Status: `[x]` implemented and covered by the existing instrument sync API and tests.
+
 ## Purpose
 
 Synchronize the minimum executable market rules for OANDA `USD_JPY` and Binance Spot

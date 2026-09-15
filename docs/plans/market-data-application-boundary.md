@@ -1,5 +1,8 @@
 # Market-data Application boundary
 
+Status: `[x]` implemented. Confirmed as complete in
+`docs/architecture/current-and-target.md` ("Market-data Application boundary").
+
 ## Scope and design (2026-08-30)
 
 Horizon 1 first slice: extract backfill enqueue, requested coverage range resolution, and

@@ -46,7 +46,8 @@ docs/
 │   └── modules/
 ├── plans/
 ├── quality/
-└── knowledge/
+├── knowledge/
+└── concept/        # 新規独立実装の初版構想・候補設計（現在のスコープではない）
 ```
 
 設計と実装が矛盾している場合、独断でどちらかに合わせない。

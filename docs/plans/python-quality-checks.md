@@ -1,5 +1,7 @@
 # Python整形・型検査の導入
 
+状態: `[x]` 実装済み。Ruff/mypyはpyproject.tomlとCIに導入済み。
+
 ## 目的と対象
 
 CIのRuff整形エラー6ファイルを解消し、未設定だったPython型検査をローカル/CI共通にする。

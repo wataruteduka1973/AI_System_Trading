@@ -1,6 +1,6 @@
 # アーキテクチャ整合性調査と長期開発ロードマップ
 
-- 最終確認日: 2026-08-29
+- 最終確認日: 2026-08-31
 - 対象: `AI_System_Trading`
 - 計画期間: 約 12〜18 か月を見通す段階計画
 - 現在地: 市場データ観測基盤の構築段階（実資金を扱わない）
@@ -8,7 +8,7 @@
 
 ## 1. この文書の目的
 
-初期設計資料 `docs/FXtrading_rebuild/` と、現在のアーキテクチャ、実装、既存計画、テスト、CI、DBマイグレーションを照合し、次を明確にする。
+初期設計資料 `docs/concept/FXtrading_rebuild/` と、現在のアーキテクチャ、実装、既存計画、テスト、CI、DBマイグレーションを照合し、次を明確にする。
 
 1. 初期構想のうち、現在も維持する設計原則
 2. 現在の実装との乖離が、意図的な段階導入か、解消すべき設計負債か
@@ -21,7 +21,7 @@
 
 ### 初期設計
 
-- `docs/FXtrading_rebuild/00_概要と文書一覧.md` から `10_技術選定と開発構成.md`
+- `docs/concept/FXtrading_rebuild/00_概要と文書一覧.md` から `10_技術選定と開発構成.md`
 - 要件、ER図、API、モジュール境界、移行計画、AI、リスク初期値、着手前ゲートを含む
 
 ### 現行設計・計画
@@ -145,6 +145,8 @@
 
 ### Horizon 0: 観測基盤の基準線を閉じる（0〜1か月）
 
+状態: `[~]` コードと自動試験は完了。OANDA Practiceの認証済み実データによる価格・時刻表示確認のみ `NOT VERIFIED`。
+
 #### 開始条件
 
 - 現行DBがAlembic headまで適用可能
@@ -161,6 +163,15 @@
 - 古い計画文中の「最新500件のみ」など、実装と食い違う記述を更新する
 - OpenAPI snapshot、DB migration確認、依存関係監査をCIの基準線に追加するか判断する
 
+#### 2026-08-29 実装結果
+
+- coverage APIにtimezone-awareな`requested_from` / `requested_to`を追加し、両方未指定時の最新backfill参照を維持した
+- complete、source-limited、empty、duplicate job、internal gap、Workspace分離をservice/APIテストで固定した
+- OANDA midpointの小数精度と、New Yorkの夏時間・冬時間を考慮した週末閉場境界を自動試験で固定した
+- チャートの初期追加読込抑止、重複なしのページ結合、価格桁、状態表示は既存component/browser回帰試験で確認対象となっている
+- OpenAPI snapshotは現時点では導入せず、FastAPIのschema生成とAPI回帰試験を基準線とする。専用snapshotはHorizon 1のルート分割時に再判断する
+- OANDA Practiceの認証済み実データ表示確認は、外部接続環境が必要なため `NOT VERIFIED` として残す
+
 #### 完了条件
 
 - 対応する全timeframeで価格、時刻、並び順、重複、ギャップの期待値が自動試験される
@@ -170,6 +181,20 @@
 
 ### Horizon 1: Application境界とDurable Worker（1〜3か月）
 
+状態: `[~]` 最初のApplication境界抽出を実装。詳細は
+`market-data-application-boundary.md`。独立Worker・再起動耐性は未実装。
+
+2026-08-31: ①Worker詳細設計・DB変更計画を作成。
+`durable-market-data-worker.md` と、そこから参照する `docs/design/` の2文書を正とする。
+続いて②の追加Alembic/Worker専用ORMとlease取得・更新・失効処理を実装し、専用PostgreSQLで試験した。
+③区間実行Applicationも追加し、区間保存・利用資格再確認・中断後の再開を専用DBで検証。
+運用DBへのmigration適用・既存Worker切替は未実施。次は④独立プロセスと切替。
+独立Worker全体や再起動後の取得復旧の実装完了ではない。
+
+2026-08-30の利用者判断: OANDA APIキーを生成できないため、Horizon 0のOANDA実データ確認は
+延期（NOT VERIFIED）。Binance取得は利用者から成功報告あり。この残件を明示して、
+Application抽出を先行する。OANDA確認やHorizon 1全体を完了扱いにはしない。
+
 #### 開始条件
 
 - Horizon 0のデータ品質試験が安定している
@@ -177,7 +202,8 @@
 
 #### 実装・整備
 
-- 市場データbackfill、coverage計算、subscription変更をApplication Use Caseへ切り出す
+- `[x]` backfill受付、coverage範囲解決、subscription変更をApplication Use Caseへ切り出す。
+  取得実行・coverageの低水準計算は既存serviceへ委譲し、Worker移行時の共通入口整備は次単位で行う。
 - `catalog.py` をWorkspace、Connection、Instrument、Market Data単位へ段階分割する
 - Web lifespan内Workerを独立プロセスへ移す
 - PostgreSQL advisory lockまたはlease、heartbeat、retry、stale recovery、graceful shutdownを実装する
@@ -343,7 +369,7 @@
 
 ### 開発品質
 
-- backend lint/format/test、frontend lint/build/testをCIで維持する
+- backend lint/format/typecheck/test、frontend lint/build/testをCIで維持する
 - 各フェーズでAPI契約、DB状態遷移、ブラウザ操作の回帰試験を追加する
 - 設計文書の完了マークは、実装と検証証拠が揃った時だけ更新する
 - 新しいインフラは、測定された制約を解く場合にのみ追加する
@@ -366,20 +392,22 @@
 
 長期計画の最初の3単位は次の順序を推奨する。
 
-1. **市場データ基準線の完了**  
-   coverage requested range、内部gap、source limitation、Workspace分離、OANDA境界、チャート回帰試験を一つの完了単位にする。
+1. **市場データ基準線の完了**（`[~]` OANDA表示確認は利用者判断で延期）
+   コードと自動試験は完了。OANDA実データ確認はNOT VERIFIEDとして残し、承認済みの構造改善を先行する。
 
-2. **市場データApplication Use Caseの切り出し**  
-   接続検証で採用した境界をbackfill、coverage、subscriptionへ展開し、APIとWorkerが同じ処理を共有できる形にする。
+2. **市場データApplication Use Caseの切り出し**（最初の単位を実装）
+   backfill受付、coverage範囲解決、subscription変更を抽出。検証結果と既存整形不一致などの制限は
+   `market-data-application-boundary.md` に記載。取得実行の共通入口とWorker移行は次単位。
 
-3. **Durable Workerの導入**  
-   独立プロセス、DB lease、heartbeat、retry、stale recoveryを実装し、realtimeやPaper Tradingを載せられる運用基盤を作る。
+3. **Durable Workerの導入**（次の実装単位）
+   ①詳細設計・②DB/lease・③ページ単位保存は実装・専用DB試験済み。
+   次は独立プロセス、切替、起動batへ進む。詳細は `durable-market-data-worker.md`。
 
 Paper Tradingの詳細設計は2と3に並行して作成できるが、実装開始はDurable Workerとデータ品質の完了後とする。
 
 ## 11. 文書運用
 
-- 初期設計 `docs/FXtrading_rebuild/` は製品構想と候補設計の記録として保持する。
+- 初期設計 `docs/concept/FXtrading_rebuild/` は製品構想と候補設計の記録として保持する。
 - 現在構造の正は `docs/architecture/current-and-target.md` とする。
 - 長期順序と承認ゲートの正は本書とする。
 - 個別機能の実装状態は `docs/plans/` の各専用計画を正とする。
@@ -395,4 +423,3 @@ Paper Tradingの詳細設計は2と3に並行して作成できるが、実装�
 - APIルートからApplication Use Caseへ移した処理の割合
 - `catalog.py`、market data service、`App.tsx`の責務分割状況
 - 計画書の完了表示と実装・テスト証拠の不一致件数
-

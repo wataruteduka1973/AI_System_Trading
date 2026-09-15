@@ -1,5 +1,7 @@
 # Windows local launcher
 
+Status: `[x]` implemented as `start-local.bat` / `scripts/start_local.py`.
+
 ## Scope
 
 `start-local.bat` selects a working project Python 3.13 environment and invokes
