@@ -45,6 +45,7 @@ def commands(root: Path) -> list[list[str]]:
     return [
         [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000"],
         [node, str(vite), "--host", "127.0.0.1", "--port", "5173", "--strictPort"],
+        [sys.executable, "-m", "app.market_data.worker"],
     ]
 
 
@@ -87,15 +88,20 @@ def read_key() -> str:
     return msvcrt.getwch().lower() if msvcrt.kbhit() else ""
 
 
-def run_once(root: Path, launch_commands: list[list[str]], open_browser: bool) -> bool:
+def run_once(
+    root: Path, launch_commands: list[list[str]], open_browser: bool, critical_count: int = 2
+) -> bool:
+    """The first `critical_count` commands (API, frontend) are required; extras (the Worker)
+    may exit on their own (e.g. an unapplied migration) without stopping the others."""
     check_ports()
     processes: list[subprocess.Popen] = []
+    directories = (root, root / "frontend") + (root,) * (len(launch_commands) - 2)
     if sys.platform == "win32":
         creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         creation_flags = 0
     try:
-        for command, directory in zip(launch_commands, (root, root / "frontend"), strict=True):
+        for command, directory in zip(launch_commands, directories, strict=True):
             processes.append(
                 subprocess.Popen(
                     command,
@@ -104,14 +110,25 @@ def run_once(root: Path, launch_commands: list[list[str]], open_browser: bool) -
                     creationflags=creation_flags,
                 )
             )
-        print("\n[R] Restart both servers   [Q] Stop and exit   [Ctrl+C] Stop", flush=True)
+        print("\n[R] Restart all processes   [Q] Stop and exit   [Ctrl+C] Stop", flush=True)
         deadline = time.monotonic() + 60
         is_ready = False
+        warned_exits: set[int] = set()
         while True:
-            if any(process.poll() is not None for process in processes):
-                raise RuntimeError(
-                    "A server exited. See the output above; both servers are stopping."
-                )
+            for index, process in enumerate(processes):
+                if process.poll() is None:
+                    continue
+                if index < critical_count:
+                    raise RuntimeError(
+                        "A server exited. See the output above; the other processes are stopping."
+                    )
+                if index not in warned_exits:
+                    warned_exits.add(index)
+                    print(
+                        "\n[WARN] A non-critical process exited; see the output above. "
+                        "The API and frontend keep running.",
+                        flush=True,
+                    )
             key = read_key()
             if key in {"r", "q"}:
                 return key == "r"

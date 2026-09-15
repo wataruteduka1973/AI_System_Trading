@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     secret_store_path: Path = Path(".secrets")
     trading_env: str = "paper"
     live_trading_allowed: bool = False
+    worker_scan_interval_seconds: float = 2
+    worker_lease_seconds: int = 90
+    worker_heartbeat_interval_seconds: float = 15
+    worker_fetch_timeout_seconds: float = 30
+    worker_candidate_limit: int = 500
+    worker_recover_limit: int = 100
 
     @field_validator("cors_origins", mode="before")
     @classmethod

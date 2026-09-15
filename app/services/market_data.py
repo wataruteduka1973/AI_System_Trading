@@ -1,26 +1,17 @@
-import asyncio
 import hashlib
-from contextlib import suppress
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime, timedelta
-from uuid import UUID, uuid4
+from datetime import UTC, datetime
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from fastapi import HTTPException
 from sqlalchemy import Boolean, func, literal_column, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from app.db.session import SessionLocal, engine
-from app.exchanges.binance import (
-    BinanceApiError,
-    BinanceAuthenticationError,
-    BinanceSpotTestnetClient,
-)
-from app.exchanges.oanda import OandaApiError, OandaAuthenticationError, OandaPracticeClient
+from app.exchanges.binance import BinanceSpotTestnetClient
+from app.exchanges.oanda import OandaPracticeClient
 from app.exchanges.types import CandlePoint, timeframe_delta
 from app.models.catalog import (
-    AuditLog,
     BackfillJob,
     Candle,
     Exchange,
@@ -28,10 +19,9 @@ from app.models.catalog import (
     ExternalAccount,
     Instrument,
     MarketDataGap,
-    MarketDataSubscription,
     WorkspaceAccountSelection,
 )
-from app.services.secrets import LocalEncryptedSecretStore, get_secret_store
+from app.services.secrets import LocalEncryptedSecretStore
 
 
 class MarketDataAccessError(RuntimeError):
@@ -136,9 +126,6 @@ def ensure_no_overlapping_backfill(
 ) -> None:
     lock_key = _advisory_lock_key("backfill", workspace_id, instrument_id, timeframe)
     db.execute(select(func.pg_advisory_xact_lock(lock_key)))
-    recover_interrupted_backfills(
-        db, workspace_id, instrument_id, timeframe, requested_from, requested_to
-    )
     duplicate_id = db.scalar(
         select(BackfillJob.id).where(
             BackfillJob.workspace_id == workspace_id,
@@ -151,52 +138,6 @@ def ensure_no_overlapping_backfill(
     )
     if duplicate_id is not None:
         raise DuplicateBackfillError("An overlapping backfill is already queued or running")
-
-
-def recover_interrupted_backfills(
-    db: Session,
-    workspace_id: UUID,
-    instrument_id: UUID,
-    timeframe: str,
-    requested_from: datetime,
-    requested_to: datetime,
-) -> None:
-    """Recover old unowned jobs under the caller's overlap-serialization lock."""
-    now = datetime.now(UTC)
-    candidates = db.scalars(
-        select(BackfillJob)
-        .where(
-            BackfillJob.workspace_id == workspace_id,
-            BackfillJob.instrument_id == instrument_id,
-            BackfillJob.timeframe == timeframe,
-            BackfillJob.status.in_(("queued", "running")),
-            func.coalesce(BackfillJob.started_at, BackfillJob.created_at)
-            < now - timedelta(minutes=5),
-            BackfillJob.from_time < requested_to,
-            BackfillJob.to_time > requested_from,
-        )
-        .with_for_update(skip_locked=True)
-    ).all()
-    for job in candidates:
-        key = _advisory_lock_key("backfill-owner", job.id)
-        if not db.scalar(select(func.pg_try_advisory_xact_lock(key))):
-            continue
-        previous_status = job.status
-        job.status = "failed"
-        job.error_code = "worker_interrupted"
-        job.finished_at = now
-        db.add(
-            AuditLog(
-                workspace_id=workspace_id,
-                action="candle.backfill_recovered",
-                resource_type="backfill_job",
-                resource_id=job.id,
-                correlation_id=uuid4(),
-                before_data={"status": previous_status},
-                after_data={"status": "failed", "error_code": "worker_interrupted"},
-            )
-        )
-    db.flush()
 
 
 def find_internal_gaps(
@@ -647,153 +588,3 @@ class CandleIngestionService:
         inserted_flags = list(self.db.scalars(returning_statement).all())
         inserted = sum(bool(flag) for flag in inserted_flags)
         return inserted, len(inserted_flags) - inserted
-
-
-def market_data_error_code(exc: Exception) -> str:
-    if isinstance(exc, (OandaAuthenticationError, BinanceAuthenticationError)):
-        return "authentication_failed"
-    if isinstance(exc, (OandaApiError, BinanceApiError)):
-        return "communication_failed"
-    if isinstance(exc, MarketDataAccessError):
-        return exc.code
-    if isinstance(exc, HTTPException):
-        return "configuration_error"
-    return "internal_error"
-
-
-async def run_backfill_job(job_id: UUID) -> None:
-    # Pin the owning connection: a pooled session may switch connections on commit.
-    key = _advisory_lock_key("backfill-owner", job_id)
-    with engine.connect() as owner:
-        if not owner.scalar(select(func.pg_try_advisory_lock(key))):
-            return
-        try:
-            await _run_owned_backfill_job(job_id)
-        finally:
-            owner.execute(select(func.pg_advisory_unlock(key)))
-
-
-async def _run_owned_backfill_job(job_id: UUID) -> None:
-    with SessionLocal() as db:
-        job = db.get(BackfillJob, job_id)
-        if job is None or job.status != "queued":
-            return
-        job.status = "running"
-        job.attempts += 1
-        job.started_at = datetime.now(UTC)
-        db.commit()
-        try:
-            secret_store = get_secret_store()
-            service = CandleIngestionService(db, secret_store)
-            report = await service.sync(
-                job.workspace_id,
-                job.instrument_id,
-                job.timeframe,
-                job.from_time,
-                job.to_time,
-                "backfilled",
-            )
-            job.rows_written = report.rows_written
-            gaps = persist_internal_gaps(
-                db,
-                instrument_id=job.instrument_id,
-                timeframe=job.timeframe,
-                requested_from=job.from_time,
-                requested_to=job.to_time,
-            )
-            job.status = "succeeded"
-            coverage = build_candle_coverage(
-                db,
-                job.instrument_id,
-                job.timeframe,
-                job.from_time,
-                job.to_time,
-            )
-            job.validation_result = report.as_validation_result(coverage, gaps)
-            job.error_code = None
-        except Exception as exc:
-            db.rollback()
-            job = db.get(BackfillJob, job_id)
-            if job is None:
-                return
-            job.status = "failed"
-            job.error_code = market_data_error_code(exc)
-        job.finished_at = datetime.now(UTC)
-        db.commit()
-
-
-class MarketDataPollingWorker:
-    def __init__(self, scan_interval_seconds: int = 60) -> None:
-        self.scan_interval_seconds = scan_interval_seconds
-        self._task: asyncio.Task[None] | None = None
-
-    def start(self) -> None:
-        if self._task is None:
-            self._task = asyncio.create_task(self._run())
-
-    async def stop(self) -> None:
-        if self._task is None:
-            return
-        self._task.cancel()
-        with suppress(asyncio.CancelledError):
-            await self._task
-        self._task = None
-
-    async def _run(self) -> None:
-        while True:
-            await asyncio.sleep(self.scan_interval_seconds)
-            await self.poll_once()
-
-    async def poll_once(self) -> None:
-        with SessionLocal() as db:
-            now = datetime.now(UTC)
-            subscriptions = list(
-                db.scalars(
-                    select(MarketDataSubscription).where(MarketDataSubscription.enabled.is_(True))
-                ).all()
-            )
-            for subscription in subscriptions:
-                if (
-                    subscription.last_polled_at is not None
-                    and subscription.last_polled_at
-                    + timedelta(seconds=subscription.poll_interval_seconds)
-                    > now
-                ):
-                    continue
-                await self._poll_subscription(db, subscription, now)
-
-    async def _poll_subscription(
-        self, db: Session, subscription: MarketDataSubscription, now: datetime
-    ) -> None:
-        # The subscription list may have been read before another feed finished polling.
-        db.refresh(subscription)
-        if not subscription.enabled:
-            return
-        subscription.last_polled_at = now
-        try:
-            service = CandleIngestionService(db, get_secret_store())
-            delta = timeframe_delta(subscription.timeframe)
-            start = service.latest_close_time(
-                subscription.instrument_id, subscription.timeframe
-            ) or (now - delta * 2)
-            await service.sync(
-                subscription.workspace_id,
-                subscription.instrument_id,
-                subscription.timeframe,
-                start,
-                now,
-                "complete",
-            )
-            subscription.last_success_at = now
-            subscription.last_error_code = None
-            db.commit()
-        except Exception as exc:
-            db.rollback()
-            current = db.get(MarketDataSubscription, subscription.id)
-            if current is not None:
-                current.last_polled_at = now
-                current.last_error_code = market_data_error_code(exc)
-                db.commit()
-
-
-market_data_worker = MarketDataPollingWorker()

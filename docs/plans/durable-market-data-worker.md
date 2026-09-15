@@ -1,6 +1,9 @@
 # Durable Worker 実装計画
 
 - 2026-08-31: ①設計・②DB/lease・③区間実行Applicationを実装。独立プロセスへの接続は未実施。
+- 2026-09-15: ④独立プロセスと切替を実装。詳細と検証結果は末尾「④の実装と検証範囲」。
+  旧実行経路（lifespanポーラー、BackgroundTasks即時実行）は削除済み。運用DBへの
+  migration適用・実OANDA/Binance通信・⑤のbat個別再起動/表示は未実施。
 - 設計: [Worker](../design/modules/durable-market-data-worker.md)
   / [DB・移行](../design/database/durable-market-data-worker.md)
 - 既存Application抽出・一括起動は維持。OANDA実データ試験は利用者判断により延期。
@@ -13,8 +16,9 @@
 3. **区間実行Application（実装済み、検証結果は末尾）**: 外部fetchと保存を分け、checkpoint/reportを同時commit。
    実行入口は `app/market_data/application/`、DB操作は同capability内infrastructureに集約。
    SQLAlchemyを使用する既存境界を踏襲し、汎用repository frameworkは作らない。
-4. **独立プロセスと切替**: Worker entry point、停止signals、API内実行の削除、設定とエラー変換。
-   packaged runtime内にentry pointを置き、wheelからも起動可能にする。新しい第三者queueは不要。
+4. **独立プロセスと切替（実装済み、検証結果は末尾）**: Worker entry point、停止signals、
+   API内実行の削除、設定とエラー変換。packaged runtime内にentry pointを置き、
+   wheelからも起動可能にする。新しい第三者queueは不要。
 5. **起動/表示/実地試験**: 一括batを3プロセス化。API/画面のみの再起動と全体再起動を分ける。
    retry予定とblockedの表示を追加し、enabledだけで「自動取得中」と断定しない。
 
@@ -130,6 +134,71 @@ DB接続切断時のtransaction rollbackは確認済みだが、DB停止中を�
 次は④「独立プロセスと切替」。候補探索、公平な巡回、heartbeat、signals、API内実行の除去、
 旧jobの正規化を実装・検証してから⑤のbat/UIへ進む。
 本工程だけではAPI再起動からの自動復旧は有効にならない。旧方式と新方式を同時実行しない。
+
+## ④の実装と検証範囲
+
+- 候補探索 `app/market_data/infrastructure/candidates.py` の `CandidateScanner`。
+  `backfill_job`（status IN queued/running/validating）と `market_data_subscription`
+  （enabled かつ blocked_reason IS NULL）を、既存 `ix_backfill_due` / `ix_subscription_due`
+  と同じ条件で `next_run_at, id` 昇順に読み取り専用で結合する。ロックは持たず、claim()側の
+  再検証に委ねる。
+- Workerランナー `app/market_data/worker/runner.py` の `WorkerRunner`。1スキャン周期ごとに
+  `recover_expired()` → 候補探索 → 見つかった候補**全件を1パスで1ページずつ**処理する
+  （同一feedを連続ドレインしない）ことで、長時間backfillがpollingを飢餓状態にしない
+  （DW-14）。各claim実行中は軽量heartbeat keepalive（設定間隔ごとに`leases.heartbeat`）を
+  並走させ、所有権喪失を検知したら停止する。候補側の想定外例外（execute_page.pyが
+  正規化できない場合）はログのみでスキャンを継続し、他feedを止めない。
+- entry point `app/market_data/worker/__main__.py`（`python -m app.market_data.worker`）。
+  起動時に `alembic.runtime.migration.MigrationContext` で現在リビジョンを確認し、
+  必須リビジョン `20260831_0005` と完全一致しない場合は候補処理を一切開始せず終了する
+  （DB設計書の「required revision未適用ならWorkerは取得を開始せず終了」を満たす）。
+  SIGINT/SIGTERM（Windowsは追加でSIGBREAK/CTRL_BREAK_EVENT）で `asyncio.Event` を立てて
+  安全に停止する。`--normalize-legacy-jobs` で旧jobの正規化のみ実行して終了できる。
+- 旧jobの正規化 `app/market_data/infrastructure/normalize.py` の `normalize_legacy_jobs`。
+  旧方式のまま残る `status IN (running, validating)` の `backfill_job` を `queued` に戻す。
+  既に新方式cursor（`next_fetch_at`）を持つ行は初期化しない（再実行可能）。移行前後を
+  `AuditLog` に記録する。Worker通常起動時には自動実行しない（明示的な運用操作として分離）。
+- API内実行の除去: `app/main.py` の lifespan（`MarketDataPollingWorker`起動/停止）と、
+  `app/api/routes/market_data.py` の `create_candle_backfill` からの `BackgroundTasks`
+  即時dispatchを削除。`app/services/market_data.py` から `MarketDataPollingWorker`/
+  `run_backfill_job`/`_run_owned_backfill_job` を削除した。
+- **実装中に発見した既存バグを修正**: `ensure_no_overlapping_backfill` が呼んでいた
+  `recover_interrupted_backfills`（5分経過かつ旧advisory lockを取れないjobをfailedにする
+  処理）を削除した。新Workerはこの旧advisory lockを一切取らないため、削除しないまま
+  切替すると、leaseで正常に稼働中のjobが5分後に誤ってfailed化される欠陥があった。
+  DB設計書が指示する「5分経過failed化処理は切替時に外し、lease回復へ一本化する」を満たす。
+- `scripts/start_local.py` を最小限更新。`commands()` が3番目のプロセスとしてWorkerを返す。
+  `run_once()` に `critical_count`（既定2）を追加し、API/画面（先頭2プロセス）の異常終了のみ
+  致命的とし、Worker（3番目）が単独で終了（例: migration未適用）してもAPI/画面は継続する
+  よう安全弁を設けた。Worker専用の45秒停止猶予の個別化、取得中/retry/blocked表示、
+  個別再起動の作り分けは⑤に残す。
+
+検証結果（2026-09-15）:
+
+- backend全203件成功（非DB199件、うちWorkerランナーの新規テストはDBなしで7件+8件）。
+  一時的な専用PostgreSQL 18.6（127.0.0.1:55432、`initdb`で作成しテスト後に停止・破棄）で
+  `test_worker_leases_postgres.py`/`test_worker_lease_contracts.py`/`test_worker_pages.py`
+  （既存84件、無変更で成功）と新規 `test_worker_runner_postgres.py`（5件）を実行し、
+  全89件成功。新規DB試験は候補探索の順序・除外条件、claim後に`status='running'`へ変わった
+  backfillが探索から漏れないことの回帰試験（実装中に発見した実バグの再発防止）、
+  `normalize_legacy_jobs`の冪等性、`ensure_no_overlapping_backfill`修正後にlease稼働中jobが
+  誤ってfailedにならないことの回帰、`WorkerRunner`を実DB・実LeaseStore/PageStore/
+  ExecuteMarketDataPageに接続した実際のbackfill完走（複数ページ・完了・candle保存）を含む。
+  外部取引所APIは架空のfixtureのみで、実OANDA/Binance通信は行っていない。
+- 全体Ruff lint・format、変更ファイルformat差分確認、mypy（既定・`--platform win32`)
+  48ファイル成功（テスト自体はmypy対象外という既存方針を維持）。
+- Python wheel buildで `app/market_data/worker/`・`app/market_data/infrastructure/
+  candidates.py`・`normalize.py` の同梱を確認した（`pyproject.toml`は無変更で足りた）。
+- frontendは無変更。`npm run lint`・`npm run build`（vite build）成功で影響なしを確認した。
+- NOT VERIFIED: 運用DB（利用者の`.env`が指すDB）への`20260831_0005`適用と
+  `normalize_legacy_jobs`の実行、実OANDA/Binance通信、GitHub Actions上のCI実行結果。
+  `scripts/start_local.py`経由での実地起動（3プロセス同時起動・Worker単独終了時の継続動作）も
+  対話的launcherのため自動試験の対象外（ユニットテストでrun_once()のロジックのみ確認）。
+  Worker停止猶予の45秒個別化は未実装のまま（一律10秒を維持）。
+
+④以降（⑤）での確認事項: 運用DBへの実際のmigration適用・切替、`start-local.bat`経由の
+3プロセス実地起動確認、取得中/retry予定/blocked状態のUI表示、API/画面のみの再起動と
+Worker単独再起動の作り分け、Worker停止猶予の45秒化。
 
 ### 品質チェックの追補（2026-08-31）
 

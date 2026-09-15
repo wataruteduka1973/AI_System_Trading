@@ -10,7 +10,6 @@ from app.api.routes import market_data as routes
 from app.market_data.application import use_cases as cases
 from app.models.catalog import AuditLog, BackfillJob, MarketDataSubscription
 from app.schemas.catalog import CandleBackfillCreate, Timeframe
-from fastapi import BackgroundTasks
 from sqlalchemy.dialects import postgresql
 
 
@@ -140,16 +139,15 @@ def test_enqueue_persists_job_and_audit_before_return(monkeypatch) -> None:
     db.commit.assert_called_once()
 
 
-def test_failed_enqueue_never_dispatches_background_work(monkeypatch) -> None:
-    db, tasks = MagicMock(), BackgroundTasks()
+def test_failed_enqueue_rolls_back_without_committing(monkeypatch) -> None:
+    db = MagicMock()
     db.commit.side_effect = RuntimeError("commit failed")
     monkeypatch.setattr(cases, "ensure_no_overlapping_backfill", MagicMock())
     monkeypatch.setattr(routes, "_validate_collection_configuration", MagicMock())
     with pytest.raises(RuntimeError, match="commit failed"):
         routes.create_candle_backfill(
-            uuid4(), CandleBackfillCreate(instrument_id=uuid4()), tasks, db, "owner"
+            uuid4(), CandleBackfillCreate(instrument_id=uuid4()), db, "owner"
         )
-    assert tasks.tasks == []
     db.rollback.assert_called_once()
 
 

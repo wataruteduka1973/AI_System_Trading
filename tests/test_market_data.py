@@ -1,7 +1,6 @@
-import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
@@ -13,12 +12,9 @@ from app.services.market_data import (
     CandleIngestionService,
     IngestionReport,
     MarketDataAccessError,
-    MarketDataPollingWorker,
     classify_candle_coverage,
     find_internal_gaps,
-    market_data_error_code,
     persist_internal_gaps,
-    recover_interrupted_backfills,
 )
 
 
@@ -45,52 +41,6 @@ def test_supported_timeframes_have_expected_duration() -> None:
 def test_unsupported_timeframe_is_rejected() -> None:
     with pytest.raises(ValueError, match="Unsupported timeframe"):
         timeframe_delta("2m")
-
-
-@pytest.mark.parametrize("owned", [True, False])
-def test_interrupted_backfill_recovery_preserves_active_owner(owned: bool) -> None:
-    job = MagicMock(id=uuid4(), status="running")
-    db = MagicMock()
-    db.scalars.return_value.all.return_value = [job]
-    db.scalar.return_value = not owned
-    start = datetime(2026, 8, 25, tzinfo=UTC)
-    recover_interrupted_backfills(db, uuid4(), uuid4(), "1m", start, start + timedelta(days=1))
-    if owned:
-        assert job.status == "running"
-        db.add.assert_not_called()
-    else:
-        assert job.status == "failed"
-        assert job.error_code == "worker_interrupted"
-        assert job.finished_at is not None
-        audit = db.add.call_args.args[0]
-        assert audit.action == "candle.backfill_recovered"
-        assert audit.resource_id == job.id
-        assert audit.correlation_id is not None
-    db.flush.assert_called_once()
-
-
-def test_disabled_subscription_is_rechecked_before_polling() -> None:
-    db = MagicMock()
-    subscription = MagicMock(enabled=False)
-    asyncio.run(MarketDataPollingWorker()._poll_subscription(db, subscription, datetime.now(UTC)))
-    db.refresh.assert_called_once_with(subscription)
-    db.commit.assert_not_called()
-
-
-def test_backfill_owner_lock_is_released_on_failure(monkeypatch) -> None:
-    from app.services import market_data
-
-    owner = MagicMock()
-    owner.scalar.return_value = True
-    connection = MagicMock()
-    connection.connect.return_value.__enter__.return_value = owner
-    monkeypatch.setattr(market_data, "engine", connection)
-    monkeypatch.setattr(
-        market_data, "_run_owned_backfill_job", AsyncMock(side_effect=RuntimeError("test failure"))
-    )
-    with pytest.raises(RuntimeError, match="test failure"):
-        asyncio.run(market_data.run_backfill_job(uuid4()))
-    assert "pg_advisory_unlock" in str(owner.execute.call_args.args[0])
 
 
 def test_oanda_parser_keeps_final_midpoint_candle() -> None:
@@ -132,8 +82,8 @@ def test_binance_parser_keeps_trade_count_and_final_state() -> None:
     assert str(candle.volume) == "1.25"
 
 
-def test_configuration_errors_are_safe_codes() -> None:
-    assert market_data_error_code(MarketDataAccessError("secret details")) == "configuration_error"
+def test_access_errors_default_to_a_safe_configuration_error_code() -> None:
+    assert MarketDataAccessError("secret details").code == "configuration_error"
 
 
 def test_changed_encryption_key_has_an_actionable_safe_error(tmp_path) -> None:
@@ -146,7 +96,7 @@ def test_changed_encryption_key_has_an_actionable_safe_error(tmp_path) -> None:
     service = CandleIngestionService(MagicMock(), replacement)
     with pytest.raises(MarketDataAccessError) as error:
         service._load_credentials(MagicMock(secret_ref=reference))
-    assert market_data_error_code(error.value) == "credentials_unreadable"
+    assert error.value.code == "credentials_unreadable"
     assert "private" not in str(error.value)
 
 

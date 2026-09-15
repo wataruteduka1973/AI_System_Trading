@@ -1,7 +1,11 @@
 # 独立Market Data Worker 詳細設計
 
 - 設計日: 2026-08-31
-- 状態: DB/leaseおよび区間取得Applicationを実装。既存経路との切替・独立Worker稼働は未実装。
+- 状態: DB/lease・区間取得Application・独立Worker（`app/market_data/worker/`）を実装し、
+  既存経路（lifespanポーラー、BackgroundTasks即時実行）から切替済み（2026-09-15）。
+  検証は専用PostgreSQLのみ。運用DBへのmigration適用・実OANDA/Binance通信・
+  `start-local.bat`経由の実地起動確認は未実施。詳細は
+  [実装計画](../../plans/durable-market-data-worker.md)の「④の実装と検証範囲」。
 - 対象: Horizon 1。OANDA Practice / Binance Spot Testnetの市場データのみ。
 - DB契約: [DB変更・移行計画](../database/durable-market-data-worker.md)
 - 実装順序・検証: [実装計画](../../plans/durable-market-data-worker.md)

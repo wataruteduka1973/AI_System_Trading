@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -27,11 +27,7 @@ from app.schemas.catalog import (
     Timeframe,
 )
 from app.security.auth import require_owner
-from app.services.market_data import (
-    CandleIngestionService,
-    MarketDataAccessError,
-    run_backfill_job,
-)
+from app.services.market_data import CandleIngestionService, MarketDataAccessError
 from app.services.secrets import get_secret_store
 
 router = APIRouter()
@@ -86,7 +82,6 @@ def _require_instrument_access(db: Session, workspace_id: UUID, instrument_id: U
 def create_candle_backfill(
     workspace_id: UUID,
     payload: CandleBackfillCreate,
-    background_tasks: BackgroundTasks,
     db: DatabaseSession,
     _: Owner,
 ) -> BackfillJob:
@@ -99,7 +94,6 @@ def create_candle_backfill(
             ),
             _validate_collection_configuration,
         )
-    background_tasks.add_task(run_backfill_job, job.id)
     return job
 
 

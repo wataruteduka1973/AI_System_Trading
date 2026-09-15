@@ -1,6 +1,6 @@
 # アーキテクチャ整合性調査と長期開発ロードマップ
 
-- 最終確認日: 2026-08-31
+- 最終確認日: 2026-09-15
 - 対象: `AI_System_Trading`
 - 計画期間: 約 12〜18 か月を見通す段階計画
 - 現在地: 市場データ観測基盤の構築段階（実資金を扱わない）
@@ -70,8 +70,8 @@
 
 - 開発用Owner tokenのみで、OIDCとOwner/Operator/ViewerのRBACは未実装
 - Secret Managerではなくローカル暗号化ファイルを使用
-- 市場データWorkerがWebプロセス内で動作し、再起動耐性と多重起動制御が限定的
-- バックグラウンド状態がプロセスローカルで、永続lease、retry、stale recoveryが未完成
+- 市場データWorkerは独立プロセス化・永続lease/retry/stale recoveryを実装したが、
+  専用PostgreSQLでの検証のみで運用DBへは未切替（`start-local.bat`経由の実地起動も未確認）
 - APIルート、catalogモデル、市場データサービス、`frontend/src/App.tsx`への責務集中
 - `app`と`src/ai_system_trading`の二重パッケージ構造
 - Event Log、Outbox、通知、再開可能なリアルタイム配信の未実装
@@ -91,7 +91,7 @@
 | ローソク足UI | 操作可能 | クロスヘア、パン、ズーム、追加読込、状態表示 | 実装済み |
 | リアルタイム配信 | 未実装 | WebSocket/stream ticketなし | 未着手 |
 | OIDC/RBAC | 未実装 | 開発用Owner token | 移行必須 |
-| Durable Worker | 未実装 | Web lifespan内polling | 移行必須 |
+| Durable Worker | 実装済み、運用DB未切替 | `app/market_data/worker/`、専用PostgreSQLで検証 | 運用DB適用が残る |
 | 戦略・リスク・Bot | 未実装 | 対応モデル/APIなし | 後続 |
 | Paper注文・約定・台帳 | 未実装 | 対応モデル/APIなし | 後続 |
 | バックテスト | 未実装 | 対応モデル/APIなし | 後続 |
@@ -106,7 +106,7 @@
 | MVP範囲 | Paper Tradingまでを広く含む | 観測基盤に集中 | 意図的な段階化 | 現在の順序を維持する |
 | 認証 | OIDC + RBAC | Dev Owner token | 暫定差分 | 外部配布・複数利用者より前に置換する |
 | 秘密管理 | Deployment Secret Manager | ローカル暗号化Store | 環境別差分 | ローカルは維持、配布環境ではSecret Manager必須 |
-| Worker | 独立Market Data/Bot/Notification Worker | Webプロセス内poller | 設計負債 | 次の基盤フェーズで独立化する |
+| Worker | 独立Market Data/Bot/Notification Worker | Market Dataは独立プロセス化済み（運用DB未切替）、Bot/Notificationは未着手 | 部分解消 | Bot/Notification Workerは各機能着手時に追加する |
 | ジョブ基盤 | Queue/Workerを想定 | PostgreSQLジョブとプロセス内処理 | 適応的変更 | まずPostgreSQL lease方式。負荷根拠が出るまでRedis等を増やさない |
 | 市場データ | WebSocket主体、REST補完 | REST履歴・polling主体 | 順序変更 | 履歴品質を閉じてからrealtimeへ進む |
 | イベント配信 | 汎用 `/api/v1/stream` | 未実装 | 未到達 | 短命one-time ticketと再開可能sequenceを採用候補とする |
@@ -181,15 +181,21 @@
 
 ### Horizon 1: Application境界とDurable Worker（1〜3か月）
 
-状態: `[~]` 最初のApplication境界抽出を実装。詳細は
-`market-data-application-boundary.md`。独立Worker・再起動耐性は未実装。
+状態: `[~]` Application境界抽出と独立Worker（①〜④）を実装。運用DBへの切替と
+⑤（bat/UI）は未実施。詳細は `market-data-application-boundary.md` と
+`durable-market-data-worker.md`。
 
 2026-08-31: ①Worker詳細設計・DB変更計画を作成。
 `durable-market-data-worker.md` と、そこから参照する `docs/design/` の2文書を正とする。
 続いて②の追加Alembic/Worker専用ORMとlease取得・更新・失効処理を実装し、専用PostgreSQLで試験した。
 ③区間実行Applicationも追加し、区間保存・利用資格再確認・中断後の再開を専用DBで検証。
-運用DBへのmigration適用・既存Worker切替は未実施。次は④独立プロセスと切替。
-独立Worker全体や再起動後の取得復旧の実装完了ではない。
+
+2026-09-15: ④独立プロセスと切替を実装。候補探索、公平な巡回、heartbeat、signals、
+API内実行（lifespanポーラー、BackgroundTasks即時実行）の除去、旧jobの正規化を実装し、
+専用PostgreSQLで検証した。実装中に`ensure_no_overlapping_backfill`の既存バグ
+（leaseで稼働中のjobを5分後に誤ってfailed化する）を発見・修正した。
+運用DBへの`20260831_0005`適用・実OANDA/Binance通信・`start-local.bat`経由の実地起動確認は
+未実施。次は⑤起動/表示/実地試験。独立Worker全体の運用DB切替や実地確認の完了ではない。
 
 2026-08-30の利用者判断: OANDA APIキーを生成できないため、Horizon 0のOANDA実データ確認は
 延期（NOT VERIFIED）。Binance取得は利用者から成功報告あり。この残件を明示して、
@@ -205,10 +211,13 @@ Application抽出を先行する。OANDA確認やHorizon 1全体を完了扱い�
 - `[x]` backfill受付、coverage範囲解決、subscription変更をApplication Use Caseへ切り出す。
   取得実行・coverageの低水準計算は既存serviceへ委譲し、Worker移行時の共通入口整備は次単位で行う。
 - `catalog.py` をWorkspace、Connection、Instrument、Market Data単位へ段階分割する
-- Web lifespan内Workerを独立プロセスへ移す
-- PostgreSQL advisory lockまたはlease、heartbeat、retry、stale recovery、graceful shutdownを実装する
-- 同一Workspace・銘柄・timeframeの多重処理をDB境界で抑止する
-- APIプロセス再起動時にもジョブの状態と再開判断が失われないようにする
+- `[x]` Web lifespan内Workerを独立プロセスへ移す（`app/market_data/worker/`、専用PostgreSQLで検証。
+  運用DBへの切替・`start-local.bat`経由の実地起動確認は未実施）
+- `[x]` PostgreSQL lease、heartbeat、retry、stale recovery、graceful shutdownを実装する
+  （Worker停止猶予45秒の個別化のみ⑤へ残す。一律10秒の暫定値で動作）
+- `[x]` 同一Workspace・銘柄・timeframeの多重処理をDB境界で抑止する（②のfeed lease機構）
+- `[x]` APIプロセス再起動時にもジョブの状態と再開判断が失われないようにする
+  （Worker・APIが完全に独立プロセス化されたことで達成。専用PostgreSQLで検証、運用DB未検証）
 - frontendのAPI client、feature state、画面componentを機能単位へ分割する
 - `app`と`src/ai_system_trading`の役割を確定し、単一runtime packageへ移行する
 
@@ -399,9 +408,10 @@ Application抽出を先行する。OANDA確認やHorizon 1全体を完了扱い�
    backfill受付、coverage範囲解決、subscription変更を抽出。検証結果と既存整形不一致などの制限は
    `market-data-application-boundary.md` に記載。取得実行の共通入口とWorker移行は次単位。
 
-3. **Durable Workerの導入**（次の実装単位）
-   ①詳細設計・②DB/lease・③ページ単位保存は実装・専用DB試験済み。
-   次は独立プロセス、切替、起動batへ進む。詳細は `durable-market-data-worker.md`。
+3. **Durable Workerの導入**（④まで実装済み、⑤が次単位）
+   ①詳細設計・②DB/lease・③ページ単位保存・④独立プロセスと切替は実装・専用DB試験済み。
+   次は⑤起動bat3プロセス化、取得中/retry/blocked表示、実地確認。詳細は
+   `durable-market-data-worker.md`。運用DBへの`20260831_0005`適用は未実施。
 
 Paper Tradingの詳細設計は2と3に並行して作成できるが、実装開始はDurable Workerとデータ品質の完了後とする。
 

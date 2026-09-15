@@ -47,13 +47,14 @@ def test_commands_use_project_python_fixed_ports_and_no_reload(tmp_path, monkeyp
     vite.parent.mkdir(parents=True)
     vite.touch()
     monkeypatch.setattr(launcher.shutil, "which", lambda _: "node.exe")
-    backend, frontend = launcher.commands(tmp_path)
+    backend, frontend, worker = launcher.commands(tmp_path)
     assert backend[:4] == [sys.executable, "-m", "uvicorn", "app.main:app"]
     assert "--reload" not in backend
     assert frontend[1] == str(vite)
     assert "--strictPort" in frontend
     assert backend[backend.index("--host") + 1] == "127.0.0.1"
     assert frontend[frontend.index("--host") + 1] == "127.0.0.1"
+    assert worker == [sys.executable, "-m", "app.market_data.worker"]
 
 
 def test_missing_env_is_actionable(tmp_path) -> None:
@@ -109,6 +110,36 @@ def test_unexpected_exit_stops_other_server(tmp_path, monkeypatch) -> None:
         launcher.run_once(tmp_path, [["backend"], ["frontend"]], False)
     failed.send_signal.assert_not_called()
     remaining.send_signal.assert_called_once()
+
+
+def test_non_critical_worker_exit_does_not_stop_api_or_frontend(tmp_path, monkeypatch) -> None:
+    backend, frontend, worker = MagicMock(), MagicMock(), MagicMock()
+    backend.poll.return_value = None
+    frontend.poll.return_value = None
+    worker.poll.return_value = 1
+    monkeypatch.setattr(launcher, "check_ports", lambda: None)
+    monkeypatch.setattr(
+        launcher.subprocess, "Popen", MagicMock(side_effect=[backend, frontend, worker])
+    )
+    monkeypatch.setattr(launcher, "ready", lambda: False)
+    keys = iter(["", "q"])
+    monkeypatch.setattr(launcher, "read_key", lambda: next(keys))
+    assert launcher.run_once(tmp_path, [["backend"], ["frontend"], ["worker"]], False) is False
+    backend.send_signal.assert_called_once()
+    frontend.send_signal.assert_called_once()
+    worker.send_signal.assert_not_called()
+
+
+def test_worker_command_runs_from_project_root(tmp_path, monkeypatch) -> None:
+    processes = [MagicMock(), MagicMock(), MagicMock()]
+    for process in processes:
+        process.poll.return_value = None
+    launch = MagicMock(side_effect=processes)
+    monkeypatch.setattr(launcher.subprocess, "Popen", launch)
+    monkeypatch.setattr(launcher, "check_ports", lambda: None)
+    monkeypatch.setattr(launcher, "read_key", lambda: "q")
+    launcher.run_once(tmp_path, [["backend"], ["frontend"], ["worker"]], False)
+    assert launch.call_args_list[2].kwargs["cwd"] == tmp_path
 
 
 def test_unresponsive_owned_process_is_killed_after_grace_period() -> None:

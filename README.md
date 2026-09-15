@@ -71,10 +71,11 @@ npm run dev
 ### Windowsでまとめて起動・再起動
 
 初回セットアップ後は、プロジェクト直下の **`start-local.bat` をダブルクリック**してください。
-バックエンドとフロントエンドを1つのウィンドウで起動し、準備ができたらブラウザーを開きます。
+バックエンド・フロントエンド・市場データWorkerの3プロセスを1つのウィンドウで起動し、
+準備ができたらブラウザーを開きます。
 
-- 起動ウィンドウで **R**: 両方を停止して再起動（Enter不要）。コード変更後も利用できます。
-- **Q** または **Ctrl+C**: この起動操作で開始した両方のサーバーを停止して終了。
+- 起動ウィンドウで **R**: すべてのプロセスを停止して再起動（Enter不要）。コード変更後も利用できます。
+- **Q** または **Ctrl+C**: この起動操作で開始したプロセスを停止して終了。
 - ウィンドウの×や強制終了ではなく、Qで終了してください。
 - `start-local.bat --check`: 環境・ポートだけ確認し、起動しません（DB接続は確認しません）。
 - `start-local.bat --no-browser`: ブラウザーを自動で開かず起動します。
@@ -85,9 +86,12 @@ PostgreSQLはあらかじめ起動してください。依存関係のインス�
 
 8000/5173番ポートが使用中なら起動を中止します。以前の手動起動サーバーは、そのターミナルで
 停止してからbatを起動してください。他のプロセスを勝手に終了したり、別ポートへ変更したりしません。
-両サーバーはローカルPCだけに公開します。バックエンドの自動リロードは使わず、Rで再起動します。
-起動すると既存の自動取得設定に従ってデータ取得も再開します。再起動中の手動過去取得は中断され得ます
-（再起動からの自動復旧は次のDurable Worker工程）。
+すべてローカルPCだけに公開します。バックエンドの自動リロードは使わず、Rで再起動します。
+
+市場データの自動取得は独立したWorkerプロセスが行います（`docs/plans/durable-market-data-worker.md`）。
+DBが必須のAlembicリビジョン（`20260831_0005`）に達していない場合、Workerだけが起動直後に
+終了し、API・画面は通常どおり使えます（自動取得だけが止まります）。取得中/retry予定/blocked状態の
+画面表示、Worker単独の再起動操作は今後の工程です。
 
 ### 初期API
 
@@ -137,16 +141,24 @@ Windows用分岐も確認する場合は `python -m mypy --platform win32` を�
 
 ### Worker DB基盤の統合試験（開発者向け）
 
-新WorkerのDB基盤とページ単位の取得・再開処理は、まだ既存の取得経路に接続していません。
-画面やbatの再起動挙動は従来どおりです。追加migration `20260831_0005` を
-運用DBへ適用する前に、`docs/plans/durable-market-data-worker.md` の切替手順を確認してください。
+市場データWorker（`app/market_data/worker/`、`python -m app.market_data.worker`で起動）は
+既存の取得経路（旧lifespanポーラー、BackgroundTasks即時実行）を置き換え済みです。
+運用DB（`.env`の`DATABASE_URL`）へ追加migration `20260831_0005` を適用する前に、
+`docs/plans/durable-market-data-worker.md` の切替手順を必ず確認してください。
+未適用のDBに対してWorkerは候補処理を開始せず、安全なエラーを出して終了します。
 
 試験は **空の専用PostgreSQLデータベース**（名前は `worker_test_` で始める）で実行します。
 運用の `DATABASE_URL` は使わず、`WORKER_TEST_DATABASE_URL` に専用DBの接続先を設定して
-`python -m pytest tests/test_worker_leases_postgres.py tests/test_worker_lease_contracts.py tests/test_worker_pages.py` を実行します。
-この試験はDDL作成と0005のdowngrade/upgradeを行います。既存テーブルがあるDBは拒否します。
-再実行には新しい空の専用DBを用意してください。試験はDBを自動削除しません。
+`python -m pytest tests/test_worker_leases_postgres.py tests/test_worker_lease_contracts.py tests/test_worker_pages.py tests/test_worker_runner_postgres.py` を実行します。
+`test_worker_runner_postgres.py` は指定したDBの名前に `_runner_<乱数>` を付けた
+使い捨てDBを自動作成・削除するため、指定するDB自体は空である必要はありますが、
+テスト終了後に自動で片付きます。他のファイルはDDL作成と0005のdowngrade/upgradeを行い、
+既存テーブルがあるDBを拒否します。再実行には新しい空の専用DBを用意してください
+（このファイルはDBを自動削除しません）。
 環境変数がない場合、PostgreSQL統合試験はskipされます（合格を意味しません）。
+Worker本体の単体試験（signal処理、リビジョン確認、公平な巡回ロジック）は
+`tests/test_worker_main.py` / `tests/test_worker_runner.py` にあり、DB不要で通常の
+`python -m pytest` に含まれます。
 
 ## ディレクトリ構成
 

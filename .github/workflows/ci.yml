@@ -61,7 +61,7 @@ jobs:
       - name: Test worker storage on PostgreSQL
         env:
           WORKER_TEST_DATABASE_URL: postgresql+psycopg://worker_test:worker_test@127.0.0.1:5432/worker_test_ci
-        run: python -m pytest tests/test_worker_leases_postgres.py tests/test_worker_lease_contracts.py tests/test_worker_pages.py
+        run: python -m pytest tests/test_worker_leases_postgres.py tests/test_worker_lease_contracts.py tests/test_worker_pages.py tests/test_worker_runner_postgres.py
 
   frontend:
     runs-on: ubuntu-latest
