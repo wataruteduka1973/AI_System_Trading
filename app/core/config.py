@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     worker_fetch_timeout_seconds: float = 30
     worker_candidate_limit: int = 500
     worker_recover_limit: int = 100
+    log_dir: Path = Path("logs")
+    log_level: str = "INFO"
+    log_rotation_max_bytes: int = 10 * 1024 * 1024
+    log_rotation_backup_count: int = 5
 
     @field_validator("cors_origins", mode="before")
     @classmethod
