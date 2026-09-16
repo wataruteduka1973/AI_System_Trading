@@ -63,6 +63,15 @@ jobs:
           WORKER_TEST_DATABASE_URL: postgresql+psycopg://worker_test:worker_test@127.0.0.1:5432/worker_test_ci
         run: python -m pytest tests/test_worker_leases_postgres.py tests/test_worker_lease_contracts.py tests/test_worker_pages.py tests/test_worker_runner_postgres.py
 
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run gitleaks
+        run: |
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest \
+            detect --no-git --source="/repo" --config="/repo/.gitleaks.toml" --redact --exit-code 1 -v
+
   frontend:
     runs-on: ubuntu-latest
     defaults:
