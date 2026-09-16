@@ -30,7 +30,7 @@ numpy>=2.5.2,<3
 pandas>=3.0.5,<4
 scipy>=1.15,<2
 scikit-learn>=1.9.0,<2
-joblib>=1.4,<2
+joblib>=1.5.3,<2
 torch>=2.13.0,<3
 
 # Structured event logging and metrics
