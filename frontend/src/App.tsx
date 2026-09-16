@@ -17,6 +17,7 @@ import ConnectionsPanel, { ConnectionRegistrationForms } from './features/connec
 import { useMarketData } from './features/market-data/useMarketData'
 import MarketDataPanel from './features/market-data/MarketDataPanel'
 import { apiBaseUrl } from './lib/api'
+import { setOwnerTokenForErrorReporting } from './lib/errorReporting'
 import './App.css'
 
 function App() {
@@ -25,6 +26,9 @@ function App() {
   const route = resolveAppRoute(location.pathname)
   const { apiHealth, dbHealth, refreshHealth } = useHealth()
   const [ownerToken, setOwnerToken] = useState('')
+  useEffect(() => {
+    setOwnerTokenForErrorReporting(ownerToken)
+  }, [ownerToken])
   const instruments = useInstruments(ownerToken)
   const {
     workspaceInstruments,
