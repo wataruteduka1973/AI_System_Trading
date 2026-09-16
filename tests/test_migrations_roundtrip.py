@@ -34,10 +34,15 @@ def migrate(engine, revision, downgrade=False):
 
 
 def non_system_table_count(connection) -> int:
+    # Excludes alembic_version: Alembic creates this bookkeeping table itself
+    # (outside any of our own migrations) to track the current revision, and
+    # does not drop it on a downgrade to base -- that is expected Alembic
+    # behavior, not a leftover object from one of *our* migrations.
     return connection.scalar(
         text(
             "SELECT count(*) FROM information_schema.tables "
-            "WHERE table_schema NOT IN ('pg_catalog','information_schema')"
+            "WHERE table_schema NOT IN ('pg_catalog','information_schema') "
+            "AND table_name != 'alembic_version'"
         )
     )
 
@@ -61,9 +66,12 @@ def test_full_chain_upgrade_downgrade_roundtrip(engine):
     # base -> head: every migration's upgrade() must apply cleanly to an empty database.
     migrate(engine, "head")
     with engine.connect() as connection:
-        assert connection.scalar(
-            text("SELECT count(*) FROM information_schema.schemata WHERE schema_name = 'fx'")
-        ) == 1
+        assert (
+            connection.scalar(
+                text("SELECT count(*) FROM information_schema.schemata WHERE schema_name = 'fx'")
+            )
+            == 1
+        )
         assert non_system_table_count(connection) > 0
 
     # head -> base: every migration's downgrade() must apply cleanly, ending fully empty.
@@ -82,7 +90,21 @@ def test_full_chain_upgrade_downgrade_roundtrip(engine):
     with engine.connect() as connection:
         assert non_system_table_count(connection) > 0
 
-    # Leave the database empty for the next test file in this CI job.
+    # Leave the database empty for the next test file in this CI job. This
+    # drops alembic_version too (see non_system_table_count above): the other
+    # files in this CI job check emptiness with their own literal query, not
+    # this helper, so the table must actually be gone, not just excluded here.
     migrate(engine, "base", downgrade=True)
     with engine.connect() as connection:
+        connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
+        connection.commit()
         assert non_system_table_count(connection) == 0
+        assert (
+            connection.scalar(
+                text(
+                    "SELECT count(*) FROM information_schema.tables "
+                    "WHERE table_schema NOT IN ('pg_catalog','information_schema')"
+                )
+            )
+            == 0
+        )
