@@ -119,7 +119,10 @@ def run_once(
     longer stop grace period (`worker_stop_timeout`) since a page in flight can take longer."""
     check_ports()
     directories = (root, root / "frontend") + (root,) * (len(launch_commands) - 2)
-    creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+    if sys.platform == "win32":
+        creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        creation_flags = 0
     critical_processes: list[subprocess.Popen] = []
     worker_processes: list[subprocess.Popen] = []
     try:
