@@ -79,12 +79,13 @@ describe('installGlobalErrorReporting', () => {
     window.dispatchEvent(
       new ErrorEvent('error', { message: 'render blew up', error: new Error('render blew up') }),
     )
-    window.dispatchEvent(
-      new PromiseRejectionEvent('unhandledrejection', {
-        promise: Promise.reject(new Error('promise blew up')).catch(() => undefined),
-        reason: new Error('promise blew up'),
-      }),
-    )
+    // jsdom (the test DOM used by vitest here) does not implement the
+    // PromiseRejectionEvent constructor that real browsers use for this
+    // event, so build a plain Event and attach the fields the
+    // `unhandledrejection` listener actually reads (`reason`).
+    const rejectionEvent = new Event('unhandledrejection') as Event & { reason: unknown }
+    rejectionEvent.reason = new Error('promise blew up')
+    window.dispatchEvent(rejectionEvent)
 
     expect(request).toHaveBeenCalledTimes(2)
     const sources = request.mock.calls.map(([, options]) => {

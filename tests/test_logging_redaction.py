@@ -10,7 +10,10 @@ from app.core.logging import redact_sensitive_fields
 
 
 def test_redacts_known_sensitive_key() -> None:
-    event = {"event": "login_attempt", "api_key": "sk_live_abc123", "user": "alice"}
+    # Deliberately not a realistic-looking key (no "sk_live_"-style prefix):
+    # a value that reads as a real secret would itself trip this repo's
+    # gitleaks secret-scan CI job on this test file.
+    event = {"event": "login_attempt", "api_key": "not-a-real-secret-value", "user": "alice"}
 
     result = redact_sensitive_fields(None, "info", event)
 

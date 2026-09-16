@@ -1,9 +1,8 @@
-from fastapi.testclient import TestClient
-
 from app.core.config import Settings
 from app.core.logging import configure_logging, configure_named_log_file
 from app.main import app
 from app.security.auth import require_owner
+from fastapi.testclient import TestClient
 
 client = TestClient(app)
 

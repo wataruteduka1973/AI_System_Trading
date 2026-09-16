@@ -2,11 +2,10 @@
 log line in the rotating log file, and that line contains no request
 body / header content (only method/path/status/duration/request_id)."""
 
-from fastapi.testclient import TestClient
-
 from app.core.config import Settings
 from app.core.logging import configure_logging
 from app.main import app
+from fastapi.testclient import TestClient
 
 
 def test_request_is_written_to_log_file(tmp_path) -> None:
