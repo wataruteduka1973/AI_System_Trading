@@ -131,9 +131,7 @@ def configure_logging(settings: Settings, *, log_filename: str = "backend.log") 
     root_logger.handlers = [file_handler, stream_handler]
 
 
-def configure_named_log_file(
-    settings: Settings, *, logger_name: str, log_filename: str
-) -> None:
+def configure_named_log_file(settings: Settings, *, logger_name: str, log_filename: str) -> None:
     """Give one named logger its own dedicated rotating file, separate
     from the root logger's file (e.g. frontend-reported errors go to
     logs/frontend.log instead of logs/backend.log). The named logger does
