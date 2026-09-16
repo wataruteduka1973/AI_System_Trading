@@ -1,0 +1,16 @@
+# gitleaks configuration
+# https://github.com/gitleaks/gitleaks
+#
+# Extends gitleaks' built-in default ruleset (secret-provider patterns +
+# generic high-entropy detectors) rather than redefining rules from scratch.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known non-secret placeholders"
+paths = [
+  # Documents which env vars to set; contains only a placeholder value with
+  # instructions for generating a real key, never a real secret.
+  '''\.env\.example$''',
+]
