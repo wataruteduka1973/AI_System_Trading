@@ -1,0 +1,8 @@
+# Normalize line endings to LF in the repository regardless of the
+# committer's OS, so `git status`/`git diff` stop showing whole-file
+# line-ending-only noise on Windows checkouts.
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF since they are typically double-clicked
+# or run from cmd.exe, where LF-only files can behave oddly.
+*.bat text eol=crlf
