@@ -13,6 +13,7 @@ import sys
 from alembic.runtime.migration import MigrationContext
 
 from app.core.config import settings
+from app.core.logging import configure_logging
 from app.db.session import SessionLocal, engine
 from app.market_data.application.execute_page import ExecuteMarketDataPage
 from app.market_data.infrastructure.candidates import CandidateScanner
@@ -89,7 +90,7 @@ def _run_normalization() -> int:
 
 
 def main() -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    configure_logging(settings, log_filename="worker.log")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--normalize-legacy-jobs",
