@@ -20,7 +20,8 @@ from app.exchanges.oanda import (
     OandaPracticeClient,
     mask_account_id,
 )
-from app.models.catalog import AuditLog, Exchange, ExchangeConnection, ExternalAccount
+from app.models.audit import AuditLog
+from app.models.connections import Exchange, ExchangeConnection, ExternalAccount
 from app.services.secrets import LocalEncryptedSecretStore
 
 VerificationErrorCode = Literal[

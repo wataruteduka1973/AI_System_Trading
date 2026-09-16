@@ -20,7 +20,7 @@ from app.market_data.infrastructure.models import (
     WorkerBackfill,
     WorkerSubscription,
 )
-from app.models.catalog import AuditLog
+from app.models.audit import AuditLog
 
 WorkKind = Literal["backfill", "polling"]
 WorkRow = WorkerBackfill | WorkerSubscription

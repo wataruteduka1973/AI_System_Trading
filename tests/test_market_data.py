@@ -7,7 +7,7 @@ import pytest
 from app.exchanges.binance import BinanceSpotTestnetClient
 from app.exchanges.oanda import OandaPracticeClient
 from app.exchanges.types import CandlePoint, timeframe_delta
-from app.models.catalog import MarketDataGap
+from app.models.market_data import MarketDataGap
 from app.services.market_data import (
     CandleIngestionService,
     IngestionReport,

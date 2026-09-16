@@ -9,17 +9,16 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.catalog import (
-    AuditLog,
-    BackfillJob,
+from app.models.audit import AuditLog
+from app.models.connections import (
     Exchange,
     ExchangeConnection,
     ExternalAccount,
-    Instrument,
-    MarketDataSubscription,
-    Workspace,
     WorkspaceAccountSelection,
 )
+from app.models.instruments import Instrument
+from app.models.market_data import BackfillJob, MarketDataSubscription
+from app.models.workspace import Workspace
 from app.services.market_data import (
     DuplicateBackfillError,
     _advisory_lock_key,

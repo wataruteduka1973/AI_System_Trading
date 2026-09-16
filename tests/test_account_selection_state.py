@@ -3,12 +3,8 @@ from uuid import uuid4
 
 from app.db.session import get_db
 from app.main import app
-from app.models.catalog import (
-    Exchange,
-    ExchangeConnection,
-    ExternalAccount,
-    Workspace,
-)
+from app.models.connections import Exchange, ExchangeConnection, ExternalAccount
+from app.models.workspace import Workspace
 from app.security.auth import require_owner
 from fastapi.testclient import TestClient
 

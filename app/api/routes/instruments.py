@@ -22,17 +22,17 @@ from app.exchanges.oanda import (
     OandaPracticeClient,
     get_oanda_practice_client,
 )
-from app.models.catalog import (
-    AuditLog,
+from app.models.audit import AuditLog
+from app.models.connections import (
     Exchange,
     ExchangeConnection,
     ExternalAccount,
-    Instrument,
     Market,
-    Workspace,
     WorkspaceAccountSelection,
 )
-from app.schemas.catalog import WorkspaceInstrumentRead, WorkspaceInstrumentSyncRead
+from app.models.instruments import Instrument
+from app.models.workspace import Workspace
+from app.schemas.instruments import WorkspaceInstrumentRead, WorkspaceInstrumentSyncRead
 from app.security.auth import require_owner
 from app.services.secrets import LocalEncryptedSecretStore, get_secret_store
 

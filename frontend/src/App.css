@@ -321,14 +321,35 @@ button:disabled {
   padding: 0.85rem 1rem;
   border-radius: 12px;
   background: rgba(15, 31, 54, 0.72);
+  border-left: 4px solid #63b3ff;
 }
 
 .collection-status.enabled {
-  border-left: 4px solid #56d6b2;
+  border-left-color: #56d6b2;
 }
 
 .collection-status.disabled {
-  border-left: 4px solid #8ba0b8;
+  border-left-color: #8ba0b8;
+}
+
+.collection-status.blocked {
+  border-left-color: #ef5350;
+}
+
+.backfill-status.queued {
+  border-left-color: #8ba0b8;
+}
+
+.backfill-status.running {
+  border-left-color: #63b3ff;
+}
+
+.backfill-status.succeeded {
+  border-left-color: #56d6b2;
+}
+
+.backfill-status.failed {
+  border-left-color: #ef5350;
 }
 
 .chart-empty {

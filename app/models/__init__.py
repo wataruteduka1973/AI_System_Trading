@@ -1,18 +1,14 @@
-from app.models.catalog import (
-    AppUser,
-    AuditLog,
-    BackfillJob,
-    Candle,
+from app.models.audit import AuditLog
+from app.models.connections import (
     Exchange,
     ExchangeConnection,
     ExternalAccount,
-    Instrument,
     Market,
-    MarketDataGap,
-    MarketDataSubscription,
-    Workspace,
     WorkspaceAccountSelection,
 )
+from app.models.instruments import Instrument
+from app.models.market_data import BackfillJob, Candle, MarketDataGap, MarketDataSubscription
+from app.models.workspace import AppUser, Workspace
 
 __all__ = [
     "AppUser",

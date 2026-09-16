@@ -11,12 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.market_data.application import use_cases as market_data_application
-from app.models.catalog import (
-    BackfillJob,
-    Candle,
-    MarketDataSubscription,
-)
-from app.schemas.catalog import (
+from app.models.market_data import BackfillJob, Candle, MarketDataSubscription
+from app.schemas.market_data import (
     BackfillJobRead,
     CandleBackfillCreate,
     CandleCoverageRead,

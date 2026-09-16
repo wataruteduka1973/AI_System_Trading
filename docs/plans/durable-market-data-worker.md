@@ -1,12 +1,13 @@
 # Durable Worker 実装計画
 
 - 2026-08-31: ①設計・②DB/lease・③区間実行Applicationを実装。独立プロセスへの接続は未実施。
-- 2026-09-15: ④独立プロセスと切替を実装。詳細と検証結果は末尾「④の実装と検証範囲」。
-  旧実行経路（lifespanポーラー、BackgroundTasks即時実行）は削除済み。運用DBへの
-  migration適用・実OANDA/Binance通信・⑤のbat個別再起動/表示は未実施。
+- 2026-09-15: ④独立プロセスと切替を実装。旧実行経路（lifespanポーラー、BackgroundTasks即時実行）
+  は削除済み。運用DBへ`20260831_0005`を適用し実際に切替・稼働確認済み（利用者環境）。
+- 2026-09-16: ⑤起動/表示/実地試験を実装。詳細と検証結果は末尾「⑤の実装と検証範囲」。
+  Horizon 1「Application境界とDurable Worker」のWorker関連単位はこれで完了。
 - 設計: [Worker](../design/modules/durable-market-data-worker.md)
   / [DB・移行](../design/database/durable-market-data-worker.md)
-- 既存Application抽出・一括起動は維持。OANDA実データ試験は利用者判断により延期。
+- 既存Application抽出・一括起動は維持。
 
 ## 作業単位
 
@@ -19,8 +20,9 @@
 4. **独立プロセスと切替（実装済み、検証結果は末尾）**: Worker entry point、停止signals、
    API内実行の削除、設定とエラー変換。packaged runtime内にentry pointを置き、
    wheelからも起動可能にする。新しい第三者queueは不要。
-5. **起動/表示/実地試験**: 一括batを3プロセス化。API/画面のみの再起動と全体再起動を分ける。
-   retry予定とblockedの表示を追加し、enabledだけで「自動取得中」と断定しない。
+5. **起動/表示/実地試験（実装済み、検証結果は末尾）**: 一括batを3プロセス化。API/画面のみの
+   再起動と全体再起動を分ける。retry予定とblockedの表示を追加し、enabledだけで
+   「自動取得中」と断定しない。
 
 変更予定: `app/models/catalog.py`、新Alembic revision、`app/market_data/`、
 `app/services/market_data.py`、`app/api/routes/market_data.py`、`app/main.py`、
@@ -199,6 +201,58 @@ DB接続切断時のtransaction rollbackは確認済みだが、DB停止中を�
 ④以降（⑤）での確認事項: 運用DBへの実際のmigration適用・切替、`start-local.bat`経由の
 3プロセス実地起動確認、取得中/retry予定/blocked状態のUI表示、API/画面のみの再起動と
 Worker単独再起動の作り分け、Worker停止猶予の45秒化。
+
+2026-09-15: 利用者環境で実際に運用DBへ`20260831_0005`を適用し、Workerが起動・稼働することを
+確認した（本セッション中に実施）。適用直後の実地利用で「過去データ取得の進捗が画面から
+分からない」「自動取得が止まっているか判断できない」という実際のフィードバックがあり、
+これが⑤の実装動機になった。
+
+## ⑤の実装と検証範囲
+
+- バックエンド: `next_run_at`・`consecutive_failures`（`backfill_job`/`market_data_subscription`
+  共通）、`blocked_reason`（`market_data_subscription`のみ）を`app/models/catalog.py`の
+  API用ORM（`BackfillJob`/`MarketDataSubscription`）と`app/schemas/catalog.py`の
+  `BackfillJobRead`/`MarketDataSubscriptionRead`に追加。列は`20260831_0005`で既に存在し、
+  Worker専用ORM（`app/market_data/infrastructure/models.py`）が書き込み済みのため、
+  新規migrationなしの読み取り専用追加。ルート（`app/api/routes/market_data.py`）はORMを
+  そのまま返しているため無変更。内部cursor専用の`next_fetch_at`/`scan_to`は引き続き
+  API用ORMに追加しない（`tests/test_worker_lease_contracts.py`・
+  `tests/test_worker_leases_postgres.py`の既存ガード試験を、この意図的な境界に合わせて更新した）。
+- フロントエンド（`frontend/src/App.tsx`のみ、`CandleChart.tsx`は無関係のため無変更）:
+  - `marketErrorLabel`辞書に未登録だった7エラーコードの日本語文言を追加（既存4件は変更なし）。
+  - 購読状態表示に`blocked`状態を追加。`blocked_reason`が非nullなら`enabled`の値に関わらず
+    「自動取得停止中（要確認）」と表示し、停止理由と連続失敗回数を表示する。
+  - backfill状態表示にstatus別の左枠線色（`queued`/`running`/`succeeded`/`failed`）を追加し、
+    `status==='queued' && consecutive_failures>0`のとき次回再試行予定時刻を表示する。
+- `scripts/start_local.py`: `docs/design/modules/durable-market-data-worker.md` §6の設計どおり、
+  `critical_processes`（API/画面）と`worker_processes`（Worker）を分離。`R`はcriticalのみ
+  その場で停止・再起動（Workerには一切触れない）、`A`は全体再起動（戻り値`True`で従来どおり
+  呼び出し元が両グループを作り直す）、`Q`は全体停止。`finally`で`critical_processes`は
+  既定10秒、`worker_processes`は45秒の停止猶予を使う。Worker終了検知時の`[WARN]`表示は④から
+  維持し、"Ready:"表示にWorkerの状態（稼働中/停止・要確認）を追記した。
+
+検証結果（2026-09-16）:
+
+- backend全154件成功（非DB）＋専用PostgreSQLでの89件成功（既存84件+新規5件、無変更で成功）。
+  新規追加した`app/api/routes/market_data.py`経由の実シリアライズ試験2件
+  （`tests/test_market_data_api.py`）で、`next_run_at`/`consecutive_failures`/`blocked_reason`が
+  実ORMインスタンスから実際にJSON応答へ反映されることを確認した。
+- frontend: 新規2件を含む全13件のvitestが成功、`npm run lint`・`npm run build`成功。
+- `scripts/start_local.py`のテストを大幅更新（`R`のin-place再起動、`A`の全体再起動、
+  Workerが`R`で一切触れられないこと、`critical`10秒/Worker 45秒の停止猶予を個別に検証する
+  新規テストを追加）。既存の異常終了系・非致命化系のテストは無変更で成功。
+- 全体Ruff lint/format、mypy（既定・`--platform win32`）48ファイル成功。
+- **利用者環境の実DBで動作確認**: 新フィールドを実際のローカルDB（Alembicリビジョン
+  `20260831_0005`適用済み、実データ保有）に対して`BackfillJobRead`/`MarketDataSubscriptionRead`
+  へ実際にシリアライズし、正しい値が返ることを確認した。
+- **2026-09-16、利用者による実地確認**: `start-local.bat`を実際に起動し、R（API/画面のみ再起動）・
+  A（Worker含む全体再起動）・Q（停止）それぞれのキー動作を目視確認済み。
+- NOT VERIFIED: GitHub Actions上のCI実行結果、実OANDA/Binance通信を伴う画面表示の実地確認。
+
+これでHorizon 1「Application境界とDurable Worker」のうちWorker関連の作業単位（①〜⑤）は
+実装・専用DB検証・利用者環境での実DB切替まで完了した。`catalog.py`のモジュール分割、
+frontendのfeature単位分割、`app`/`src`パッケージ統一はHorizon 1の別課題として残る
+（詳細は`docs/architecture-alignment-and-long-term-roadmap.md`のHorizon 1節）。
 
 ### 品質チェックの追補（2026-08-31）
 

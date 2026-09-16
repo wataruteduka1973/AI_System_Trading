@@ -8,8 +8,9 @@ from app.api.routes import market_data as market_data_routes
 from app.db.session import get_db
 from app.main import app
 from app.market_data.application import use_cases as market_data_application
-from app.models.catalog import Candle, Workspace
-from app.schemas.catalog import MarketDataCollectionUpdate
+from app.models.market_data import BackfillJob, Candle, MarketDataSubscription
+from app.models.workspace import Workspace
+from app.schemas.market_data import MarketDataCollectionUpdate
 from app.security.auth import require_owner
 from app.services.market_data import MarketDataAccessError
 from fastapi.testclient import TestClient
@@ -110,6 +111,76 @@ def test_backfill_list_filters_timeframe_and_workspace() -> None:
     compiled = session.scalars.call_args.args[0].compile(dialect=postgresql.dialect())
     assert workspace_id in compiled.params.values()
     assert "5m" in compiled.params.values()
+
+
+def test_backfill_read_exposes_worker_retry_status() -> None:
+    workspace_id, instrument_id = uuid4(), uuid4()
+    now = datetime(2026, 9, 16, 3, 0, tzinfo=UTC)
+    job = BackfillJob(
+        id=uuid4(),
+        workspace_id=workspace_id,
+        instrument_id=instrument_id,
+        timeframe="1m",
+        from_time=now - timedelta(days=365),
+        to_time=now,
+        trigger_type="manual",
+        status="queued",
+        attempts=2,
+        rows_written=0,
+        validation_result={},
+        error_code=None,
+        started_at=None,
+        finished_at=None,
+        created_at=now,
+        next_run_at=now + timedelta(seconds=120),
+        consecutive_failures=2,
+    )
+    session = MagicMock()
+    session.get.return_value = Workspace(id=workspace_id, name="Personal", status="active")
+    session.scalars.return_value.all.return_value = [job]
+    _override_database(session)
+    try:
+        response = client.get(f"/api/v1/workspaces/{workspace_id}/candle-backfills")
+    finally:
+        app.dependency_overrides.clear()
+    assert response.status_code == 200
+    body = response.json()[0]
+    assert body["next_run_at"] == "2026-09-16T03:02:00Z"
+    assert body["consecutive_failures"] == 2
+
+
+def test_subscription_read_exposes_blocked_reason_and_retry_status() -> None:
+    workspace_id, instrument_id = uuid4(), uuid4()
+    now = datetime(2026, 9, 16, 3, 0, tzinfo=UTC)
+    subscription = MarketDataSubscription(
+        id=uuid4(),
+        workspace_id=workspace_id,
+        instrument_id=instrument_id,
+        timeframe="1m",
+        enabled=True,
+        poll_interval_seconds=60,
+        last_polled_at=now,
+        last_success_at=None,
+        last_error_code="communication_failed",
+        created_at=now,
+        updated_at=now,
+        next_run_at=now + timedelta(seconds=120),
+        consecutive_failures=3,
+        blocked_reason="communication_failed",
+    )
+    session = MagicMock()
+    session.get.return_value = Workspace(id=workspace_id, name="Personal", status="active")
+    session.scalars.return_value.all.return_value = [subscription]
+    _override_database(session)
+    try:
+        response = client.get(f"/api/v1/workspaces/{workspace_id}/market-data-subscriptions")
+    finally:
+        app.dependency_overrides.clear()
+    assert response.status_code == 200
+    body = response.json()[0]
+    assert body["blocked_reason"] == "communication_failed"
+    assert body["consecutive_failures"] == 3
+    assert body["next_run_at"] == "2026-09-16T03:02:00Z"
 
 
 def _override_database(session: MagicMock) -> None:

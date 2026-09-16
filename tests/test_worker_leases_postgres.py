@@ -30,7 +30,7 @@ from app.market_data.infrastructure.models import (
 )
 from app.market_data.infrastructure.page_access import PageAccess
 from app.market_data.infrastructure.pages import PageStore
-from app.models.catalog import BackfillJob, Candle, MarketDataSubscription
+from app.models.market_data import BackfillJob, Candle, MarketDataSubscription
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError, IntegrityError
@@ -584,10 +584,13 @@ def test_year_of_minute_candles_validation_budget(page_context):
 
 
 def test_migration_roundtrip_and_legacy_mapping(engine):
+    """Internal cursor state (next_fetch_at/scan_to) stays Worker-only; (5) deliberately
+    exposes next_run_at/consecutive_failures/blocked_reason on the legacy API mapping too."""
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260831_0005"
     assert "next_fetch_at" not in BackfillJob.__table__.c
-    assert "blocked_reason" not in MarketDataSubscription.__table__.c
+    assert "scan_to" not in MarketDataSubscription.__table__.c
+    assert "blocked_reason" in MarketDataSubscription.__table__.c
 
 
 def test_claim_heartbeat_and_graceful_release(context):

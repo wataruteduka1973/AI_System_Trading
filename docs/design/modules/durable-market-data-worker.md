@@ -3,9 +3,10 @@
 - 設計日: 2026-08-31
 - 状態: DB/lease・区間取得Application・独立Worker（`app/market_data/worker/`）を実装し、
   既存経路（lifespanポーラー、BackgroundTasks即時実行）から切替済み（2026-09-15）。
-  検証は専用PostgreSQLのみ。運用DBへのmigration適用・実OANDA/Binance通信・
-  `start-local.bat`経由の実地起動確認は未実施。詳細は
-  [実装計画](../../plans/durable-market-data-worker.md)の「④の実装と検証範囲」。
+  利用者環境の運用DBへ`20260831_0005`を適用し実際に稼働確認済み。⑤（起動bat個別再起動、
+  取得中/retry/blocked表示）も実装済み（2026-09-16）。`start-local.bat`経由のR/A/Qキー操作は
+  利用者が実地確認済み。実OANDA/Binance通信を伴う画面表示の実地確認は未実施。詳細は
+  [実装計画](../../plans/durable-market-data-worker.md)の「④」「⑤の実装と検証範囲」。
 - 対象: Horizon 1。OANDA Practice / Binance Spot Testnetの市場データのみ。
 - DB契約: [DB変更・移行計画](../database/durable-market-data-worker.md)
 - 実装順序・検証: [実装計画](../../plans/durable-market-data-worker.md)

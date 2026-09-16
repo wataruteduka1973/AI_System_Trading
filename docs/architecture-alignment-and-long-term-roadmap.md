@@ -70,10 +70,7 @@
 
 - 開発用Owner tokenのみで、OIDCとOwner/Operator/ViewerのRBACは未実装
 - Secret Managerではなくローカル暗号化ファイルを使用
-- 市場データWorkerは独立プロセス化・永続lease/retry/stale recoveryを実装したが、
-  専用PostgreSQLでの検証のみで運用DBへは未切替（`start-local.bat`経由の実地起動も未確認）
 - APIルート、catalogモデル、市場データサービス、`frontend/src/App.tsx`への責務集中
-- `app`と`src/ai_system_trading`の二重パッケージ構造
 - Event Log、Outbox、通知、再開可能なリアルタイム配信の未実装
 
 これらは機能追加より先、または同時に段階解消する必要がある。
@@ -181,9 +178,10 @@
 
 ### Horizon 1: Application境界とDurable Worker（1〜3か月）
 
-状態: `[~]` Application境界抽出と独立Worker（①〜④）を実装。運用DBへの切替と
-⑤（bat/UI）は未実施。詳細は `market-data-application-boundary.md` と
-`durable-market-data-worker.md`。
+状態: `[~]` Application境界抽出と独立Worker（①〜⑤）を実装し、利用者環境の運用DBへ
+切替済み。詳細は `market-data-application-boundary.md` と `durable-market-data-worker.md`。
+`app`/`src`統一・`catalog.py`のモデル/スキーマ/ルート分割は完了（2026-09-16）。
+frontend（`App.tsx`）の機能別分割が残るためHorizon 1全体は引き続き `[~]`。
 
 2026-08-31: ①Worker詳細設計・DB変更計画を作成。
 `durable-market-data-worker.md` と、そこから参照する `docs/design/` の2文書を正とする。
@@ -193,9 +191,22 @@
 2026-09-15: ④独立プロセスと切替を実装。候補探索、公平な巡回、heartbeat、signals、
 API内実行（lifespanポーラー、BackgroundTasks即時実行）の除去、旧jobの正規化を実装し、
 専用PostgreSQLで検証した。実装中に`ensure_no_overlapping_backfill`の既存バグ
-（leaseで稼働中のjobを5分後に誤ってfailed化する）を発見・修正した。
-運用DBへの`20260831_0005`適用・実OANDA/Binance通信・`start-local.bat`経由の実地起動確認は
-未実施。次は⑤起動/表示/実地試験。独立Worker全体の運用DB切替や実地確認の完了ではない。
+（leaseで稼働中のjobを5分後に誤ってfailed化する）を発見・修正した。同日中に利用者環境の
+運用DBへ`20260831_0005`を適用し、Workerの実際の起動・稼働を確認した。
+
+2026-09-16: ⑤起動/表示/実地試験を実装。`scripts/start_local.py`をAPI/画面（`R`個別再起動）と
+Worker（`A`全体再起動、45秒停止猶予）の2グループに分離し、`next_run_at`/`consecutive_failures`/
+`blocked_reason`をAPI・画面に追加した。実装の動機は、運用DB切替直後に利用者が実際に
+「取得の進捗が画面から分からない」状況に遭遇したこと。詳細は`durable-market-data-worker.md`の
+「⑤の実装と検証範囲」。同日、利用者が`start-local.bat`でR/A/Qキー操作を実地確認済み。
+
+2026-09-16: Horizon 1の残る設計負債のうち、`app`/`src`パッケージ統一（`src/ai_system_trading`は
+未使用の空パッケージだったため削除）と`catalog.py`の分割を実施。モデル(`app/models/`)を
+`workspace.py`/`audit.py`/`connections.py`/`instruments.py`/`market_data.py`へ、
+スキーマ(`app/schemas/`)を`base.py`/`workspace.py`/`connections.py`/`instruments.py`/
+`market_data.py`へ、ルート(`app/api/routes/catalog.py`)を`workspaces.py`/`connections.py`へ
+分割した。API契約・DBスキーマは無変更。非DBテスト153件・専用PostgreSQLでのWorker試験89件が
+分割後も成功。frontendの機能別分割のみHorizon 1の残件として残す。
 
 2026-08-30の利用者判断: OANDA APIキーを生成できないため、Horizon 0のOANDA実データ確認は
 延期（NOT VERIFIED）。Binance取得は利用者から成功報告あり。この残件を明示して、
@@ -210,16 +221,18 @@ Application抽出を先行する。OANDA確認やHorizon 1全体を完了扱い�
 
 - `[x]` backfill受付、coverage範囲解決、subscription変更をApplication Use Caseへ切り出す。
   取得実行・coverageの低水準計算は既存serviceへ委譲し、Worker移行時の共通入口整備は次単位で行う。
-- `catalog.py` をWorkspace、Connection、Instrument、Market Data単位へ段階分割する
-- `[x]` Web lifespan内Workerを独立プロセスへ移す（`app/market_data/worker/`、専用PostgreSQLで検証。
-  運用DBへの切替・`start-local.bat`経由の実地起動確認は未実施）
+- `[x]` `catalog.py` をWorkspace、Connection、Instrument、Market Data単位へ段階分割する
+  （モデル・スキーマ・ルートの3つとも分割済み。API契約は無変更）
+- `[x]` Web lifespan内Workerを独立プロセスへ移す（`app/market_data/worker/`、専用PostgreSQLと
+  利用者環境の運用DBで検証済み。`start-local.bat`のR/A/Qキー操作も利用者が実地確認済み）
 - `[x]` PostgreSQL lease、heartbeat、retry、stale recovery、graceful shutdownを実装する
-  （Worker停止猶予45秒の個別化のみ⑤へ残す。一律10秒の暫定値で動作）
+  （Worker停止猶予45秒を`scripts/start_local.py`で個別化済み）
 - `[x]` 同一Workspace・銘柄・timeframeの多重処理をDB境界で抑止する（②のfeed lease機構）
 - `[x]` APIプロセス再起動時にもジョブの状態と再開判断が失われないようにする
-  （Worker・APIが完全に独立プロセス化されたことで達成。専用PostgreSQLで検証、運用DB未検証）
+  （Worker・APIが完全に独立プロセス化されたことで達成。専用PostgreSQLと運用DBで検証済み）
 - frontendのAPI client、feature state、画面componentを機能単位へ分割する
-- `app`と`src/ai_system_trading`の役割を確定し、単一runtime packageへ移行する
+- `[x]` `app`と`src/ai_system_trading`の役割を確定し、単一runtime packageへ移行する
+  （`src/ai_system_trading`は未使用の空パッケージだったため削除。`app`が唯一のパッケージ）
 
 #### 完了条件
 
@@ -408,12 +421,27 @@ Application抽出を先行する。OANDA確認やHorizon 1全体を完了扱い�
    backfill受付、coverage範囲解決、subscription変更を抽出。検証結果と既存整形不一致などの制限は
    `market-data-application-boundary.md` に記載。取得実行の共通入口とWorker移行は次単位。
 
-3. **Durable Workerの導入**（④まで実装済み、⑤が次単位）
-   ①詳細設計・②DB/lease・③ページ単位保存・④独立プロセスと切替は実装・専用DB試験済み。
-   次は⑤起動bat3プロセス化、取得中/retry/blocked表示、実地確認。詳細は
-   `durable-market-data-worker.md`。運用DBへの`20260831_0005`適用は未実施。
+3. **Durable Workerの導入**（①〜⑤完了）
+   設計・DB/lease・ページ単位保存・独立プロセスと切替・起動bat/表示/実地試験まで実装し、
+   利用者環境の運用DBへの切替とR/A/Qキー操作の実地確認も完了した。詳細は
+   `durable-market-data-worker.md`。
 
-Paper Tradingの詳細設計は2と3に並行して作成できるが、実装開始はDurable Workerとデータ品質の完了後とする。
+次に着手する単位は次のいずれかを想定する（順序は利用者の優先度で決めてよい）。
+
+4. **Horizon 1の残る設計負債の解消**（`app`/`src`統一・`catalog.py`分割は完了、frontendが残る）
+   `app`と`src/ai_system_trading`の単一runtime package化、および`catalog.py`の
+   Workspace/Connection/Instrument/Market Data単位への分割（モデル・スキーマ・ルート）は
+   2026-09-16に完了した。残るのはfrontend（`App.tsx`集中）のfeature単位分割のみ。
+   Horizon 1の完了条件（HTTPルートから複雑なDB処理を直接呼ばない、import path一本化）に
+   直結するが、新機能ではないため緊急度は低い。Horizon 2着手前に片付けるほど後続の
+   実装（stream adapter追加等）が複雑化しにくい。
+
+5. **Horizon 2: リアルタイム観測と運用可視性**（開始条件は充足済み）
+   OANDA Practice / Binance Spot Testnetのstream adapter追加、短命stream ticket設計、
+   再接続時のREST補完。Durable Workerが安定稼働し履歴RESTのギャップ補完が信頼できる状態は
+   達成済みのため、開始条件自体は満たしている。
+
+Paper Tradingの詳細設計は3・4と並行して作成できるが、実装開始はHorizon 2完了後とする。
 
 ## 11. 文書運用
 

@@ -8,8 +8,9 @@ from uuid import uuid4
 import pytest
 from app.api.routes import market_data as routes
 from app.market_data.application import use_cases as cases
-from app.models.catalog import AuditLog, BackfillJob, MarketDataSubscription
-from app.schemas.catalog import CandleBackfillCreate, Timeframe
+from app.models.audit import AuditLog
+from app.models.market_data import BackfillJob, MarketDataSubscription
+from app.schemas.market_data import CandleBackfillCreate, Timeframe
 from sqlalchemy.dialects import postgresql
 
 

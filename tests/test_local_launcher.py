@@ -69,8 +69,10 @@ def test_missing_frontend_dependencies_are_not_installed(tmp_path, monkeypatch) 
         launcher.commands(tmp_path)
 
 
-@pytest.mark.parametrize("key,restart", [("q", False), ("r", True)])
-def test_quit_and_restart_stop_only_owned_processes(tmp_path, monkeypatch, key, restart) -> None:
+@pytest.mark.parametrize("key,restart", [("q", False), ("a", True)])
+def test_quit_and_full_restart_stop_only_owned_processes(
+    tmp_path, monkeypatch, key, restart
+) -> None:
     processes = [MagicMock(), MagicMock()]
     for process in processes:
         process.poll.return_value = None
@@ -86,6 +88,45 @@ def test_quit_and_restart_stop_only_owned_processes(tmp_path, monkeypatch, key, 
     assert launch.call_args_list[0].kwargs["cwd"] == tmp_path
     assert launch.call_args_list[1].kwargs["cwd"] == tmp_path / "frontend"
     assert launch.call_args.kwargs["stdin"] == subprocess.DEVNULL
+
+
+def test_partial_restart_key_restarts_only_critical_processes_in_place(
+    tmp_path, monkeypatch
+) -> None:
+    backend, frontend, worker = MagicMock(), MagicMock(), MagicMock()
+    new_backend, new_frontend = MagicMock(), MagicMock()
+    for process in (backend, frontend, worker, new_backend, new_frontend):
+        process.poll.return_value = None
+    launch = MagicMock(side_effect=[backend, frontend, worker, new_backend, new_frontend])
+    monkeypatch.setattr(launcher.subprocess, "Popen", launch)
+    monkeypatch.setattr(launcher, "check_ports", lambda: None)
+    monkeypatch.setattr(launcher, "ready", lambda: False)
+    keys = iter(["r", "q"])
+    monkeypatch.setattr(launcher, "read_key", lambda: next(keys))
+    assert launcher.run_once(tmp_path, [["backend"], ["frontend"], ["worker"]], False) is False
+    assert launch.call_count == 5
+    backend.send_signal.assert_called_once()
+    frontend.send_signal.assert_called_once()
+    worker.send_signal.assert_called_once()  # only at final shutdown, not during 'r'
+    new_backend.send_signal.assert_called_once()
+    new_frontend.send_signal.assert_called_once()
+    assert worker.wait.call_args == ((), {"timeout": 45})
+    assert backend.wait.call_args_list[0] == ((), {"timeout": 10})
+
+
+def test_full_restart_key_stops_worker_with_its_own_grace_period(tmp_path, monkeypatch) -> None:
+    backend, frontend, worker = MagicMock(), MagicMock(), MagicMock()
+    for process in (backend, frontend, worker):
+        process.poll.return_value = None
+    monkeypatch.setattr(
+        launcher.subprocess, "Popen", MagicMock(side_effect=[backend, frontend, worker])
+    )
+    monkeypatch.setattr(launcher, "check_ports", lambda: None)
+    monkeypatch.setattr(launcher, "read_key", lambda: "a")
+    assert launcher.run_once(tmp_path, [["backend"], ["frontend"], ["worker"]], False) is True
+    worker.wait.assert_called_once_with(timeout=45)
+    backend.wait.assert_called_once_with(timeout=10)
+    frontend.wait.assert_called_once_with(timeout=10)
 
 
 def test_second_launch_failure_cleans_up_first_process(tmp_path, monkeypatch) -> None:

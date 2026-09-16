@@ -49,7 +49,7 @@ def commands(root: Path) -> list[list[str]]:
     ]
 
 
-def stop_processes(processes: list[subprocess.Popen]) -> None:
+def stop_processes(processes: list[subprocess.Popen], timeout: int = 10) -> None:
     """Only stop handles created by this invocation; never kill by name or port."""
     for process in reversed(processes):
         if process.poll() is not None:
@@ -60,11 +60,30 @@ def stop_processes(processes: list[subprocess.Popen]) -> None:
             else:
                 stop_signal = signal.SIGTERM
             process.send_signal(stop_signal)
-            process.wait(timeout=10)
+            process.wait(timeout=timeout)
         except (OSError, subprocess.TimeoutExpired):
             if process.poll() is None:
                 process.kill()
                 process.wait(timeout=5)
+
+
+def start_group(
+    processes: list[subprocess.Popen],
+    commands_: list[list[str]],
+    directories: tuple[Path, ...],
+    creation_flags: int,
+) -> None:
+    """Append newly started processes to `processes` as they launch, one at a time, so a
+    failure partway through still leaves the caller able to stop whatever did start."""
+    for command, directory in zip(commands_, directories, strict=True):
+        processes.append(
+            subprocess.Popen(
+                command,
+                cwd=directory,
+                stdin=subprocess.DEVNULL,
+                creationflags=creation_flags,
+            )
+        )
 
 
 def ready() -> bool:
@@ -89,54 +108,81 @@ def read_key() -> str:
 
 
 def run_once(
-    root: Path, launch_commands: list[list[str]], open_browser: bool, critical_count: int = 2
+    root: Path,
+    launch_commands: list[list[str]],
+    open_browser: bool,
+    critical_count: int = 2,
+    worker_stop_timeout: int = 45,
 ) -> bool:
-    """The first `critical_count` commands (API, frontend) are required; extras (the Worker)
-    may exit on their own (e.g. an unapplied migration) without stopping the others."""
+    """The first `critical_count` commands (API, frontend) are required and restart together
+    on [R]; the remaining commands (the Worker) only restart with the rest on [A] and get a
+    longer stop grace period (`worker_stop_timeout`) since a page in flight can take longer."""
     check_ports()
-    processes: list[subprocess.Popen] = []
     directories = (root, root / "frontend") + (root,) * (len(launch_commands) - 2)
-    if sys.platform == "win32":
-        creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
-    else:
-        creation_flags = 0
+    creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+    critical_processes: list[subprocess.Popen] = []
+    worker_processes: list[subprocess.Popen] = []
     try:
-        for command, directory in zip(launch_commands, directories, strict=True):
-            processes.append(
-                subprocess.Popen(
-                    command,
-                    cwd=directory,
-                    stdin=subprocess.DEVNULL,
-                    creationflags=creation_flags,
-                )
-            )
-        print("\n[R] Restart all processes   [Q] Stop and exit   [Ctrl+C] Stop", flush=True)
+        start_group(
+            critical_processes,
+            launch_commands[:critical_count],
+            directories[:critical_count],
+            creation_flags,
+        )
+        start_group(
+            worker_processes,
+            launch_commands[critical_count:],
+            directories[critical_count:],
+            creation_flags,
+        )
+        print(
+            "\n[R] API/画面のみ再起動   [A] すべて再起動(Worker含む)   "
+            "[Q] 停止して終了   [Ctrl+C] 停止",
+            flush=True,
+        )
         deadline = time.monotonic() + 60
         is_ready = False
-        warned_exits: set[int] = set()
+        worker_exited = False
         while True:
-            for index, process in enumerate(processes):
-                if process.poll() is None:
-                    continue
-                if index < critical_count:
-                    raise RuntimeError(
-                        "A server exited. See the output above; the other processes are stopping."
-                    )
-                if index not in warned_exits:
-                    warned_exits.add(index)
-                    print(
-                        "\n[WARN] A non-critical process exited; see the output above. "
-                        "The API and frontend keep running.",
-                        flush=True,
-                    )
+            if any(process.poll() is not None for process in critical_processes):
+                raise RuntimeError(
+                    "A server exited. See the output above; the other processes are stopping."
+                )
+            if (
+                worker_processes
+                and not worker_exited
+                and any(process.poll() is not None for process in worker_processes)
+            ):
+                worker_exited = True
+                print(
+                    "\n[WARN] Workerプロセスが終了しました（自動取得は停止中）。"
+                    "APIと画面は継続します。[A]キーで再起動できます。",
+                    flush=True,
+                )
             key = read_key()
-            if key in {"r", "q"}:
-                return key == "r"
+            if key == "q":
+                return False
+            if key == "a":
+                return True
+            if key == "r":
+                stop_processes(critical_processes)
+                critical_processes = []
+                start_group(
+                    critical_processes,
+                    launch_commands[:critical_count],
+                    directories[:critical_count],
+                    creation_flags,
+                )
+                is_ready, deadline = False, time.monotonic() + 60
+                print("\nAPI/画面を再起動しました。", flush=True)
+                continue
             if not is_ready:
                 is_ready = ready()
                 if is_ready:
+                    worker_state = "停止（要確認、[A]で再起動）" if worker_exited else "稼働中"
                     print(
-                        "\nReady: http://localhost:5173   API: http://localhost:8000/docs",
+                        "\nReady: http://localhost:5173   API: http://localhost:8000/docs   "
+                        f"Worker: {worker_state}",
                         flush=True,
                     )
                     if open_browser:
@@ -145,7 +191,8 @@ def run_once(
                     raise RuntimeError("Startup timed out. Both servers are stopping.")
             time.sleep(0.2)
     finally:
-        stop_processes(processes)
+        stop_processes(critical_processes)
+        stop_processes(worker_processes, timeout=worker_stop_timeout)
 
 
 def main() -> int:

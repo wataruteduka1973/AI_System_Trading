@@ -6,16 +6,16 @@ from uuid import uuid4
 from app.db.session import get_db
 from app.exchanges.oanda import OandaInstrumentRules, get_oanda_practice_client
 from app.main import app
-from app.models.catalog import (
-    AuditLog,
+from app.models.audit import AuditLog
+from app.models.connections import (
     Exchange,
     ExchangeConnection,
     ExternalAccount,
-    Instrument,
     Market,
-    Workspace,
     WorkspaceAccountSelection,
 )
+from app.models.instruments import Instrument
+from app.models.workspace import Workspace
 from app.security.auth import require_owner
 from app.services.secrets import get_secret_store
 from fastapi.testclient import TestClient

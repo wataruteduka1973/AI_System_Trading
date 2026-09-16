@@ -12,18 +12,17 @@ Live trading and real-money order submission are outside the approved boundary.
 ## Current runtime architecture
 
 The repository currently runs as a FastAPI backend, a React frontend, PostgreSQL, a local encrypted
-secret store, and an in-process market-data polling worker.
+secret store, and an independently started durable market-data worker process
+(`app/market_data/worker/`, launched via `python -m app.market_data.worker`).
 
 ```text
 React UI
    |
    v
-FastAPI routes
-   |---- SQLAlchemy models ---- PostgreSQL
+FastAPI routes                    app/market_data/worker (separate process)
+   |---- SQLAlchemy models ---- PostgreSQL ----|
    |---- LocalEncryptedSecretStore ---- encrypted local files
    `---- OANDA/Binance clients ---- practice/testnet APIs
-
-FastAPI lifespan ---- in-process polling worker
 ```
 
 Implemented safety boundaries:
@@ -39,13 +38,7 @@ Current structural limitations:
 
 - Several API route modules still mix HTTP translation and persistence. Connection verification
   and market-data enqueue/coverage/subscription orchestration now have Application boundaries.
-- `app/api/routes/catalog.py`, `app/models/catalog.py`, and `app/schemas/catalog.py` group multiple
-  business capabilities under the historical catalog name.
-- The market-data worker starts inside the web process, so multiple web processes can duplicate
-  polling and process restarts can interrupt work.
-- Backfill dispatch uses process-local background execution rather than durable job acquisition.
 - The frontend concentrates API access and feature state in `frontend/src/App.tsx`.
-- `src/ai_system_trading` is a packaging shell while the runtime implementation is in `app`.
 
 ## Architecture decision
 
@@ -111,7 +104,7 @@ Implemented in this slice:
 - `app/connections/application/verify_connection.py` owns the verification orchestration.
 - Application-specific result data classes do not depend on HTTP response models.
 - `ConnectionVerificationError` carries a stable application error code without HTTP semantics.
-- `app/api/routes/catalog.py` maps results and errors to the existing public API contract.
+- `app/api/routes/connections.py` maps results and errors to the existing public API contract.
 
 Transitional dependencies that remain intentionally:
 
@@ -136,9 +129,10 @@ Coverage range validation and latest-job fallback moved out of the route; calcul
 delegates to the existing service shared with backfill execution.
 
 SQLAlchemy/services are intentional transitional dependencies, as with connection verification.
-Read-only candle/job/subscription listing still lives in the route. Actual backfill execution,
-process-local dispatch and polling remain unchanged: this extraction is not durable Worker delivery.
-See `docs/plans/market-data-application-boundary.md` for transitions and verification limits.
+Read-only candle/job/subscription listing still lives in the route. Backfill execution and polling
+now run in the separate Worker process described under "Worker" below, not in the API process.
+See `docs/plans/market-data-application-boundary.md` for the Application-extraction transitions
+and `docs/plans/durable-market-data-worker.md` for the Worker delivery that followed it.
 
 ## Transaction and secret consistency
 
@@ -153,38 +147,42 @@ that create or rotate secrets must therefore define compensating behavior:
 Credential values, decrypted account references, and `secret_ref` values must never appear in API
 responses, audit payloads, normal logs, or job error messages.
 
-## Worker target
+## Worker (implemented, 2026-09-15/16)
 
-Polling and backfill execution will move to a separately started worker in a later slice. Before more
-than one worker can run, jobs/subscriptions need database-backed acquisition with a lease, retry
-count, and stale-lease recovery. The web application may enqueue work but must not own its lifecycle.
+Polling and backfill execution run in a separately started worker process
+(`app/market_data/worker/`, entry point `python -m app.market_data.worker`), not inside the FastAPI
+lifespan. Jobs/subscriptions use database-backed acquisition with a feed-scoped lease
+(`app/market_data/infrastructure/leases.py`), retry count, and stale-lease recovery. The web
+application only enqueues work (`app/api/routes/market_data.py`); it no longer dispatches or polls.
+No external queue service was needed.
 
-No external queue service is required for the first worker extraction.
-
-The 2026-08-31 detailed design is documented in
-`docs/design/modules/durable-market-data-worker.md` and
+Design docs `docs/design/modules/durable-market-data-worker.md` and
 `docs/design/database/durable-market-data-worker.md`, with acceptance tests and sequencing in
-`docs/plans/durable-market-data-worker.md`. It specifies feed-scoped leases, fenced commits,
-page checkpoints and a stop-the-world legacy cutover. These are design decisions, not implemented
-runtime behavior; the in-process worker limitations above still apply.
-
-The following storage-only slice adds revision `20260831_0005` and isolated Worker mappings plus
-lease primitives under `app/market_data/infrastructure/`. It does not wire them into API/lifespan.
-Legacy ORM SQL stays compatible with revision 0004. Storage fencing, concurrent acquisition and
-migration preservation were tested on a dedicated PostgreSQL instance; the production/local-user
-database was not migrated. The next slice adds `ExecuteMarketDataPage`, detached access snapshots,
-fenced page persistence and resumable final validation. SDK calls execute outside transactions.
-It reuses legacy candle persistence/quality helpers through capability infrastructure, without
-changing legacy runtime wiring. Independent dispatch, heartbeat supervision and cutover remain next.
+`docs/plans/durable-market-data-worker.md`, describe the feed-scoped leases, fenced commits, page
+checkpoints, candidate discovery, fair round-robin scheduling, and the legacy cutover as
+implemented and verified (dedicated PostgreSQL plus the local-user database). The Worker refuses
+to start unless the database is at the required Alembic revision (`20260831_0005`). Fair scheduling
+means a long backfill never starves a polling subscription on the same or other feeds
+(`app/market_data/worker/runner.py`). `scripts/start_local.py` starts the Worker as a third,
+non-critical process; `[R]` restarts only the API/frontend, `[A]` restarts everything including the
+Worker (its own 45s stop grace period), and the API/frontend never claim the Worker is running when
+it has exited.
 
 ## Migration sequence
 
 1. Extract connection verification without changing API or database contracts. **Implemented.**
 2. Extract credential rotation and connection lifecycle use cases.
-3. Split connection models and schemas from the historical catalog modules.
+3. Split connection/instrument/market-data models and schemas from the historical catalog modules.
+   **Implemented (2026-09-16):** `app/models/catalog.py` and `app/schemas/catalog.py` are split into
+   `workspace.py`/`audit.py`/`connections.py`/`instruments.py`/`market_data.py` (models) and
+   `base.py`/`workspace.py`/`connections.py`/`instruments.py`/`market_data.py` (schemas);
+   `app/api/routes/catalog.py` is split into `workspaces.py` and `connections.py`. API paths,
+   response shapes, and the database schema are unchanged.
 4. Introduce durable worker acquisition and move polling/backfill out of FastAPI lifespan.
+   **Implemented (2026-09-15/16).**
 5. Split frontend API access and state by connection and market-data features.
 6. Resolve the `app` versus `src/ai_system_trading` packaging duplication.
+   **Implemented (2026-09-16): `src/ai_system_trading` removed; `app` is the only package.**
 7. Add the paper-trading module only after market-data durability and risk-halt contracts exist.
 
 ## Change rules

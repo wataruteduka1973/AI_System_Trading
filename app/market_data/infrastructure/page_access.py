@@ -11,14 +11,14 @@ from app.exchanges.binance import BinanceSpotTestnetClient
 from app.exchanges.oanda import OandaPracticeClient
 from app.exchanges.types import CandlePoint
 from app.market_data.infrastructure.leases import FeedKey
-from app.models.catalog import (
+from app.models.connections import (
     Exchange,
     ExchangeConnection,
     ExternalAccount,
-    Instrument,
-    Workspace,
     WorkspaceAccountSelection,
 )
+from app.models.instruments import Instrument
+from app.models.workspace import Workspace
 from app.services.market_data import MarketDataAccessError
 from app.services.secrets import LocalEncryptedSecretStore
 

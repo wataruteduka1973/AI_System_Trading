@@ -11,16 +11,14 @@ from sqlalchemy.orm import Session
 from app.exchanges.binance import BinanceSpotTestnetClient
 from app.exchanges.oanda import OandaPracticeClient
 from app.exchanges.types import CandlePoint, timeframe_delta
-from app.models.catalog import (
-    BackfillJob,
-    Candle,
+from app.models.connections import (
     Exchange,
     ExchangeConnection,
     ExternalAccount,
-    Instrument,
-    MarketDataGap,
     WorkspaceAccountSelection,
 )
+from app.models.instruments import Instrument
+from app.models.market_data import BackfillJob, Candle, MarketDataGap
 from app.services.secrets import LocalEncryptedSecretStore
 
 
