@@ -141,5 +141,8 @@ timeframeを扱う単位が出てきた際に、ブローカー日境界への�
   追加の依存解消作業は不要（2026-09-17訂正: 当初`async_timeout`欠如によるimport失敗を
   報告したが、Linux VM側の素のPython 3.10で誤って検証したことによる誤りだった。aiohttp本体は
   `sys.version_info >= (3, 11)`で`asyncio`を`async_timeout`として代用するガードを持つ）。
-  ④では`websockets`を自コードから直接importするため、`pyproject.toml`へ明示的に追加する
+  ④では当初`websockets`を自コードから直接importする想定だったが、実装してみると
+  `BinanceSocketManager`/`ReconnectingWebsocket`が接続・エラー処理を完全に抽象化しており
+  生の`websockets`例外や型がアダプタ側コードへ一切露出しないことが判明したため、直接import
+  は発生せず`pyproject.toml`への追加は不要だった（詳細はplan docのstatus log④を正とする）。
   （`aiohttp`は`python-binance`経由のtransitive依存のままとし、直接importしない限り追加しない）。
