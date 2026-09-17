@@ -11,6 +11,21 @@
   NOT VERIFIED（ローカル実行環境にPython 3.13の依存関係一式がないため。CI結果で確認する）。
   WebSocket終端（⑤）はticketの検証・one-time-use消費までは実装済みだが、実際のWS接続処理は
   未実装（次単位）。
+- 2026-09-17: ③OANDA adapter（tick→candle正規化 + in-memory pub-sub）を実装。
+  `app/market_data/infrastructure/candle_stream.py`（`FeedHub`: feedキー単位のライフサイクル、
+  RT-04/05/06のsharing/grace-period-teardown/resubscribe-reuse、ring bufferによるbacklog、
+  gap_notice報告）、`app/market_data/infrastructure/oanda_stream.py`（`PricingStream`を
+  専用threadで駆動し`loop.call_soon_threadsafe`でevent loopへ橋渡しする`OandaFeedWorker`、
+  UTC epoch境界でのtick→candle正規化`TickToCandleNormalizer`、RT-09のbucket確定検出）を追加。
+  `tests/test_candle_stream.py`（7ケース）、`tests/test_oanda_stream.py`（13ケース）を追加。
+  ローカル実行環境にpytest/ruff/mypyをインストールできなかったため（両shellともPyPIへの
+  egressが403で拒否される）、公式のpytest CLI・ruff・mypyそのものの実行はCI結果待ち
+  （NOT VERIFIED）。ただし、Windows側`.venv313`の実際にpin済みoandapyV20パッケージを
+  クラウド側へ個別ファイル転送して組み立てたモジュールmirrorに対し、上記20テスト関数
+  すべてをプレーンなPythonスクリプトとして実行し全件成功を確認した（テストロジック自体の
+  実機能検証は完了。pytest CLIというランナーの実行のみが未検証）。この検証の過程で
+  `FeedHub._start_feed`の実装順序バグ（starter起動時の同期publishがfeed未登録により
+  ring bufferへ届かず消える）を実際に検出・修正し、push前に解消済み。
 - 設計: [Module](../design/modules/realtime-market-data-stream.md)
 - 対象: `docs/architecture-alignment-and-long-term-roadmap.md` の Horizon 2
   「リアルタイム観測と運用可視性」。開始条件（Durable Workerの安定稼働、履歴RESTの
