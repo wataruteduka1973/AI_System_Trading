@@ -64,8 +64,8 @@ def _redact_value(value: object) -> object:
 
 
 def redact_sensitive_fields(
-    logger: object, method_name: str, event_dict: dict[str, object]
-) -> dict[str, object]:
+    logger: object, method_name: str, event_dict: structlog.typing.EventDict
+) -> structlog.typing.EventDict:
     """structlog processor: mask any event-dict key (at any nesting depth)
     whose name matches a known sensitive-field marker."""
     for key in list(event_dict.keys()):
