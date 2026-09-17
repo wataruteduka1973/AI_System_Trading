@@ -82,6 +82,13 @@ Workspace固有情報は含まれないため）。
 `heartbeat`は30秒間隔でOHLCVなしで送る（接続生存確認・遅延計測用）。`gap_notice`は
 取引所側の切断・空応答検知時に送り、フロントの「取得遅延中」表示に使う（RT-11）。
 
+（③実装時の明確化: 上記JSONは⑤のWS終端がクライアントへ送信する外部event形式であり、
+`workspace_id`はWS終端でticketから解決した値をここで初めて付与する。③で実装した内部の
+`FeedHub`/`CandleStreamEvent`表現は、feed自体がWorkspace非依存であることに合わせて
+`workspace_id`を持たない。また`gap_notice`向けに`reason_code`フィールド（例:
+`oanda_unreachable`, `oanda_authentication_failed`）を内部表現に追加した。安全な
+分類コードのみを許可し、生の例外メッセージは含めない方針は本セクション冒頭の記載通り。）
+
 ## 6. OANDA tick→candle正規化とBinance kline
 
 - OANDA: `PricingStream`は価格tick（bid/ask、timestamp）のみを返す。blocking generatorのため
@@ -93,6 +100,12 @@ Workspace固有情報は含まれないため）。
 - Binance: `BinanceSocketManager.kline_socket(symbol, interval)`はtimeframeごとのkline
   messageをネイティブに返し、`k.x`（is_closed）フィールドで確定/未確定を判別できるため
   tick合成は不要。`k.o/h/l/c/v`をそのままOHLCVへマッピングする。
+
+（③実装時の明確化: `volume`はOANDA自身のREST candle APIと同じ「bucket内のtick件数」を
+採用した（実際の出来高データはPricingStreamからは取得できないため）。また、timeframe境界の
+判定はUTC epochに揃えたbucket flooring（例: 1分足なら`floor(tick_time, 60s)`）による
+MVP簡略化であり、OANDAブローカーの日足境界（NYクローズ基準）とは一致しない。日足以上の
+timeframeを扱う単位が出てきた際に、ブローカー日境界への対応要否を再検討する。）
 
 ## 7. 再接続とgap-fill
 

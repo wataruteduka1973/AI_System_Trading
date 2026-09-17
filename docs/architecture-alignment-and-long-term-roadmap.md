@@ -250,7 +250,9 @@ Application抽出を先行する。OANDA確認やHorizon 1全体を完了扱い�
 2026-09-17: ①設計を作成。取引所へのストリーム接続（OANDA `PricingStream` / Binance
 `kline_socket`）はAPIプロセス内でasyncio background taskとして保持し、ブラウザ向けWebSocket
 終端と同一プロセス内のin-memory pub-subで完結させる方針を利用者が承認した（Worker↔API間の
-新しいIPCやRedis/Kafka等の新規infraは導入しない）。実装（②以降）は未着手。
+新しいIPCやRedis/Kafka等の新規infraは導入しない）。実装（②以降）は進行中
+（2026-09-17時点で②③が完了。詳細な進捗は`docs/plans/realtime-market-data-stream.md`の
+status logを正とする）。
 
 #### 開始条件
 
