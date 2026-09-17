@@ -62,9 +62,7 @@ def test_parse_price_tick_ignores_heartbeats_and_malformed_lines() -> None:
     assert parse_price_tick({"type": "PRICE"}) is None
     assert parse_price_tick("not a dict") is None
     assert (
-        parse_price_tick(
-            {"type": "PRICE", "time": "x", "bids": [], "asks": [{"price": "1"}]}
-        )
+        parse_price_tick({"type": "PRICE", "time": "x", "bids": [], "asks": [{"price": "1"}]})
         is None
     )
 

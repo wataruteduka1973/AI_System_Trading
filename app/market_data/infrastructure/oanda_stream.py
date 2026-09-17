@@ -111,9 +111,7 @@ def iter_oanda_price_ticks(
         code = "oanda_authentication_failed" if exc.code in (401, 403) else "oanda_stream_failed"
         raise OandaStreamError(code, f"OANDA price stream failed with HTTP {exc.code}") from exc
     except RequestException as exc:
-        raise OandaStreamError(
-            "oanda_unreachable", "OANDA practice stream is unreachable"
-        ) from exc
+        raise OandaStreamError("oanda_unreachable", "OANDA practice stream is unreachable") from exc
     finally:
         session = getattr(client, "client", None)
         if session is not None:
