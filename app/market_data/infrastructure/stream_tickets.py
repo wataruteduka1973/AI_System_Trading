@@ -43,8 +43,16 @@ def issue_ticket(
     timeframe: str,
     ttl_seconds: int,
 ) -> tuple[str, datetime]:
-    """Sign a new one-time ticket. Returns (token, expires_at)."""
-    now = datetime.now(UTC)
+    """Sign a new one-time ticket. Returns (token, expires_at).
+
+    PyJWT encodes ``iat``/``exp`` as integer Unix timestamps (RFC 7519 ``NumericDate``),
+    so sub-second precision does not survive the encode/decode round-trip. ``now`` and
+    ``expires_at`` are truncated to whole seconds here so the value returned to the
+    caller (and surfaced in the API response) matches exactly what verification later
+    reconstructs from the decoded token, instead of silently differing by a fraction
+    of a second.
+    """
+    now = datetime.now(UTC).replace(microsecond=0)
     expires_at = now + timedelta(seconds=ttl_seconds)
     payload = {
         "jti": uuid4().hex,
