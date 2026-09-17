@@ -1,6 +1,16 @@
 # リアルタイム市場データ配信 実装計画（Horizon 2）
 
 - 2026-09-17: ①設計を作成。実装は未着手。
+- 2026-09-17: ②Stream ticket発行を実装（`POST /workspaces/{workspace_id}/market-stream-tickets`）。
+  `app/market_data/infrastructure/stream_tickets.py`（PyJWT署名・検証・one-time-use guard）、
+  `app/market_data/application/stream_tickets.py`（`PageAccess.resolve`を再利用した認可、
+  `MarketDataApplicationError`への変換）、`MarketStreamTicketCreate`/`MarketStreamTicketRead`
+  スキーマ、`market_stream_ticket_secret`/`market_stream_ticket_ttl_seconds`設定を追加。
+  `PyJWT[crypto]`を`pyproject.toml`へ追加（`requirements.txt`には既に記載済み）。
+  ruff format/lint（既知のI001誤検知を除く）はローカルで確認済み。pytest/mypyの実行は
+  NOT VERIFIED（ローカル実行環境にPython 3.13の依存関係一式がないため。CI結果で確認する）。
+  WebSocket終端（⑤）はticketの検証・one-time-use消費までは実装済みだが、実際のWS接続処理は
+  未実装（次単位）。
 - 設計: [Module](../design/modules/realtime-market-data-stream.md)
 - 対象: `docs/architecture-alignment-and-long-term-roadmap.md` の Horizon 2
   「リアルタイム観測と運用可視性」。開始条件（Durable Workerの安定稼働、履歴RESTの

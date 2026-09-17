@@ -75,6 +75,19 @@ class MarketDataCollectionUpdate(BaseModel):
     enabled: bool
 
 
+class MarketStreamTicketCreate(BaseModel):
+    instrument_id: UUID
+    timeframe: Timeframe = "1m"
+
+
+class MarketStreamTicketRead(BaseModel):
+    ticket: str
+    exchange: str
+    symbol: str
+    timeframe: str
+    expires_at: datetime
+
+
 class MarketDataSubscriptionRead(OrmModel):
     id: UUID
     workspace_id: UUID
