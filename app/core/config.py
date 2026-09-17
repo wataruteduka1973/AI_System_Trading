@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     worker_recover_limit: int = 100
     market_stream_ticket_secret: SecretStr | None = None
     market_stream_ticket_ttl_seconds: int = 60
+    market_stream_grace_period_seconds: float = 30.0
+    market_stream_heartbeat_interval_seconds: float = 30.0
     log_dir: Path = Path("logs")
     log_level: str = "INFO"
     log_rotation_max_bytes: int = 10 * 1024 * 1024

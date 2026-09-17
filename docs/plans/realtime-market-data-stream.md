@@ -52,6 +52,59 @@
   状態で上記9テストを実行し全件成功を確認した（実際のネットワーク接続自体は
   client_factory/socket_manager_factoryの差し替えにより行わず、コード自体の実行パスを
   検証）。
+- 2026-09-17: ⑤ブラウザWebSocket終端（`WS /ws/v1/market-stream?ticket=<ticket>`）と
+  ⑥reconnect/gap-fillを実装。feedの参照カウント減算・grace period後のupstream teardown
+  自体は③で実装済みの`FeedHub.subscribe`/`FeedSubscription.close`がそのまま提供するため、
+  ⑤で新たに実装したのは接続のオーケストレーションのみ。
+  `app/market_data/infrastructure/stream_connection_access.py`（新規）: ticketは
+  workspace_id/exchange/symbol/timeframeのみを保持しinstrument_idを持たないため、
+  `PageAccess.resolve`（②③、instrument_id起点）を再利用せず、(workspace_id, exchange)
+  起点でExchangeConnection/ExternalAccountを直接解決する専用resolverを新設した。WS接続時にも
+  再度この解決を行うことで、設計doc section 4の「Workspace境界はticket発行時とWS接続時の
+  両方で確認する」を実装した（RT-12: ticket発行後に接続無効化・口座変更があった場合、
+  ここで拒否される）。
+  `app/market_data/infrastructure/stream_protocol.py`（新規）: browser向けevent JSON
+  encoding（`workspace_id`をここで初めて付与）、per-connection heartbeat（FeedHubの
+  feed単位sequenceを消費せず、直前のsequenceを変更せず繰り返すことでクライアントの
+  gap検出を乱さない設計）、および⑥のreconnect/resume判定（`decide_resume`: fresh /
+  replayed / gap_fill_required の3モード、RT-07/RT-08）を実装。
+  `app/market_data/infrastructure/stream_session.py`（新規）: 実際のfastapi.WebSocketに
+  依存しない、`Transport`という小さなProtocolを介した接続オーケストレーション本体
+  （ticket検証→credential解決→`FeedHub.subscribe`→resume判定→heartbeat/event送信loop）。
+  fastapi非依存にしたことで、後述の検証がpytestで直接可能になった。
+  `app/api/routes/market_stream_ws.py`（新規）: 実際の`fastapi.WebSocket`を`Transport`へ
+  変換し`run_stream_session`へ渡す薄いアダプタと、DB資格情報解決からFeedStarter
+  （OANDA/Binance）を構築する`_build_starter`。`app/main.py`へ`include_router`を追加
+  （`/api/v1`配下ではなく設計doc通り`/ws/v1/market-stream`に直接マウント）。
+  `app/core/config.py`へ`market_stream_grace_period_seconds`/
+  `market_stream_heartbeat_interval_seconds`（両方デフォルト30秒、設計doc section 3の
+  「既定30秒、設定可能」に対応）を追加。新規の外部パッケージ依存は無し（fastapi/
+  structlog/sqlalchemy/PyJWTはいずれも既存依存の再利用）。
+  `tests/test_stream_connection_access.py`（11ケース）、`tests/test_stream_protocol.py`
+  （12ケース）、`tests/test_stream_session.py`（6ケース、fakeなTransport/FeedStarterを
+  用いてticket検証・access拒否・feed起動失敗・切断後のgrace period teardown・heartbeat
+  発火までの接続オーケストレーション全体を統合的に検証）を追加。この29ケースは、
+  ④までとは異なりpytest自体を含めて実際に実行し全件成功を確認した
+  （`pytest`本体・`_pytest`・`pluggy`・`iniconfig`・`packaging`・`py`はいずれもコンパイル
+  済み拡張を持たない純Pythonパッケージであることを確認し、Windows側`.venv313`から
+  個別ファイル転送して実行環境を構築した。同様にSQLAlchemy 2.0.52もcyextension
+  （5ファイルのみ、いずれも純Python実装へのfallbackを持つ最適化用オプション拡張）を
+  除外して転送すれば純Python環境で問題なくimportできることを新たに確認し、
+  `app.models.connections`/`app.models.workspace`等の実際のORMモデル定義・実際の
+  `MarketDataAccessError`・実際の`FeedHub`・実際のPyJWT ticket発行/検証を、モックは
+  使わず本物のコードとして読み込んだ状態でテストを実行した。モックが必要だったのは
+  `app.core.config`（pydantic-core依存、Rust製コンパイル拡張でLinux向けビルドが
+  この環境に存在しない）とcryptography（同様にコンパイル拡張）の2箇所のみで、
+  それぞれ最小限のfakeモジュールに置き換えた）。
+  一方、`app/api/routes/market_stream_ws.py`自体（実際の`fastapi.WebSocket`を使う薄い
+  アダプタ部分）はfastapi/starlette自体がpydantic-coreに依存するため、この環境では
+  importも実行もできなかった（NOT VERIFIED、CI結果待ち）。この部分は
+  `tests/test_market_stream_ws.py`として既存の`test_market_stream_ticket_api.py`
+  （②）と同じ`TestClient`/`monkeypatch`/`dependency_overrides`の慣習に沿ってテストを
+  作成済みだが、ローカルでは未実行。オーケストレーション本体（`stream_session.py`）を
+  fastapi非依存に切り出したことで、検証できない範囲をこの薄いアダプタ1ファイルのみに
+  最小化した。
+  フロントエンド（⑦）は未着手。
 - 設計: [Module](../design/modules/realtime-market-data-stream.md)
 - 対象: `docs/architecture-alignment-and-long-term-roadmap.md` の Horizon 2
   「リアルタイム観測と運用可視性」。開始条件（Durable Workerの安定稼働、履歴RESTの

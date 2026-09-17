@@ -11,6 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.router import api_router
+from app.api.routes import market_stream_ws
 from app.core.config import settings
 from app.core.logging import configure_logging, configure_named_log_file
 from app.db.session import get_db
@@ -28,6 +29,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(api_router, prefix=settings.api_v1_prefix)
+app.include_router(market_stream_ws.router)
 
 
 @app.middleware("http")
