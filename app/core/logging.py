@@ -87,7 +87,7 @@ def configure_logging(settings: Settings, *, log_filename: str = "backend.log") 
     settings.log_dir.mkdir(parents=True, exist_ok=True)
     log_path = settings.log_dir / log_filename
 
-    shared_processors = [
+    shared_processors: list[structlog.typing.Processor] = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_log_level,
         structlog.stdlib.add_logger_name,
