@@ -121,7 +121,12 @@ Workspace固有情報は含まれないため）。
   指数バックオフに使う。`orjson`はevent shapeが単純なJSONのため、標準`json`との比較で
   導入要否を③実装時に判断する（過剰導入を避ける）。
 - `PyJWT[crypto]`をticket署名に採用する。将来のOIDC導入時にも同じライブラリを継続利用できる。
-- `python-binance`のAsync/WebSocket機能を使うには`aiohttp`（python-binanceの`Requires-Dist`
-  に含まれるが本プロジェクトのrequirements.txt/pyproject.tomlには未記載）が必要。現行venvで
-  `import binance`が`async_timeout`欠如で失敗することを確認済みであり、④着手前に
-  依存解消（`async_timeout`追加、またはaiohttp/python-binanceのバージョン調整）を行う。
+- `python-binance`のAsync/WebSocket機能は`aiohttp`（python-binanceの`Requires-Dist`に含まれる
+  transitive依存）を必要とするが、`app/exchanges/binance.py`が既に`from binance import
+  AsyncClient`で同じimport経路（`binance/__init__.py`が`AsyncClient`と`BinanceSocketManager`
+  を同じimport文で読み込む）を使っており、既存CIのPython 3.13.15上で問題なく動作している。
+  追加の依存解消作業は不要（2026-09-17訂正: 当初`async_timeout`欠如によるimport失敗を
+  報告したが、Linux VM側の素のPython 3.10で誤って検証したことによる誤りだった。aiohttp本体は
+  `sys.version_info >= (3, 11)`で`asyncio`を`async_timeout`として代用するガードを持つ）。
+  ④では`websockets`を自コードから直接importするため、`pyproject.toml`へ明示的に追加する
+  （`aiohttp`は`python-binance`経由のtransitive依存のままとし、直接importしない限り追加しない）。

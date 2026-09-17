@@ -55,9 +55,10 @@
   bucketingしてprovisional candleを合成する正規化ロジックを新設する（②）。
   Binanceはtimeframe別のkline streamがネイティブに存在するため合成不要。この非対称性は
   設計上の既知差異として扱う（詳細は module設計の該当節）。
-- Binance側は`python-binance`の`AsyncClient`/`BinanceSocketManager`経由が`aiohttp`に依存する。
-  現行venvで`import binance`が`ModuleNotFoundError: No module named 'async_timeout'`で失敗する
-  ことを確認済み（③実装前に依存関係を解消する。詳細は「未解決の技術的リスク」）。
+- Binance側は`python-binance`の`AsyncClient`/`BinanceSocketManager`経由が`aiohttp`に依存するが、
+  `app/exchanges/binance.py`が既に`from binance import AsyncClient`でこの依存経路を使っており、
+  既存CI（Python 3.13.15）で問題なく動作している。追加の依存解消は不要（2026-09-17訂正、
+  詳細は「未解決の技術的リスク」）。
 
 ## 作業単位
 
@@ -72,8 +73,9 @@
    provisional/finalized eventへ正規化し、feedキー（exchange, symbol, timeframe）単位で
    購読者へfan-outする。OANDA `PricingStream`をまず接続し、tick→candle合成を実装・試験する。
 4. **Binance adapter**: `BinanceSocketManager.kline_socket`を接続し、同じ正規化・pub-sub経路へ
-   接続する。依存関係（aiohttp/async_timeout/websockets）を解消し、pyproject.toml/requirements.txt
-   の両方を更新する。
+   接続する。`websockets`はこの単位で自コードから直接importする最初の単位になるため、
+   `pyproject.toml`の`[project.dependencies]`へ追加する（`requirements.txt`には既に記載済み。
+   structlogと同種のdrift再発を避ける）。
 5. **ブラウザWebSocket終端**: `WS /ws/v1/market-stream?ticket=<ticket>`。ticket検証、
    feed購読、heartbeat、切断時のfeed参照カウント減算、grace period後のupstream teardownを実装。
 6. **reconnect/gap-fill**: クライアント側で`last_sequence`を保持し、再接続時は新しいticketを
@@ -106,9 +108,14 @@
 
 ## 未解決の技術的リスク
 
-- `python-binance`のAsync/WebSocket機能が現行venvで`async_timeout`欠如によりimport不能
-  （③実装前に解消要。`async_timeout`を明示依存へ追加するか、aiohttp/python-binanceの
-  バージョン調整で不要にできるか要調査）。
+- ~~`python-binance`のAsync/WebSocket機能がasync_timeout欠如でimport不能~~
+  （2026-09-17訂正: 誤りだったため取り下げ。当初`.venv313`をLinux VM側の素のPython 3.10で
+  importして再現したが、これは実行環境の取り違えによる誤検証だった。aiohttpの実ソース
+  （`aiohttp/helpers.py`等）は`if sys.version_info >= (3, 11): import asyncio as async_timeout`
+  のガードを持ち、Python 3.13では外部`async_timeout`パッケージを一切必要としない。さらに
+  `app/exchanges/binance.py`が既に`from binance import AsyncClient`でこの経路をimportしており
+  （`binance/__init__.py`は`AsyncClient`と`BinanceSocketManager`を同じimport文で読み込む）、
+  既存CIのPython 3.13.15上で現に成功し続けている。依存解消の作業は不要。）
 - OANDA `PricingStream`はblocking generatorのため、`asyncio.to_thread`または専用threadでの
   実行方式を②で確定する。
 - OANDA Practice実データでの動作確認は、既存のHorizon 0の制約（APIキー生成不可）が
