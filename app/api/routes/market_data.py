@@ -9,8 +9,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import Settings, get_settings
 from app.db.session import get_db
+from app.market_data.application import stream_tickets as stream_ticket_application
 from app.market_data.application import use_cases as market_data_application
+from app.market_data.infrastructure.page_access import PageAccess
 from app.models.market_data import BackfillJob, Candle, MarketDataSubscription
 from app.schemas.market_data import (
     BackfillJobRead,
@@ -20,6 +23,8 @@ from app.schemas.market_data import (
     MarketDataCollectionUpdate,
     MarketDataSubscriptionRead,
     MarketDataSubscriptionUpdate,
+    MarketStreamTicketCreate,
+    MarketStreamTicketRead,
     Timeframe,
 )
 from app.security.auth import require_owner
@@ -55,6 +60,9 @@ def _application_errors() -> Iterator[None]:
             "instrument_unavailable": 409,
             "overlapping_backfill": 409,
             "invalid_input": 422,
+            "access_unavailable": 409,
+            "credentials_missing": 409,
+            "credentials_unreadable": 409,
         }[exc.code]
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
@@ -228,6 +236,55 @@ def list_market_data_subscriptions(
             .where(MarketDataSubscription.workspace_id == workspace_id)
             .order_by(MarketDataSubscription.created_at.desc())
         ).all()
+    )
+
+
+def _require_ticket_secret(settings: Settings) -> str:
+    configured = settings.market_stream_ticket_secret
+    if configured is None or not configured.get_secret_value():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Market stream ticket signing is not configured",
+        )
+    return configured.get_secret_value()
+
+
+@router.post(
+    "/workspaces/{workspace_id}/market-stream-tickets",
+    response_model=MarketStreamTicketRead,
+    status_code=status.HTTP_201_CREATED,
+    tags=["market-data"],
+)
+def create_market_stream_ticket(
+    workspace_id: UUID,
+    payload: MarketStreamTicketCreate,
+    db: DatabaseSession,
+    _: Owner,
+) -> MarketStreamTicketRead:
+    """Issue a short-lived, one-time ticket authorizing a single WebSocket
+    market-stream connection. See docs/design/modules/realtime-market-data-
+    stream.md section 4. This endpoint never opens an exchange connection or
+    decrypts credentials; it only confirms Workspace/instrument access."""
+    settings = get_settings()
+    ticket_secret = _require_ticket_secret(settings)
+    _require_workspace(db, workspace_id)
+    page_access = PageAccess(get_secret_store())
+    with _application_errors():
+        result = stream_ticket_application.issue_stream_ticket(
+            db,
+            workspace_id,
+            payload.instrument_id,
+            payload.timeframe,
+            page_access.resolve,
+            ticket_secret,
+            settings.market_stream_ticket_ttl_seconds,
+        )
+    return MarketStreamTicketRead(
+        ticket=result.ticket,
+        exchange=result.exchange,
+        symbol=result.symbol,
+        timeframe=result.timeframe,
+        expires_at=result.expires_at,
     )
 
 

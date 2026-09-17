@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     worker_fetch_timeout_seconds: float = 30
     worker_candidate_limit: int = 500
     worker_recover_limit: int = 100
+    market_stream_ticket_secret: SecretStr | None = None
+    market_stream_ticket_ttl_seconds: int = 60
     log_dir: Path = Path("logs")
     log_level: str = "INFO"
     log_rotation_max_bytes: int = 10 * 1024 * 1024
