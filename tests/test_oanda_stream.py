@@ -10,8 +10,6 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import MagicMock
 
-from oandapyV20.exceptions import V20Error
-
 from app.exchanges.oanda import OandaApiError
 from app.market_data.infrastructure.candle_stream import FeedHub, StreamFeedKey
 from app.market_data.infrastructure.oanda_stream import (
@@ -21,6 +19,7 @@ from app.market_data.infrastructure.oanda_stream import (
     make_oanda_feed_starter,
     parse_price_tick,
 )
+from oandapyV20.exceptions import V20Error
 
 
 def _fake_client(lines: list[dict]) -> MagicMock:

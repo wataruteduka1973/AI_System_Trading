@@ -130,12 +130,12 @@ immediately."""
 class _Feed:
     key: StreamFeedKey
     source: str
-    ring_buffer: "deque[CandleStreamEvent]"
+    ring_buffer: deque[CandleStreamEvent]
     worker: FeedWorkerHandle | None = None
     state: FeedState = "starting"
     sequence: int = -1
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
-    subscribers: dict[int, "asyncio.Queue[CandleStreamEvent]"] = field(default_factory=dict)
+    subscribers: dict[int, asyncio.Queue[CandleStreamEvent]] = field(default_factory=dict)
     teardown_task: asyncio.Task[None] | None = None
 
 
@@ -149,10 +149,10 @@ class FeedSubscription:
 
     def __init__(
         self,
-        hub: "FeedHub",
+        hub: FeedHub,
         key: StreamFeedKey,
         subscriber_id: int,
-        queue: "asyncio.Queue[CandleStreamEvent]",
+        queue: asyncio.Queue[CandleStreamEvent],
         buffered_events: list[CandleStreamEvent],
         feed_started_at: datetime,
     ) -> None:
@@ -172,7 +172,7 @@ class FeedSubscription:
 
 
 class _FeedSink:
-    def __init__(self, hub: "FeedHub", key: StreamFeedKey) -> None:
+    def __init__(self, hub: FeedHub, key: StreamFeedKey) -> None:
         self._hub = hub
         self._key = key
 
