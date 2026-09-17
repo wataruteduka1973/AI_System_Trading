@@ -26,6 +26,32 @@
   実機能検証は完了。pytest CLIというランナーの実行のみが未検証）。この検証の過程で
   `FeedHub._start_feed`の実装順序バグ（starter起動時の同期publishがfeed未登録により
   ring bufferへ届かず消える）を実際に検出・修正し、push前に解消済み。
+- 2026-09-17: ④Binance adapter（`BinanceSocketManager.kline_socket`接続）を実装。
+  `app/market_data/infrastructure/binance_stream.py`を追加。Binanceのkline streamは
+  provisional/finalized candleをtimeframe単位でネイティブに配信するため（`k.x`の
+  is_closedフラグで判別）、OANDAと違いtick→candle合成は不要（設計doc section 6の通り）。
+  `BinanceSocketManager`は完全にasyncio nativeなAPIであり`PricingStream`のような
+  blocking generatorではないため、OANDA版（専用thread + `loop.call_soon_threadsafe`）とは
+  異なり、`BinanceFeedWorker`は単純な`asyncio.Task`としてFeedHubと同じevent loop上で
+  動作し、`FeedSink`メソッドを直接呼び出す（thread/call_soon_threadsafeのブリッジは
+  不要）。
+  訂正: 作業単位④の当初の記述は「`websockets`を自コードから直接importする最初の単位に
+  なるためpyproject.tomlへ追加する」としていたが、実装してみると`BinanceSocketManager`/
+  `ReconnectingWebsocket`が接続・エラー処理を完全に抽象化しており、生の`websockets`
+  例外や型がアダプタ側コードへ一切露出しない（接続断は`{"e": "error", ...}`辞書message
+  または`binance.exceptions.ReadLoopClosed`として現れる）ことが判明したため、
+  `websockets`の直接importは発生せず、`pyproject.toml`への追加は不要だった。
+  `tests/test_binance_stream.py`（9ケース）を追加。ローカル実行環境にpytest/ruff/mypyを
+  インストールできなかったため（両shellともPyPIへのegressが403で拒否される）、公式の
+  pytest CLI・ruff・mypyそのものの実行はCI結果待ち（NOT VERIFIED）。ただし、
+  python-binanceの実際にpin済みのバージョン（Windows側`.venv313`）をクラウド側へ転送し、
+  Windows専用のコンパイル済み拡張（aiohttp/websockets/multidict/yarl/frozenlist/
+  pycryptodomeがいずれもwin_amd64向け`.pyd`を持ち、Linux上では実行不能）に依存する
+  部分のみ最小限のfake stubへ置き換えることで、python-binance本体の実コード
+  （`AsyncClient`/`BinanceSocketManager`/`ReconnectingWebsocket`等）を実際にimportした
+  状態で上記9テストを実行し全件成功を確認した（実際のネットワーク接続自体は
+  client_factory/socket_manager_factoryの差し替えにより行わず、コード自体の実行パスを
+  検証）。
 - 設計: [Module](../design/modules/realtime-market-data-stream.md)
 - 対象: `docs/architecture-alignment-and-long-term-roadmap.md` の Horizon 2
   「リアルタイム観測と運用可視性」。開始条件（Durable Workerの安定稼働、履歴RESTの
@@ -98,9 +124,8 @@
    provisional/finalized eventへ正規化し、feedキー（exchange, symbol, timeframe）単位で
    購読者へfan-outする。OANDA `PricingStream`をまず接続し、tick→candle合成を実装・試験する。
 4. **Binance adapter**: `BinanceSocketManager.kline_socket`を接続し、同じ正規化・pub-sub経路へ
-   接続する。`websockets`はこの単位で自コードから直接importする最初の単位になるため、
-   `pyproject.toml`の`[project.dependencies]`へ追加する（`requirements.txt`には既に記載済み。
-   structlogと同種のdrift再発を避ける）。
+   接続する。`BinanceSocketManager`は完全にasyncio nativeなAPIのため、OANDA版のような
+   専用thread + `loop.call_soon_threadsafe`ブリッジは不要（実装確認済み、詳細はstatus log）。
 5. **ブラウザWebSocket終端**: `WS /ws/v1/market-stream?ticket=<ticket>`。ticket検証、
    feed購読、heartbeat、切断時のfeed参照カウント減算、grace period後のupstream teardownを実装。
 6. **reconnect/gap-fill**: クライアント側で`last_sequence`を保持し、再接続時は新しいticketを
