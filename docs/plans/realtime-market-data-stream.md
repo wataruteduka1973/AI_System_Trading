@@ -105,6 +105,56 @@
   fastapi非依存に切り出したことで、検証できない範囲をこの薄いアダプタ1ファイルのみに
   最小化した。
   フロントエンド（⑦）は未着手。
+- 2026-09-17: ⑦フロントエンド（`CandleChart`のprovisional更新、接続状態表示）を実装。
+  `app/api/routes/market_stream_ws.py`（⑤）・`stream_protocol.py`（⑥）が定義する
+  event/ticket契約（設計doc section 5/7）をそのままクライアント側で消費する。
+  `frontend/src/features/market-data/marketStream.ts`（新規）: WS/Reactに依存しない
+  純粋な protocol 層。event JSONのparse、`stream_state`envelopeとevent messageの
+  判別、provisional/finalized eventから既存`ChartCandle`形状への変換（`series.update()`へ
+  そのまま渡せるようにするため、REST candle APIと同じ形にした）、接続状態ラベル、
+  reason_codeの日本語ラベル化（未知のcodeはそのまま表示しフェイルセーフとする）、
+  heartbeat無音検知（既定30秒間隔の1.5倍=45秒を閾値としたMVP簡略化。実際の
+  `market_stream_heartbeat_interval_seconds`設定値は現時点でブラウザへ渡していない）、
+  WS URL構築（`resume_last_sequence`/`resume_feed_started_at`はサーバ側`ResumeRequest.
+  is_present`と同じく両方揃った時のみ付与）、close code判定（サーバ側`stream_session.py`の
+  `CLOSE_TICKET_REJECTED=4401`/`CLOSE_ACCESS_DENIED=4403`のみ再試行しない。それ以外
+  （`CLOSE_FEED_START_FAILED=1011`含む）は通常の切断と同様に再接続する）を実装。
+  `frontend/src/features/market-data/useMarketStream.ts`（新規）: 実際のWebSocketの
+  接続・再接続オーケストレーション本体。ticket発行APIを呼び、WSを開き、
+  `stream_state`で`gap_fill_required`を受けた場合は既存の`reloadMarketData`
+  （`useMarketData.ts`へ追加）でREST再取得を発火する。ticket発行失敗・WS切断は
+  いずれもbackoffの上で再接続する（`isRetryableClose`がfalseを返す場合のみ諦めて
+  `disconnected`表示に留める）。
+  `frontend/src/components/CandleChart.tsx`: `liveCandle`（省略可、既定null）propを追加。
+  変更時に`series.setData(...)`は呼ばず`series.update(...)`のみを呼ぶことで、
+  5秒ごとのREST再読込（既存の確定足取得）とは別経路でチャート最新バーだけを
+  即時更新する。lightweight-chartsが非単調な更新（チャートが既に進んだ後に来た
+  古いevent）を例外で拒否するケースはtry/catchで無視する（次のeventで復帰する）。
+  `frontend/src/features/market-data/MarketDataPanel.tsx`・`App.tsx`: 接続状態
+  （connecting/connected/reconnecting/delayed/disconnected）、直近データ受信時刻、
+  gap件数、直近の遅延理由を表示する`stream-status`ブロックを追加し、`useMarketStream`を
+  `App.tsx`で呼び出して結果を渡す。配信は市場データ画面表示中（`route.kind === 'market'`）
+  のみ有効化し、接続管理画面等では取引所へのstream接続を張らない
+  （スコープ縮小方針「表示中の1本に限定する」に対応）。
+
+  検証状況（正直な開示）: `npx tsc -b --noEmit`と`npx eslint .`は、Windows側で
+  実際にインストール済みのnode_modulesをそのまま使い、変更後の全ファイルに対して
+  実際に実行し両方エラーなしを確認した（型検査・lintは本物の実行）。一方、
+  `npx vitest run`（`frontend/src/features/market-data/marketStream.test.ts`新規12
+  ケース、および`CandleChart.test.tsx`へ追加した2ケース含む）はこの環境では実行
+  できなかった。原因はテストの内容ではなく、vitestが内部で使うVite 8のbundler
+  `rolldown`のネイティブbinding（`@rolldown/binding-win32-x64-msvc`のみWindows側で
+  インストール済みで、Linux版`@rolldown/binding-linux-x64-gnu`は未インストール）が、
+  このLinux実行環境と一致しないため（`tsc`/`eslint`自体は純粋なJavaScriptパッケージで
+  ネイティブ拡張を持たないため問題なく動作した）。npm registryへの新規fetchで
+  この1パッケージのみを補うことも試みたが、この環境ではnpm registryへの新規
+  egressそのものが拒否される（クラウド側サンドボックスでも同様に拒否された）ため
+  断念した。したがってテストコード自体は既存の`CandleChart.test.tsx`と同じ
+  vitest/testing-libraryの慣習で作成済みだが、実行結果はNOT VERIFIED（CI結果待ち）。
+  Windows側の実開発環境（利用者の`.venv313`相当、node_modulesがネイティブに一致する
+  環境）であれば`npm test`はそのまま実行できるはずなので、利用者側での実行を推奨する。
+
+  耐障害性・運用可視性の試験（⑧、24時間soak test等）は実環境接続が前提のため未着手。
 - 設計: [Module](../design/modules/realtime-market-data-stream.md)
 - 対象: `docs/architecture-alignment-and-long-term-roadmap.md` の Horizon 2
   「リアルタイム観測と運用可視性」。開始条件（Durable Workerの安定稼働、履歴RESTの

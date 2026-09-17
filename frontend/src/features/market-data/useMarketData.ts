@@ -195,6 +195,11 @@ export function useMarketData(
     }
   }, [loadMarketData, selectedWorkspaceId, activeInstrumentId, timeframe])
 
+  const reloadMarketData = useCallback(() => {
+    if (!selectedWorkspaceId || !activeInstrumentId) return
+    void loadMarketData(selectedWorkspaceId, activeInstrumentId, timeframe, true)
+  }, [loadMarketData, selectedWorkspaceId, activeInstrumentId, timeframe])
+
   return {
     timeframe,
     setTimeframe,
@@ -213,5 +218,6 @@ export function useMarketData(
     loadOlderCandles,
     startBackfill,
     setAutomaticCollection,
+    reloadMarketData,
   }
 }
