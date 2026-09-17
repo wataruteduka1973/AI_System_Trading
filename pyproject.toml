@@ -19,13 +19,16 @@ dependencies = [
   "psycopg[binary,pool]>=3.3.4,<4",
   "python-binance>=1.0.37,<2",
   "SQLAlchemy>=2.0.51,<2.1",
+  "structlog>=26.1.0,<27",
   "uvicorn[standard]>=0.51,<0.53",
 ]
 
 [project.optional-dependencies]
 dev = [
   "build>=1.2",
-  "pytest>=8.3",
+  "pytest>=8.4,<10",
+  "pytest-asyncio>=1.4.0,<2",
+  "pytest-cov>=7.1.0,<8",
   "httpx>=0.28,<1",
   "respx>=0.22,<1",
   "ruff==0.16.3",

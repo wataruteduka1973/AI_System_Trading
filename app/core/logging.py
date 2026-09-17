@@ -55,7 +55,11 @@ def _is_sensitive_key(key: str) -> bool:
 def _redact_value(value: object) -> object:
     if isinstance(value, dict):
         return {
-            key: ("***" if _is_sensitive_key(str(key)) else _redact_value(item))
+            key: (
+                "***"
+                if _is_sensitive_key(str(key)) and not isinstance(item, (dict, list, tuple))
+                else _redact_value(item)
+            )
             for key, item in value.items()
         }
     if isinstance(value, (list, tuple)):
@@ -64,15 +68,23 @@ def _redact_value(value: object) -> object:
 
 
 def redact_sensitive_fields(
-    logger: object, method_name: str, event_dict: dict[str, object]
-) -> dict[str, object]:
+    logger: object, method_name: str, event_dict: structlog.typing.EventDict
+) -> structlog.typing.EventDict:
     """structlog processor: mask any event-dict key (at any nesting depth)
-    whose name matches a known sensitive-field marker."""
+    whose name matches a known sensitive-field marker.
+
+    A sensitive key whose value is itself a dict/list is not masked
+    wholesale -- it is recursed into instead, so that non-sensitive sibling
+    fields inside it (e.g. "username" next to "password" under a
+    "credentials" key) stay visible instead of being hidden along with the
+    actually-sensitive field.
+    """
     for key in list(event_dict.keys()):
-        if _is_sensitive_key(key):
+        value = event_dict[key]
+        if _is_sensitive_key(key) and not isinstance(value, (dict, list, tuple)):
             event_dict[key] = "***"
         else:
-            event_dict[key] = _redact_value(event_dict[key])
+            event_dict[key] = _redact_value(value)
     return event_dict
 
 
@@ -87,7 +99,7 @@ def configure_logging(settings: Settings, *, log_filename: str = "backend.log") 
     settings.log_dir.mkdir(parents=True, exist_ok=True)
     log_path = settings.log_dir / log_filename
 
-    shared_processors = [
+    shared_processors: list[structlog.typing.Processor] = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_log_level,
         structlog.stdlib.add_logger_name,
