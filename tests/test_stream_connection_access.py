@@ -5,7 +5,6 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
-
 from app.market_data.infrastructure.stream_connection_access import (
     resolve_stream_connection_credentials,
 )
