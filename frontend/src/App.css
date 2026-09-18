@@ -352,6 +352,34 @@ button:disabled {
   border-left-color: #ef5350;
 }
 
+.stream-status {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  border-radius: 12px;
+  background: rgba(15, 31, 54, 0.72);
+  border-left: 4px solid #63b3ff;
+}
+
+.stream-connecting,
+.stream-reconnecting {
+  border-left-color: #8ba0b8;
+}
+
+.stream-connected {
+  border-left-color: #56d6b2;
+}
+
+.stream-delayed {
+  border-left-color: #f5b84b;
+}
+
+.stream-disconnected {
+  border-left-color: #ef5350;
+}
+
 .chart-empty {
   color: #9fb1c7;
 }

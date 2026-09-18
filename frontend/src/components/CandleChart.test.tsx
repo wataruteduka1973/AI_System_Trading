@@ -14,13 +14,13 @@ import {
 afterEach(cleanup)
 
 const chartMock = vi.hoisted(() => ({
-  setData: vi.fn(), remove: vi.fn(), fitContent: vi.fn(),
+  setData: vi.fn(), update: vi.fn(), remove: vi.fn(), fitContent: vi.fn(),
   createChart: vi.fn(),
 }))
 vi.mock('lightweight-charts', () => ({
   CandlestickSeries: {}, ColorType: { Solid: 'solid' }, CrosshairMode: { Normal: 0 },
   createChart: chartMock.createChart.mockImplementation(() => ({
-    addSeries: () => ({ setData: chartMock.setData }),
+    addSeries: () => ({ setData: chartMock.setData, update: chartMock.update }),
     subscribeCrosshairMove: vi.fn(), remove: chartMock.remove,
     timeScale: () => ({
       subscribeVisibleLogicalRangeChange: vi.fn(), getVisibleLogicalRange: () => null,
@@ -121,5 +121,38 @@ describe('CandleChart', () => {
 
     rerender(<CandleChart {...baseProps} error="ローソク足APIへ接続できません。" />)
     expect(screen.getByText('ローソク足APIへ接続できません。')).toBeInTheDocument()
+  })
+
+  it('feeds a live provisional update into the series without touching setData', () => {
+    chartMock.update.mockClear()
+    chartMock.setData.mockClear()
+    const rows = [candle('2026-08-27T00:00:00Z')]
+    const live = candle('2026-08-27T00:01:00Z', '101')
+    const { rerender } = render(<CandleChart {...baseProps} candles={rows} liveCandle={null} />)
+    expect(chartMock.setData).toHaveBeenCalledTimes(1)
+
+    rerender(<CandleChart {...baseProps} candles={rows} liveCandle={live} />)
+
+    expect(chartMock.update).toHaveBeenCalledWith({
+      time: Math.floor(new Date(live.open_time).getTime() / 1000),
+      open: 99,
+      high: 101,
+      low: 98,
+      close: 101,
+    })
+    expect(chartMock.setData).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores a live update the mocked chart rejects as non-monotonic', () => {
+    chartMock.update.mockClear()
+    chartMock.update.mockImplementationOnce(() => {
+      throw new Error('cannot update oldest data')
+    })
+    const rows = [candle('2026-08-27T00:00:00Z')]
+    const live = candle('2026-08-26T23:59:00Z')
+    const { rerender } = render(<CandleChart {...baseProps} candles={rows} liveCandle={null} />)
+    expect(() =>
+      rerender(<CandleChart {...baseProps} candles={rows} liveCandle={live} />),
+    ).not.toThrow()
   })
 })

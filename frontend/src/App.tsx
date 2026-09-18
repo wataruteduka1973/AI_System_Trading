@@ -15,6 +15,7 @@ import InstrumentsPanel from './features/instruments/InstrumentsPanel'
 import { useConnections } from './features/connections/useConnections'
 import ConnectionsPanel, { ConnectionRegistrationForms } from './features/connections/ConnectionsPanel'
 import { useMarketData } from './features/market-data/useMarketData'
+import { useMarketStream } from './features/market-data/useMarketStream'
 import MarketDataPanel from './features/market-data/MarketDataPanel'
 import { apiBaseUrl } from './lib/api'
 import { setOwnerTokenForErrorReporting } from './lib/errorReporting'
@@ -79,6 +80,14 @@ function App() {
   }
 
   const marketData = useMarketData(ownerToken, selectedWorkspaceId, activeInstrumentId)
+  const marketStream = useMarketStream(
+    ownerToken,
+    selectedWorkspaceId,
+    activeInstrumentId,
+    marketData.timeframe,
+    route.kind === 'market',
+    marketData.reloadMarketData,
+  )
 
   return (
     <AppShell workspaceId={selectedWorkspaceId}>
@@ -167,6 +176,11 @@ function App() {
         onLoadOlder={() => void marketData.loadOlderCandles()}
         displayedRange={marketData.displayedRange}
         onDisplayedRangeChange={marketData.setDisplayedRange}
+        connectionStatus={marketStream.connectionStatus}
+        lastDataAt={marketStream.lastDataAt}
+        gapCount={marketStream.gapCount}
+        lastGapReason={marketStream.lastGapReason}
+        liveCandle={marketStream.liveCandle}
       />
 
       <ConnectionRegistrationForms

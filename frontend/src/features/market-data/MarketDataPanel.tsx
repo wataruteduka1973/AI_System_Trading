@@ -1,6 +1,7 @@
 import CandleChart, { type DisplayedRange } from '../../components/CandleChart'
 import type { ChartCandle } from '../../components/marketData'
 import type { WorkspaceInstrument } from '../instruments/types'
+import { statusLabel, type StreamConnectionStatus } from './marketStream'
 import type { BackfillJob, CandleCoverage, MarketDataSubscription, Timeframe } from './types'
 
 const marketErrorLabel = (code: string) => ({
@@ -45,6 +46,11 @@ export default function MarketDataPanel({
   onLoadOlder,
   displayedRange,
   onDisplayedRangeChange,
+  connectionStatus,
+  lastDataAt,
+  gapCount,
+  lastGapReason,
+  liveCandle,
 }: {
   visible: boolean
   visibleInstruments: WorkspaceInstrument[]
@@ -69,6 +75,11 @@ export default function MarketDataPanel({
   onLoadOlder: () => void
   displayedRange: DisplayedRange
   onDisplayedRangeChange: (range: DisplayedRange) => void
+  connectionStatus: StreamConnectionStatus
+  lastDataAt: Date | null
+  gapCount: number
+  lastGapReason: string | null
+  liveCandle: ChartCandle | null
 }) {
   if (!visible) return null
 
@@ -181,7 +192,16 @@ export default function MarketDataPanel({
           hasOlder={hasOlderCandles}
           onLoadOlder={onLoadOlder}
           onDisplayedRangeChange={onDisplayedRangeChange}
+          liveCandle={liveCandle}
         />
+      )}
+      {connectionStatus !== 'idle' && (
+        <div className={`stream-status stream-${connectionStatus}`}>
+          <strong>リアルタイム配信: {statusLabel(connectionStatus)}</strong>
+          <span>直近データ受信: {lastDataAt ? lastDataAt.toLocaleString('ja-JP') : 'まだありません'}</span>
+          <span>gap件数: {gapCount}</span>
+          {lastGapReason && <span>直近の遅延理由: {lastGapReason}</span>}
+        </div>
       )}
       {displayedRange && (
         <div className="chart-range">

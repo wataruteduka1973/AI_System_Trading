@@ -30,6 +30,7 @@ type Props = {
   hasOlder: boolean
   onLoadOlder: () => void
   onDisplayedRangeChange: (range: DisplayedRange) => void
+  liveCandle?: ChartCandle | null
 }
 
 const candleTimestamp = (candle: ChartCandle) =>
@@ -44,6 +45,7 @@ export default function CandleChart({
   hasOlder,
   onLoadOlder,
   onDisplayedRangeChange,
+  liveCandle = null,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [hovered, setHovered] = useState<ChartCandle | null>(null)
@@ -199,6 +201,27 @@ export default function CandleChart({
       rangeLoadingReadyRef.current = true
     }
   }, [candles, instrument, loadingInitial])
+
+  useEffect(() => {
+    const series = seriesRef.current
+    if (!series || !liveCandle) return
+    const time = candleTimestamp(liveCandle)
+    try {
+      series.update({
+        time,
+        open: Number(liveCandle.open),
+        high: Number(liveCandle.high),
+        low: Number(liveCandle.low),
+        close: Number(liveCandle.close),
+      })
+      indexedRef.current.set(time, liveCandle)
+    } catch {
+      // A stream event for a bar the chart has already moved past (e.g. it
+      // arrived just after a REST refresh replaced the candle set) --
+      // lightweight-charts rejects a non-monotonic update. Safe to ignore;
+      // the next live event will be for the chart's current bar.
+    }
+  }, [liveCandle])
 
   if (loadingInitial) return <p className="chart-state">ローソク足を読み込んでいます。</p>
   if (error && candles.length === 0) return <p className="chart-state chart-error">{error}</p>

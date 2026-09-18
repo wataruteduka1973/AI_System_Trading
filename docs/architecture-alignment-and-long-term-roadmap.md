@@ -251,8 +251,8 @@ Application抽出を先行する。OANDA確認やHorizon 1全体を完了扱い�
 `kline_socket`）はAPIプロセス内でasyncio background taskとして保持し、ブラウザ向けWebSocket
 終端と同一プロセス内のin-memory pub-subで完結させる方針を利用者が承認した（Worker↔API間の
 新しいIPCやRedis/Kafka等の新規infraは導入しない）。実装（②以降）は進行中
-（2026-09-17時点で②③④⑤⑥が完了。詳細な進捗は`docs/plans/realtime-market-data-stream.md`の
-status logを正とする）。
+（2026-09-17時点で②③④⑤⑥⑦が完了。耐障害性・運用可視性の試験⑧は実環境接続が前提のため
+未着手。詳細な進捗は`docs/plans/realtime-market-data-stream.md`のstatus logを正とする）。
 
 #### 開始条件
 
