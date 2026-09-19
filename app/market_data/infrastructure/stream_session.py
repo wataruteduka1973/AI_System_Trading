@@ -135,7 +135,12 @@ async def run_stream_session(
             feed_started_at=subscription.feed_started_at,
             buffered_events=subscription.buffered_events,
         )
-        last_sequence = resume_request.last_sequence if resume_request.is_present else -1
+        last_sequence = (
+            resume_request.last_sequence
+            if resume_request.last_sequence is not None
+            and resume_request.feed_started_at is not None
+            else -1
+        )
         await transport.send(encode_stream_state(subscription.feed_started_at, decision.mode))
         for event in decision.events_to_replay:
             last_sequence = event.sequence

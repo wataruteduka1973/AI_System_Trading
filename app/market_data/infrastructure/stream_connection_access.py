@@ -96,7 +96,7 @@ def _fetch_row(
 ) -> tuple[ExchangeConnection, ExternalAccount] | None:
     # Shared lock mirrors PageAccess.resolve: holds the authorization
     # decision stable through commit.
-    return db.execute(
+    row = db.execute(
         select(ExchangeConnection, ExternalAccount)
         .join(Exchange, ExchangeConnection.exchange_id == Exchange.id)
         .join(
@@ -119,6 +119,9 @@ def _fetch_row(
         )
         .with_for_update(read=True)
     ).one_or_none()
+    if row is None:
+        return None
+    return (row[0], row[1])
 
 
 def _credentials_from_row(
