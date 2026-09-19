@@ -108,9 +108,7 @@ async def run_stream_session(
     heartbeat_interval_seconds: float,
 ) -> None:
     try:
-        claims = verify_and_consume_ticket(
-            ticket_secret, params.ticket, used_tickets=used_tickets
-        )
+        claims = verify_and_consume_ticket(ticket_secret, params.ticket, used_tickets=used_tickets)
     except StreamTicketError as exc:
         await transport.close(code=CLOSE_TICKET_REJECTED, reason=exc.code)
         return
@@ -131,9 +129,7 @@ async def run_stream_session(
 
     await transport.accept()
     try:
-        resume_request = ResumeRequest(
-            params.resume_last_sequence, params.resume_feed_started_at
-        )
+        resume_request = ResumeRequest(params.resume_last_sequence, params.resume_feed_started_at)
         decision = decide_resume(
             resume_request,
             feed_started_at=subscription.feed_started_at,

@@ -105,9 +105,7 @@ def _fetch_row(
             & (WorkspaceAccountSelection.exchange_id == Exchange.id),
         )
         .join(Workspace, Workspace.id == WorkspaceAccountSelection.workspace_id)
-        .join(
-            ExternalAccount, ExternalAccount.id == WorkspaceAccountSelection.external_account_id
-        )
+        .join(ExternalAccount, ExternalAccount.id == WorkspaceAccountSelection.external_account_id)
         .where(
             Exchange.code == exchange,
             Exchange.status == "active",
@@ -148,9 +146,7 @@ def _credentials_from_row(
         try:
             account_id = secrets.decrypt_text(account.external_account_ref_encrypted)
         except ValueError as exc:
-            raise MarketDataAccessError(
-                "Credentials unreadable", "credentials_unreadable"
-            ) from exc
+            raise MarketDataAccessError("Credentials unreadable", "credentials_unreadable") from exc
         return StreamConnectionCredentials(
             exchange="oanda", base_url=connection.api_base_url, token=token, account_id=account_id
         )

@@ -74,8 +74,7 @@ def test_parse_kline_message_ignores_non_kline_and_malformed_payloads() -> None:
     incomplete_kline = {"t": 1, "o": "1", "h": "1", "l": "1", "x": False}  # missing "c"/"v"
     assert parse_kline_message({"e": "kline", "k": incomplete_kline}) is None
     assert (
-        parse_kline_message(_kline(0, o="0", h="0", low="0", c="0", v="0", is_closed=False))
-        is None
+        parse_kline_message(_kline(0, o="0", h="0", low="0", c="0", v="0", is_closed=False)) is None
     )  # non-positive price
 
 
