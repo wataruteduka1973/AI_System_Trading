@@ -43,6 +43,7 @@ import asyncio
 import contextlib
 import json
 import os
+import random
 import sys
 import urllib.error
 import urllib.parse
@@ -62,8 +63,26 @@ from websockets.exceptions import ConnectionClosed
 NON_RETRYABLE_CLOSE_CODES = {4401, 4403}
 
 HEARTBEAT_INTERVAL_SECONDS = 60.0
-RECONNECT_BACKOFF_SECONDS = 3.0
 TICKET_REQUEST_TIMEOUT_SECONDS = 10.0
+
+INITIAL_RECONNECT_BACKOFF_SECONDS = 1.0
+MAX_RECONNECT_BACKOFF_SECONDS = 60.0
+_BACKOFF_MULTIPLIER = 2.0
+"""Deliberately duplicated (not imported) from
+app.market_data.infrastructure.binance_stream.compute_reconnect_backoff_seconds
+-- this script is intentionally independent of the app package (see module
+docstring). The 2026-09-19 soak-test incident's log (soak_test_log.jsonl)
+showed this script itself retrying a refused connection every ~5s with no
+backoff for over 12 minutes once the API process went down; this closes
+that gap in the test tool, matching the app-side fix."""
+
+
+def _compute_reconnect_backoff_seconds(attempt: int, *, rng: random.Random) -> float:
+    base = min(
+        INITIAL_RECONNECT_BACKOFF_SECONDS * (_BACKOFF_MULTIPLIER ** (attempt - 1)),
+        MAX_RECONNECT_BACKOFF_SECONDS,
+    )
+    return rng.uniform(base / 2, base)
 
 
 @dataclass
@@ -160,10 +179,11 @@ async def run_connection(
     log_path: Path,
     resume_last_sequence: int | None,
     resume_feed_started_at: str | None,
-) -> tuple[int | None, str | None]:
+) -> tuple[int | None, str | None, bool]:
     """Run a single ticket + WS connection until it closes. Returns the
     (last_sequence, feed_started_at) resume state to try on the next
-    connection, or (None, None) if nothing usable was observed."""
+    connection, plus whether any message was received on this connection
+    (used by the caller to decide whether to reset the reconnect backoff)."""
     ticket_info = issue_ticket(base_url, owner_token, workspace_id, instrument_id, timeframe)
     url = build_ws_url(
         base_url, ticket_info["ticket"], resume_last_sequence, resume_feed_started_at
@@ -171,9 +191,11 @@ async def run_connection(
 
     last_sequence = resume_last_sequence
     feed_started_at = resume_feed_started_at
+    received_any = False
 
     async with websockets.connect(url) as connection:
         async for raw_message in connection:
+            received_any = True
             message: dict[str, Any] = json.loads(raw_message)
             if message.get("type") == "stream_state":
                 feed_started_at = message["feed_started_at"]
@@ -187,7 +209,7 @@ async def run_connection(
             if event_type == "gap_notice":
                 append_log(log_path, {"kind": "gap_notice", "message": message})
 
-    return last_sequence, feed_started_at
+    return last_sequence, feed_started_at, received_any
 
 
 async def soak(args: argparse.Namespace) -> None:
@@ -208,11 +230,14 @@ async def soak(args: argparse.Namespace) -> None:
     heartbeat_task = asyncio.create_task(heartbeat_loop(stats, log_path, deadline))
     resume_last_sequence: int | None = None
     resume_feed_started_at: str | None = None
+    rng = random.Random()
+    attempt = 0
 
     try:
         while datetime.now(UTC) < deadline:
+            received_any = False
             try:
-                resume_last_sequence, resume_feed_started_at = await run_connection(
+                resume_last_sequence, resume_feed_started_at, received_any = await run_connection(
                     args.base_url,
                     args.owner_token,
                     args.workspace_id,
@@ -245,7 +270,15 @@ async def soak(args: argparse.Namespace) -> None:
             stats.reconnect_count += 1
             if datetime.now(UTC) >= deadline:
                 break
-            await asyncio.sleep(RECONNECT_BACKOFF_SECONDS)
+            if received_any:
+                attempt = 0
+            attempt += 1
+            delay = _compute_reconnect_backoff_seconds(attempt, rng=rng)
+            append_log(
+                log_path,
+                {"kind": "reconnect_scheduled", "attempt": attempt, "backoff_seconds": delay},
+            )
+            await asyncio.sleep(delay)
     finally:
         heartbeat_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):

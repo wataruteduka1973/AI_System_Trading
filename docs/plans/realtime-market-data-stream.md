@@ -155,6 +155,55 @@
   環境）であれば`npm test`はそのまま実行できるはずなので、利用者側での実行を推奨する。
 
   耐障害性・運用可視性の試験（⑧、24時間soak test等）は実環境接続が前提のため未着手。
+- 2026-09-19: ⑧の最初の24時間soak testを`scripts/stream_soak_monitor.py`で実施し
+  （`soak_test_log.jsonl`）、2件の耐障害性欠陥を発見・修正した。
+  1. **Binance stream切断後、再接続が一度も行われない**: `BinanceFeedWorker`は
+     `report_failure`でgap_noticeを発行した後、taskをそのまま終了していた。実行中に
+     upstream側のqueue overflow（python-binance `ReconnectingWebsocket`が内部queueの
+     溢れを`{"e": "error", ...}`通知として`recv()`へ注入する既知の経路）が発生し、
+     この経路で`report_failure`は正しく呼ばれたが、その後何も再試行しなかったため、
+     feedが約4時間、サイレントに`disconnected`状態のまま放置された
+     （ログ07:31:15の`gap_notice`以降、11:31:14にAPIプロセスが再起動されるまで
+     `candle_finalized`/`provisional_update`が一切増えていない）。
+     修正: `BinanceFeedWorker`に指数backoff+jitter（`compute_reconnect_backoff_seconds`、
+     初期1秒・上限60秒・equal jitter）付きの再接続loopを追加した。接続確立後に
+     一度でもメッセージを受信していれば次回失敗時のattemptを0へ戻す（一時的な瞬断と
+     継続的な障害を区別する）。3回連続で接続に失敗するまではFeedState`delayed`、
+     それ以降は`disconnected`とし、再接続自体は`stop()`（feed teardown）以外では
+     止まらない。
+  2. **メッセージが一切来ない「本当に無音」な切断を検知できない**: 上記1の経路は
+     python-binance自身が何らかのエラー通知を`recv()`へ注入した場合のみ機能する。
+     Binance側が通知すら送らずに応答を止める、より悪いケースを想定し、
+     `stream.recv()`を`asyncio.wait_for(..., timeout=silence_timeout_seconds)`
+     （既定90秒。design doc section 6の通りkline streamは通常1〜2秒間隔で配信される
+     ため十分な余裕を持つ）でラップし、無応答が続けば`binance_stream_silent`という
+     専用reason_codeで同じ再接続経路へ合流させる（ウォッチドッグ）。
+  3. **`scripts/stream_soak_monitor.py`自身の再接続にもbackoffがなかった**:
+     ログ11:31:19〜11:34:56の間、拒否された接続（`WinError 10061`、APIプロセス自体が
+     停止していた）に対し固定3秒間隔で再試行し続けていた（12分強で90回以上）。
+     試験ツール側にも同じ指数backoff+jitterを実装（appの`binance_stream.py`とは
+     意図的に非同期import不可のため関数を複製、モジュールdocstring参照）した。
+  4. **受信キューのバックプレッシャー化**: `candle_stream.FeedHub`の購読者queueは
+     従来無制限（モジュールdocstringで明示済みの既知の未対応事項）だった。
+     `subscriber_queue_maxsize`（既定1000）で有界化し、溢れた場合は例外を投げず、
+     また古いeventを黙って捨てる（mid-session sequence gapを検知するclient側実装が
+     存在しないため、これは無音の欠損になり得る）のでもなく、`SubscriberOverflow`
+     sentinelを押し込んで当該購読者だけをforce-disconnectする。切断されたclientは
+     既存のreconnect + REST gap-fill経路（RT-08）で自然に復旧するため、新しい種類の
+     検知不能なgapを発明せずに済む。他の購読者のfan-outには影響しない。
+  5. **構造化ログ**: `binance_stream.py`/`candle_stream.py`にstructlog
+     （`app/core/logging.py`、既存基盤を再利用）を配線し、feed開始/失敗/回復/teardown、
+     再接続試行のattempt/backoff_seconds/code、購読者queue overflowを記録した。
+  6. 利用者からの要望のうち「DB書き込みのバッチflush」は、ストリーム側（表示専用、
+     確定足の永続化はWorkerの`ExecuteMarketDataPage`が独占する既存アーキテクチャ決定）に
+     新設するとWorkerの経路と並行するDB書き込み経路が生まれるため、意図的に対象外とした
+     （利用者判断待ちのまま今回はスキップ）。ストリーム側は現状も一切DBへ書き込まない。
+  検証: `tests/test_binance_stream.py`（再接続2件、backoff純関数2件を追加）、
+  `tests/test_candle_stream.py`（queue overflow 2件を追加）、
+  `tests/test_stream_session.py`（overflow→force-disconnect 1件を追加）。
+  既存29+9+38+13ケースを含む変更ファイル関連の非DB試験は全件成功（新規9件含む）。
+  Ruff lint/format、mypy（該当3ファイル）はいずれもクリーン。24時間soak testの
+  再実行によるこの修正自体の実地確認はNOT VERIFIED（次回soak testで確認する）。
 - 設計: [Module](../design/modules/realtime-market-data-stream.md)
 - 対象: `docs/architecture-alignment-and-long-term-roadmap.md` の Horizon 2
   「リアルタイム観測と運用可視性」。開始条件（Durable Workerの安定稼働、履歴RESTの
@@ -238,7 +287,8 @@
    接続状態（connected/reconnecting/delayed/disconnected）、直近データ時刻、gap件数、
    Worker heartbeat状態を画面表示する（`App.tsx`または将来のfeature分割後のmarket-data feature）。
 8. **耐障害性・運用可視性の試験**: 切断/再接続、重複、順不同、clock skew、backpressure、
-   24時間soak testを専用環境で実施する。
+   24時間soak testを専用環境で実施する。（本番相当環境での最終確認の実施時期は
+   `../decisions/0001-defer-realtime-stream-soak-test.md`を参照）
 
 ## 受入試験
 

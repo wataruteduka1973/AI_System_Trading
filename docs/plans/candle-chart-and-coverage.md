@@ -216,19 +216,51 @@ padding.
 
 ### Phase B2 — real-time market updates
 
-Status: `[ ]` not implemented.
+Status: `[~]` implemented under a different name. 2026-09-19 correction: this section had not
+been updated since 2026-08-29 and still read "not implemented" after the work below was already
+done. The long-term roadmap (`../architecture-alignment-and-long-term-roadmap.md`, section 7,
+Horizon 2) tracks this same scope as "Horizon 2: リアルタイム観測と運用可視性" and is the
+current source of truth for its implementation state, per that document's own section 11
+("個別機能の実装状態は `docs/plans/` の各専用計画を正とする") -- the authoritative detailed
+plan and acceptance tests are `../plans/realtime-market-data-stream.md` and
+`../design/modules/realtime-market-data-stream.md`. This section is kept only as a cross-reference
+so a reader who lands here first is not misled into thinking the work has not started.
 
 #### Deliverables
 
-- [ ] Add OANDA and Binance backend stream adapters and normalized provisional candle events.
-- [ ] Add short-lived stream tickets and Workspace authorization.
-- [ ] Add heartbeat, reconnect, delayed, and disconnected states.
-- [ ] Deduplicate events and handle late events and timeframe rollover.
-- [ ] Reconcile missing final candles through bounded REST gap fill after reconnect.
-- [ ] Update the chart with `series.update(...)` rather than replacing all chart data.
-- [ ] Persist only finalized candles as final data.
-- [ ] Test disconnect/reconnect, duplicates, late events, rollover, ticket expiry, and Workspace
-  isolation.
+- [x] Add OANDA and Binance backend stream adapters and normalized provisional candle events
+  (`app/market_data/infrastructure/oanda_stream.py`, `binance_stream.py`; work units 3/4).
+- [x] Add short-lived stream tickets and Workspace authorization (`stream_tickets.py`; work unit 2).
+- [x] Add heartbeat, reconnect, delayed, and disconnected states. A 2026-09-19 24-hour soak test
+  (RT-14) found that a reported Binance disconnect never triggered a retry, leaving the feed
+  silently stuck for hours until the API process was restarted, and that the soak test tool's own
+  reconnect loop hammered a refused connection every ~5s with no backoff. Both were fixed the same
+  day: `BinanceFeedWorker` now retries with exponential backoff + jitter and a message-silence
+  watchdog, and each subscriber's delivery queue is bounded (overflow force-disconnects that one
+  subscriber instead of raising or silently dropping events) -- see
+  `../plans/realtime-market-data-stream.md` status log for detail.
+- [x] Deduplicate events and handle late events and timeframe rollover (`sequence` numbering +
+  `stream_protocol.decide_resume`; RT-07/08/13).
+- [x] Reconcile missing final candles through bounded REST gap fill after reconnect
+  (`decide_resume`'s `gap_fill_required` outcome + frontend `useMarketStream.ts`).
+- [x] Update the chart with `series.update(...)` rather than replacing all chart data
+  (`CandleChart.tsx` `liveCandle` prop; work unit 7).
+- [x] Persist only finalized candles as final data -- by construction: the stream modules never
+  write to PostgreSQL at all (confirmed 2026-09-19; grepped for any DB/session usage under
+  `app/market_data/infrastructure/*_stream.py`, `stream_session.py`, `candle_stream.py` and found
+  none). Finalized-candle persistence remains exclusively the Durable Worker's
+  `ExecuteMarketDataPage`, matching this deliverable and the Horizon 2 architecture decision. A
+  request to also batch-flush finalized stream events directly to the database was raised during
+  the 2026-09-19 hardening pass and explicitly deferred by the user pending a separate design
+  decision, to avoid an unreviewed dual-write path against the Worker's authoritative one.
+- [~] Test disconnect/reconnect, duplicates, late events, rollover, ticket expiry, and Workspace
+  isolation. RT-01/02/03/04/05/06/07/09/10/11/12/13 are covered by automated regression tests. The
+  2026-09-19 soak test (RT-14) is the first real run and surfaced the reconnect/watchdog/backpressure
+  gaps above; a follow-up 24-hour soak run to confirm the fix holds is NOT VERIFIED as of this
+  writing (a fresh run has not yet completed). The timing of that follow-up run has since been
+  redefined -- see `../decisions/0001-defer-realtime-stream-soak-test.md` -- to a production-equivalent
+  deployment-time task rather than a near-term local re-run; this section's NOT VERIFIED status is
+  unchanged by that redefinition.
 
 #### Entry condition
 

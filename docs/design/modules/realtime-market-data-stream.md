@@ -42,6 +42,14 @@ Workspace固有情報は含まれないため）。
 - feed内部状態: `sequence`（feedごとの単調増加カウンタ、生成時0から開始）、直近event
   ring buffer（既定200件、再接続時の即時再送用）、feed生成時刻（クライアントが
   「feedが再生成されたか」をticket応答から判定する材料にする）。
+- 購読者ごとのdelivery queueは有界（既定1000、`subscriber_queue_maxsize`）。溢れた場合
+  （2026-09-19追記、⑧soak testで発見）、`_append_and_fanout`は例外を投げず、また
+  溢れた購読者の古いeventを黙って捨てるのでもなく、`SubscriberOverflow` sentinelを
+  push して当該購読者だけをforce-disconnectする。他の購読者への配送には影響しない。
+  disconnectされたclientは既存のreconnect + REST gap-fill経路（section 7、RT-08）で
+  復旧する -- mid-session sequence gapを検知するclient側実装は存在しないため、古い
+  eventを黙って捨てる方式は検知不能な欠損を生みうる（section 7・RT-13は再接続時の
+  gapのみを想定した設計であり、生存接続中のgapは想定外）。
 
 ## 4. Ticket
 
@@ -126,6 +134,17 @@ timeframeを扱う単位が出てきた際に、ブローカー日境界への�
   event/ログに出さない（Worker側の`page_errors.py`の分類方針を踏襲する）。
 - Workspaceの接続無効化・口座変更が発生した場合、該当Workspaceの購読者のみticket再検証で
   弾く（feed自体はWorkspace非依存のため他購読者には影響しない）。
+- 2026-09-19追記（⑧soak testで発見・修正）: `BinanceFeedWorker`は失敗を`gap_notice`として
+  報告した後にfeedを終了せず、指数backoff+jitter（初期1秒・上限60秒）で自動再接続する。
+  接続確立後に一度でも受信していれば次回失敗時のattemptを0へ戻す。3回連続の接続失敗未満は
+  `delayed`、それ以降は`disconnected`とする。`recv()`を無応答timeout（既定90秒）で
+  ラップするwatchdogを追加し、python-binance自身が何のエラー通知も出さずに応答を止める
+  ケースも`binance_stream_silent`というreason_codeで同じ再接続経路へ合流させる。
+  再接続自体は`FeedWorkerHandle.stop()`（feed teardown）以外では止まらない。
+- 購読者queueが溢れた場合（section 3）、WS終端は`SubscriberOverflow` sentinelを受け取り、
+  close code `1013`（"Try Again Later"）でその接続だけを切断する。既存の
+  `NON_RETRYABLE_CLOSE_CODES`（4401/4403）には含めないため、client側は通常の切断と同様に
+  再接続 + gap-fillを行う。
 
 ## 9. 技術根拠・依存関係
 

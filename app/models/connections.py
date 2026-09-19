@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -96,6 +96,35 @@ class ExternalAccount(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     connection: Mapped[ExchangeConnection] = relationship(back_populates="external_accounts")
+
+
+class AccountSelectionPolicy(Base):
+    """Added for Paper Trading's `TradingAccount.selection_policy_id` foreign
+    key to resolve (see `app/models/strategy.py` module docstring for why
+    this is needed at all). Already existed in the live DB; not a new table."""
+
+    __tablename__ = "account_selection_policy"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id", "name", "version", name="uq_account_selection_policy_version"
+        ),
+        UniqueConstraint("workspace_id", "checksum", name="uq_account_selection_policy_checksum"),
+        {"schema": SCHEMA},
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, server_default=func.gen_random_uuid())
+    workspace_id: Mapped[UUID] = mapped_column(
+        ForeignKey(f"{SCHEMA}.workspace.id", ondelete="CASCADE")
+    )
+    name: Mapped[str] = mapped_column(Text)
+    version: Mapped[int]
+    criteria: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    checksum: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(Text, server_default="draft")
+    created_by: Mapped[UUID | None] = mapped_column(
+        ForeignKey(f"{SCHEMA}.app_user.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class WorkspaceAccountSelection(Base):
