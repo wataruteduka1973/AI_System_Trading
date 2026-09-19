@@ -101,9 +101,11 @@ def test_rejects_an_invalid_ticket_with_a_safe_close_code(monkeypatch) -> None:
     _fresh_hub(monkeypatch)
     _fresh_used_tickets(monkeypatch)
 
-    with pytest.raises(Exception):
-        with client.websocket_connect("/ws/v1/market-stream?ticket=not-a-real-ticket"):
-            pass
+    with (
+        pytest.raises(Exception),  # noqa: B017
+        client.websocket_connect("/ws/v1/market-stream?ticket=not-a-real-ticket"),
+    ):
+        pass
 
 
 def test_rejects_a_ticket_signed_with_a_different_secret(monkeypatch) -> None:
@@ -123,9 +125,11 @@ def test_rejects_a_ticket_signed_with_a_different_secret(monkeypatch) -> None:
         "wrong-secret",
         algorithm="HS256",
     )
-    with pytest.raises(Exception):
-        with client.websocket_connect(f"/ws/v1/market-stream?ticket={bad_token}"):
-            pass
+    with (
+        pytest.raises(Exception),  # noqa: B017
+        client.websocket_connect(f"/ws/v1/market-stream?ticket={bad_token}"),
+    ):
+        pass
 
 
 def test_accepts_a_valid_ticket_and_streams_the_stream_state_envelope(monkeypatch) -> None:
@@ -173,9 +177,11 @@ def test_rejects_a_second_connection_with_the_same_ticket(monkeypatch) -> None:
     with client.websocket_connect(f"/ws/v1/market-stream?ticket={ticket}"):
         pass
 
-    with pytest.raises(Exception):
-        with client.websocket_connect(f"/ws/v1/market-stream?ticket={ticket}"):
-            pass
+    with (
+        pytest.raises(Exception),  # noqa: B017
+        client.websocket_connect(f"/ws/v1/market-stream?ticket={ticket}"),
+    ):
+        pass
 
 
 def test_rejects_when_ticket_signing_is_not_configured(monkeypatch) -> None:
@@ -183,6 +189,8 @@ def test_rejects_when_ticket_signing_is_not_configured(monkeypatch) -> None:
     _fresh_hub(monkeypatch)
     _fresh_used_tickets(monkeypatch)
 
-    with pytest.raises(Exception):
-        with client.websocket_connect("/ws/v1/market-stream?ticket=irrelevant"):
-            pass
+    with (
+        pytest.raises(Exception),  # noqa: B017
+        client.websocket_connect("/ws/v1/market-stream?ticket=irrelevant"),
+    ):
+        pass

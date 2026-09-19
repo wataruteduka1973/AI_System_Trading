@@ -59,7 +59,11 @@ def test_encode_event_stamps_workspace_id_and_flattens_ohlcv() -> None:
 
 def test_encode_event_handles_gap_notice_with_no_ohlcv() -> None:
     event = _event(
-        4, event_type="gap_notice", open_time=None, ohlcv=None, quality=None,
+        4,
+        event_type="gap_notice",
+        open_time=None,
+        ohlcv=None,
+        quality=None,
         reason_code="binance_stream_disconnected",
     )
     encoded = encode_event(event, WORKSPACE_ID)

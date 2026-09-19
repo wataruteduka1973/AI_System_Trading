@@ -5,7 +5,6 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
-
 from app.market_data.infrastructure.stream_connection_access import (
     resolve_stream_connection_credentials,
 )
@@ -146,7 +145,7 @@ def test_rejects_non_practice_base_url_even_if_environment_says_practice() -> No
     connection, account = _oanda_connection()
     connection.api_base_url = "https://api-fxtrade.oanda.com"  # live host, not practice
     db = _session_returning((connection, account))
-    with pytest.raises(Exception):  # OandaApiError from the defense-in-depth URL check
+    with pytest.raises(Exception):  # noqa: B017 -- OandaApiError from the defense-in-depth URL check
         resolve_stream_connection_credentials(
             db, _FakeSecrets({"token": "x"}), workspace_id=WORKSPACE_ID, exchange="oanda"
         )

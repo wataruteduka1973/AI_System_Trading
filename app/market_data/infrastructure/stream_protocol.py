@@ -138,7 +138,7 @@ def decide_resume(
 ) -> ResumeDecision:
     """See module docstring and design doc section 7 for the protocol this
     implements (RT-07/RT-08)."""
-    if not request.is_present:
+    if request.last_sequence is None or request.feed_started_at is None:
         # RT-01: first-ever connect for this client, or it chose not to
         # resume. `buffered_events` is just today's normal initial sync
         # (whatever is already in the feed's ring buffer, e.g. if another

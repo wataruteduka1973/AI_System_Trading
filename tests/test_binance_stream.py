@@ -7,8 +7,6 @@ import asyncio
 from decimal import Decimal
 from unittest.mock import MagicMock
 
-from binance.exceptions import ReadLoopClosed
-
 from app.exchanges.binance import BinanceApiError
 from app.market_data.infrastructure.binance_stream import (
     BinanceFeedWorker,
@@ -16,11 +14,12 @@ from app.market_data.infrastructure.binance_stream import (
     parse_kline_message,
 )
 from app.market_data.infrastructure.candle_stream import FeedHub, StreamFeedKey
+from binance.exceptions import ReadLoopClosed
 
 TESTNET_BASE_URL = "https://testnet.binance.vision"
 
 
-def _kline(open_time_ms: int, *, o: str, h: str, l: str, c: str, v: str, is_closed: bool) -> dict:
+def _kline(open_time_ms: int, *, o: str, h: str, low: str, c: str, v: str, is_closed: bool) -> dict:
     return {
         "e": "kline",
         "E": open_time_ms + 500,
@@ -33,7 +32,7 @@ def _kline(open_time_ms: int, *, o: str, h: str, l: str, c: str, v: str, is_clos
             "o": o,
             "c": c,
             "h": h,
-            "l": l,
+            "l": low,
             "v": v,
             "n": 10,
             "x": is_closed,
@@ -52,7 +51,7 @@ def _kline(open_time_ms: int, *, o: str, h: str, l: str, c: str, v: str, is_clos
 
 def test_parse_kline_message_extracts_ohlcv_and_is_final() -> None:
     provisional_payload = _kline(
-        1_700_000_000_000, o="100.0", h="100.5", l="99.5", c="100.2", v="1.0", is_closed=False
+        1_700_000_000_000, o="100.0", h="100.5", low="99.5", c="100.2", v="1.0", is_closed=False
     )
     provisional = parse_kline_message(provisional_payload)
     assert provisional is not None
@@ -60,7 +59,7 @@ def test_parse_kline_message_extracts_ohlcv_and_is_final() -> None:
     assert provisional.ohlcv.close == Decimal("100.2")
 
     final_payload = _kline(
-        1_700_000_000_000, o="100.0", h="101.0", l="99.5", c="100.8", v="2.5", is_closed=True
+        1_700_000_000_000, o="100.0", h="101.0", low="99.5", c="100.8", v="2.5", is_closed=True
     )
     final = parse_kline_message(final_payload)
     assert final is not None
@@ -75,8 +74,7 @@ def test_parse_kline_message_ignores_non_kline_and_malformed_payloads() -> None:
     incomplete_kline = {"t": 1, "o": "1", "h": "1", "l": "1", "x": False}  # missing "c"/"v"
     assert parse_kline_message({"e": "kline", "k": incomplete_kline}) is None
     assert (
-        parse_kline_message(_kline(0, o="0", h="0", l="0", c="0", v="0", is_closed=False))
-        is None
+        parse_kline_message(_kline(0, o="0", h="0", low="0", c="0", v="0", is_closed=False)) is None
     )  # non-positive price
 
 
@@ -161,10 +159,10 @@ class _FakeSocketManager:
 def test_binance_feed_worker_publishes_normalized_events_through_a_feed_hub() -> None:
     open_ms = 1_700_000_000_000
     messages = [
-        _kline(open_ms, o="100.0", h="100.5", l="99.5", c="100.2", v="1.0", is_closed=False),
-        _kline(open_ms, o="100.0", h="101.0", l="99.5", c="100.8", v="2.5", is_closed=True),
+        _kline(open_ms, o="100.0", h="100.5", low="99.5", c="100.2", v="1.0", is_closed=False),
+        _kline(open_ms, o="100.0", h="101.0", low="99.5", c="100.8", v="2.5", is_closed=True),
         _kline(
-            open_ms + 60_000, o="100.8", h="100.9", l="100.7", c="100.9", v="0.5", is_closed=False
+            open_ms + 60_000, o="100.8", h="100.9", low="100.7", c="100.9", v="0.5", is_closed=False
         ),
     ]
     client = _FakeClient()
@@ -223,7 +221,7 @@ def test_binance_feed_worker_reports_connect_failure_as_gap_notice() -> None:
 def test_binance_feed_worker_reports_stream_error_as_gap_notice() -> None:
     open_ms = 1_700_000_000_000
     messages = [
-        _kline(open_ms, o="100.0", h="100.5", l="99.5", c="100.2", v="1.0", is_closed=False),
+        _kline(open_ms, o="100.0", h="100.5", low="99.5", c="100.2", v="1.0", is_closed=False),
         {"e": "error", "type": "ConnectionClosedError", "m": "boom"},
     ]
     client = _FakeClient()
@@ -257,7 +255,7 @@ def test_binance_feed_worker_reports_stream_error_as_gap_notice() -> None:
 def test_binance_feed_worker_reports_read_loop_closed_as_gap_notice() -> None:
     open_ms = 1_700_000_000_000
     messages = [
-        _kline(open_ms, o="100.0", h="100.5", l="99.5", c="100.2", v="1.0", is_closed=False),
+        _kline(open_ms, o="100.0", h="100.5", low="99.5", c="100.2", v="1.0", is_closed=False),
     ]
     client = _FakeClient()
 

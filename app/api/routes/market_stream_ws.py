@@ -45,7 +45,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.market_data.infrastructure.binance_stream import make_binance_feed_starter
-from app.market_data.infrastructure.candle_stream import FeedHub, FeedStarter, StreamFeedKey
+from app.market_data.infrastructure.candle_stream import FeedHub, FeedStarter
 from app.market_data.infrastructure.oanda_stream import make_oanda_feed_starter
 from app.market_data.infrastructure.stream_connection_access import (
     StreamConnectionCredentials,

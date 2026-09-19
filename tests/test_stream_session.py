@@ -13,7 +13,6 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
-
 from app.market_data.infrastructure.candle_stream import (
     OHLCV,
     FeedHub,
