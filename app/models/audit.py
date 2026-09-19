@@ -1,13 +1,16 @@
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Text, func
 from sqlalchemy.dialects.postgresql import INET, JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.config import settings
 from app.db.session import Base
+
+if TYPE_CHECKING:
+    from app.models.strategy import TradingHalt
 
 SCHEMA = settings.database_schema
 
@@ -64,3 +67,5 @@ class SystemEvent(Base):
     message: Mapped[str] = mapped_column(Text)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}")
     contains_sensitive_data: Mapped[bool] = mapped_column(Boolean, server_default="false")
+
+    triggered_halts: Mapped[list["TradingHalt"]] = relationship(back_populates="trigger_event")

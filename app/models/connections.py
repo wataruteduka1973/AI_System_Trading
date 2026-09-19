@@ -1,6 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint, func
@@ -10,6 +10,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.config import settings
 from app.db.session import Base
 from app.models.workspace import Workspace
+
+if TYPE_CHECKING:
+    from app.models.trading import TradingAccount
 
 SCHEMA = settings.database_schema
 
@@ -125,6 +128,10 @@ class AccountSelectionPolicy(Base):
         ForeignKey(f"{SCHEMA}.app_user.id", ondelete="SET NULL")
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    trading_accounts: Mapped[list["TradingAccount"]] = relationship(
+        back_populates="selection_policy"
+    )
 
 
 class WorkspaceAccountSelection(Base):
