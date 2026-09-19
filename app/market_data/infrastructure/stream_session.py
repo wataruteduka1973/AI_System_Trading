@@ -27,7 +27,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-from app.market_data.infrastructure.candle_stream import FeedHub, FeedStarter, StreamFeedKey
+from app.market_data.infrastructure.candle_stream import (
+    FeedHub,
+    FeedStarter,
+    StreamFeedKey,
+    SubscriberOverflow,
+)
 from app.market_data.infrastructure.stream_protocol import (
     ResumeRequest,
     decide_resume,
@@ -50,6 +55,11 @@ from app.market_data.infrastructure.stream_tickets import (
 CLOSE_TICKET_REJECTED = 4401
 CLOSE_ACCESS_DENIED = 4403
 CLOSE_FEED_START_FAILED = 1011
+CLOSE_SUBSCRIBER_OVERFLOW = 1013
+"""1013 ("Try Again Later" in RFC 6455's IANA registry) is the closest
+standard code for "you fell behind and were disconnected, but reconnecting
+is expected to work" (see SubscriberOverflow). It is not in either client's
+NON_RETRYABLE_CLOSE_CODES set, so a normal reconnect + gap-fill follows."""
 
 
 class Disconnected(Exception):
@@ -199,6 +209,9 @@ async def _pump(
                 continue
             if disconnected.is_set():
                 break
+            if isinstance(event, SubscriberOverflow):
+                await transport.close(code=CLOSE_SUBSCRIBER_OVERFLOW, reason="subscriber_overflow")
+                return
             last_sequence = event.sequence
             await transport.send(encode_event(event, workspace_id))
     finally:

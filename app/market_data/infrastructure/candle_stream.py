@@ -42,8 +42,17 @@ from decimal import Decimal
 from typing import Literal, Protocol
 from uuid import uuid4
 
+import structlog
+
+logger = structlog.get_logger(__name__)
+
 DEFAULT_GRACE_PERIOD_SECONDS = 30.0
 DEFAULT_RING_BUFFER_SIZE = 200
+DEFAULT_SUBSCRIBER_QUEUE_MAXSIZE = 1000
+"""Bounds each subscriber's per-connection delivery queue (see
+`FeedHub.subscribe`/`_append_and_fanout`). A subscriber this far behind is
+disconnected instead of silently losing events -- see `SubscriberOverflow`
+docstring for why."""
 
 EventType = Literal["provisional_update", "candle_finalized", "heartbeat", "gap_notice"]
 FeedState = Literal["starting", "connected", "delayed", "disconnected"]
@@ -76,6 +85,28 @@ class NormalizedCandleUpdate:
     open_time: datetime
     ohlcv: OHLCV
     is_final: bool
+
+
+class SubscriberOverflow:
+    """Sentinel pushed into a subscriber's queue in place of an ordinary
+    event once that subscriber has fallen far enough behind to fill its
+    bounded queue (see `_append_and_fanout`). `_pump` (stream_session.py)
+    treats receiving this as a forced-disconnect signal -- it is exported
+    (not underscore-prefixed) for that cross-module check.
+
+    This project's mid-session wire protocol never checks for a `sequence`
+    gap -- gaps are only detected at reconnect time via
+    `stream_protocol.decide_resume` (comparing the reconnecting client's
+    remembered `last_sequence` against the feed's ring buffer). Silently
+    dropping the oldest queued event for a slow subscriber would therefore
+    create a mid-session gap no client-side code currently notices. Forcing
+    a disconnect instead routes the same subscriber through the existing,
+    already-tested reconnect + REST gap-fill path (RT-08) rather than
+    inventing a second, undetectable kind of gap.
+    """
+
+
+SUBSCRIBER_OVERFLOW = SubscriberOverflow()
 
 
 @dataclass(frozen=True)
@@ -135,7 +166,9 @@ class _Feed:
     state: FeedState = "starting"
     sequence: int = -1
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
-    subscribers: dict[int, asyncio.Queue[CandleStreamEvent]] = field(default_factory=dict)
+    subscribers: dict[int, asyncio.Queue[CandleStreamEvent | SubscriberOverflow]] = field(
+        default_factory=dict
+    )
     teardown_task: asyncio.Task[None] | None = None
 
 
@@ -152,7 +185,7 @@ class FeedSubscription:
         hub: FeedHub,
         key: StreamFeedKey,
         subscriber_id: int,
-        queue: asyncio.Queue[CandleStreamEvent],
+        queue: asyncio.Queue[CandleStreamEvent | SubscriberOverflow],
         buffered_events: list[CandleStreamEvent],
         feed_started_at: datetime,
     ) -> None:
@@ -186,22 +219,28 @@ class _FeedSink:
 class FeedHub:
     """In-memory pub-sub keyed by (exchange, symbol, timeframe). See module
     docstring and docs/design/modules/realtime-market-data-stream.md
-    section 3. Subscriber queues are currently unbounded: real backpressure
-    handling is explicitly out of scope for this work unit (see
-    docs/plans/realtime-market-data-stream.md work units 6/8 and RT-14)."""
+    section 3. Each subscriber's delivery queue is bounded
+    (`subscriber_queue_maxsize`); a subscriber that falls far enough behind
+    to fill it is force-disconnected via `SubscriberOverflow` rather than
+    silently losing events or raising out of the publishing adapter's call
+    stack -- see that class's docstring."""
 
     def __init__(
         self,
         *,
         grace_period_seconds: float = DEFAULT_GRACE_PERIOD_SECONDS,
         ring_buffer_size: int = DEFAULT_RING_BUFFER_SIZE,
+        subscriber_queue_maxsize: int = DEFAULT_SUBSCRIBER_QUEUE_MAXSIZE,
     ) -> None:
         if grace_period_seconds < 0:
             raise ValueError("grace_period_seconds must not be negative")
         if ring_buffer_size < 1:
             raise ValueError("ring_buffer_size must be at least 1")
+        if subscriber_queue_maxsize < 1:
+            raise ValueError("subscriber_queue_maxsize must be at least 1")
         self._grace_period_seconds = grace_period_seconds
         self._ring_buffer_size = ring_buffer_size
+        self._subscriber_queue_maxsize = subscriber_queue_maxsize
         self._feeds: dict[StreamFeedKey, _Feed] = {}
         self._subscriber_ids = itertools.count(1)
 
@@ -221,7 +260,9 @@ class FeedHub:
             feed.teardown_task.cancel()
             feed.teardown_task = None
         subscriber_id = next(self._subscriber_ids)
-        queue: asyncio.Queue[CandleStreamEvent] = asyncio.Queue()
+        queue: asyncio.Queue[CandleStreamEvent | SubscriberOverflow] = asyncio.Queue(
+            maxsize=self._subscriber_queue_maxsize
+        )
         feed.subscribers[subscriber_id] = queue
         return FeedSubscription(
             self, key, subscriber_id, queue, list(feed.ring_buffer), feed.started_at
@@ -246,13 +287,30 @@ class FeedHub:
             feed.worker = starter(key, _FeedSink(self, key))
         except Exception:
             del self._feeds[key]
+            logger.warning(
+                "feed_start_failed",
+                exchange=key.exchange,
+                symbol=key.symbol,
+                timeframe=key.timeframe,
+            )
             raise
+        logger.info(
+            "feed_started", exchange=key.exchange, symbol=key.symbol, timeframe=key.timeframe
+        )
         return feed
 
     def _publish_candle(self, key: StreamFeedKey, update: NormalizedCandleUpdate) -> None:
         feed = self._feeds.get(key)
         if feed is None:
             return  # feed was already torn down; drop the late event
+        if feed.state != "connected":
+            logger.info(
+                "feed_recovered",
+                exchange=key.exchange,
+                symbol=key.symbol,
+                timeframe=key.timeframe,
+                previous_state=feed.state,
+            )
         feed.sequence += 1
         feed.state = "connected"
         event = CandleStreamEvent(
@@ -273,6 +331,15 @@ class FeedHub:
         feed = self._feeds.get(key)
         if feed is None:
             return
+        logger.warning(
+            "feed_failure",
+            exchange=key.exchange,
+            symbol=key.symbol,
+            timeframe=key.timeframe,
+            code=code,
+            previous_state=feed.state,
+            new_state=state,
+        )
         feed.state = state
         feed.sequence += 1
         event = CandleStreamEvent(
@@ -292,8 +359,34 @@ class FeedHub:
 
     def _append_and_fanout(self, feed: _Feed, event: CandleStreamEvent) -> None:
         feed.ring_buffer.append(event)
-        for queue in feed.subscribers.values():
-            queue.put_nowait(event)
+        for subscriber_id, queue in list(feed.subscribers.items()):
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                logger.warning(
+                    "feed_subscriber_queue_overflow",
+                    exchange=feed.key.exchange,
+                    symbol=feed.key.symbol,
+                    timeframe=feed.key.timeframe,
+                    subscriber_id=subscriber_id,
+                    queue_maxsize=self._subscriber_queue_maxsize,
+                )
+                self._force_disconnect_subscriber(queue)
+
+    def _force_disconnect_subscriber(
+        self, queue: asyncio.Queue[CandleStreamEvent | SubscriberOverflow]
+    ) -> None:
+        """Drain `queue` and push `SUBSCRIBER_OVERFLOW` in its place. This
+        method itself never blocks or raises: draining first guarantees the
+        immediately-following `put_nowait` has room, so this stays safe to
+        call synchronously from `_append_and_fanout` (see module docstring
+        on why no method here may `await`)."""
+        while True:
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        queue.put_nowait(SUBSCRIBER_OVERFLOW)
 
     async def _unsubscribe(self, key: StreamFeedKey, subscriber_id: int) -> None:
         feed = self._feeds.get(key)
@@ -314,5 +407,8 @@ class FeedHub:
         if feed is None or feed.subscribers:
             return  # resubscribed during the grace period (RT-06), or already gone
         del self._feeds[key]
+        logger.info(
+            "feed_torn_down", exchange=key.exchange, symbol=key.symbol, timeframe=key.timeframe
+        )
         if feed.worker is not None:
             feed.worker.stop()

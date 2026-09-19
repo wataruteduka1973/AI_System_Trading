@@ -4,12 +4,14 @@ docs/design/modules/realtime-market-data-stream.md section 6 and
 docs/plans/realtime-market-data-stream.md (work unit 4)."""
 
 import asyncio
+import random
 from decimal import Decimal
 from unittest.mock import MagicMock
 
 from app.exchanges.binance import BinanceApiError
 from app.market_data.infrastructure.binance_stream import (
     BinanceFeedWorker,
+    compute_reconnect_backoff_seconds,
     make_binance_feed_starter,
     parse_kline_message,
 )
@@ -212,7 +214,10 @@ def test_binance_feed_worker_reports_connect_failure_as_gap_notice() -> None:
         event = await asyncio.wait_for(sub.queue.get(), timeout=2.0)
         assert event.event_type == "gap_notice"
         assert event.reason_code == "binance_unreachable"
-        assert hub.feed_state(key) == "disconnected"
+        # "delayed", not "disconnected": this is the first failed attempt,
+        # and the worker now retries automatically instead of giving up
+        # (below DELAYED_ATTEMPT_THRESHOLD -- see reconnect tests below).
+        assert hub.feed_state(key) == "delayed"
         await sub.close()
 
     asyncio.run(scenario())
@@ -246,7 +251,7 @@ def test_binance_feed_worker_reports_stream_error_as_gap_notice() -> None:
         second = await asyncio.wait_for(sub.queue.get(), timeout=2.0)
         assert second.event_type == "gap_notice"
         assert second.reason_code == "binance_stream_disconnected"
-        assert hub.feed_state(key) == "disconnected"
+        assert hub.feed_state(key) == "delayed"  # first failed attempt -- see comment above
         await sub.close()
 
     asyncio.run(scenario())
@@ -280,6 +285,165 @@ def test_binance_feed_worker_reports_read_loop_closed_as_gap_notice() -> None:
         assert second.event_type == "gap_notice"
         assert second.reason_code == "binance_stream_disconnected"
         assert client.closed is True
+        await sub.close()
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# compute_reconnect_backoff_seconds -- pure function, no asyncio needed
+# ---------------------------------------------------------------------------
+
+
+def test_compute_reconnect_backoff_seconds_grows_then_caps() -> None:
+    rng = random.Random(0)
+    for attempt in range(1, 10):
+        delay = compute_reconnect_backoff_seconds(attempt, rng=rng)
+        cap = min(1.0 * (2.0 ** (attempt - 1)), 60.0)
+        assert cap / 2 <= delay <= cap
+    # By attempt 10 the uncapped exponential (2**9 == 512s) would far
+    # exceed the 60s cap; the returned delay must still respect it.
+    assert compute_reconnect_backoff_seconds(10, rng=rng) <= 60.0
+
+
+def test_compute_reconnect_backoff_seconds_rejects_non_positive_attempt() -> None:
+    try:
+        compute_reconnect_backoff_seconds(0, rng=random.Random(0))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for attempt < 1")
+
+
+# ---------------------------------------------------------------------------
+# BinanceFeedWorker -- reconnect-with-backoff and silence watchdog (2026-09-19
+# soak-test incident: a reported disconnect never triggered a retry, leaving
+# the feed silently stuck for hours; see module docstring).
+# ---------------------------------------------------------------------------
+
+
+async def _fast_sleep(delay: float) -> None:
+    """Stand-in for asyncio.sleep in tests -- records nothing, just never
+    actually waits, so backoff delays don't slow the test suite down."""
+
+
+def test_binance_feed_worker_reconnects_after_a_stream_error_instead_of_giving_up() -> None:
+    open_ms = 1_700_000_000_000
+    call_count = {"n": 0}
+
+    class _FlakySocketManager:
+        def kline_socket(self, symbol: str, interval: str) -> _FakeStream:
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return _FakeStream([], error_after=True)
+            return _FakeStream(
+                [
+                    _kline(
+                        open_ms,
+                        o="100.0",
+                        h="100.5",
+                        low="99.5",
+                        c="100.2",
+                        v="1.0",
+                        is_closed=False,
+                    )
+                ]
+            )
+
+    client = _FakeClient()
+
+    async def client_factory(**kwargs):
+        return client
+
+    async def scenario() -> None:
+        hub = FeedHub(grace_period_seconds=1.0)
+        key = StreamFeedKey("binance", "BTCJPY", "1m")
+
+        def starter(key: StreamFeedKey, sink) -> object:
+            worker = BinanceFeedWorker(
+                symbol=key.symbol,
+                timeframe=key.timeframe,
+                sink=sink,
+                client_factory=client_factory,
+                socket_manager_factory=lambda created_client: _FlakySocketManager(),
+                sleep=_fast_sleep,
+                rng=random.Random(0),
+            )
+            return worker.start()
+
+        sub = await hub.subscribe(key, source="binance_testnet", starter=starter)
+        first = await asyncio.wait_for(sub.queue.get(), timeout=2.0)
+        assert first.event_type == "gap_notice"
+        assert first.reason_code == "binance_stream_disconnected"
+
+        second = await asyncio.wait_for(sub.queue.get(), timeout=2.0)
+        assert second.event_type == "provisional_update"
+        assert hub.feed_state(key) == "connected"  # recovered on the second attempt
+        assert call_count["n"] == 2
+
+        await sub.close()
+
+    asyncio.run(scenario())
+
+
+def test_binance_feed_worker_reconnects_after_a_silent_stall() -> None:
+    """A socket that never reports anything -- not even the library's own
+    error message -- must still be detected and retried by the watchdog
+    (asyncio.wait_for around recv()), not just an explicitly-reported
+    disconnect."""
+    open_ms = 1_700_000_000_000
+    call_count = {"n": 0}
+
+    class _OnceSilentThenFlowingSocketManager:
+        def kline_socket(self, symbol: str, interval: str) -> _FakeStream:
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return _FakeStream([])  # never emits anything (recv() hangs)
+            return _FakeStream(
+                [
+                    _kline(
+                        open_ms,
+                        o="100.0",
+                        h="100.5",
+                        low="99.5",
+                        c="100.2",
+                        v="1.0",
+                        is_closed=False,
+                    )
+                ]
+            )
+
+    client = _FakeClient()
+
+    async def client_factory(**kwargs):
+        return client
+
+    async def scenario() -> None:
+        hub = FeedHub(grace_period_seconds=1.0)
+        key = StreamFeedKey("binance", "BTCJPY", "1m")
+
+        def starter(key: StreamFeedKey, sink) -> object:
+            worker = BinanceFeedWorker(
+                symbol=key.symbol,
+                timeframe=key.timeframe,
+                sink=sink,
+                client_factory=client_factory,
+                socket_manager_factory=lambda created_client: _OnceSilentThenFlowingSocketManager(),
+                silence_timeout_seconds=0.05,
+                sleep=_fast_sleep,
+                rng=random.Random(0),
+            )
+            return worker.start()
+
+        sub = await hub.subscribe(key, source="binance_testnet", starter=starter)
+        first = await asyncio.wait_for(sub.queue.get(), timeout=2.0)
+        assert first.event_type == "gap_notice"
+        assert first.reason_code == "binance_stream_silent"
+
+        second = await asyncio.wait_for(sub.queue.get(), timeout=2.0)
+        assert second.event_type == "provisional_update"
+        assert call_count["n"] == 2
+
         await sub.close()
 
     asyncio.run(scenario())

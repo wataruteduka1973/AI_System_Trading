@@ -11,6 +11,7 @@ from app.market_data.infrastructure.candle_stream import (
     FeedHub,
     NormalizedCandleUpdate,
     StreamFeedKey,
+    SubscriberOverflow,
 )
 
 KEY = StreamFeedKey("oanda", "USD_JPY", "1m")
@@ -203,5 +204,61 @@ def test_report_failure_publishes_gap_notice_and_updates_feed_state() -> None:
         assert event.open_time is None
         assert hub.feed_state(KEY) == "disconnected"
         await sub.close()
+
+    asyncio.run(scenario())
+
+
+def test_subscriber_queue_overflow_force_disconnects_instead_of_raising() -> None:
+    """A subscriber whose bounded queue fills up is force-disconnected via
+    a SubscriberOverflow sentinel, instead of `_append_and_fanout` raising
+    QueueFull (which would drop the event for every other subscriber too)
+    or silently evicting an old event (undetectable mid-session -- see
+    SubscriberOverflow docstring)."""
+
+    def starter(key, sink):
+        return _FakeWorkerHandle()
+
+    async def scenario() -> None:
+        hub = FeedHub(grace_period_seconds=0.2, subscriber_queue_maxsize=2)
+        sub = await hub.subscribe(KEY, source="oanda_practice", starter=starter)
+
+        hub._publish_candle(KEY, _update("150.10"))
+        hub._publish_candle(KEY, _update("150.20"))
+        hub._publish_candle(KEY, _update("150.30"))  # queue (maxsize=2) overflows here
+
+        only = sub.queue.get_nowait()
+        assert isinstance(only, SubscriberOverflow)
+        assert sub.queue.empty()
+
+        await sub.close()
+
+    asyncio.run(scenario())
+
+
+def test_subscriber_queue_overflow_does_not_affect_other_subscribers() -> None:
+    """One slow subscriber overflowing must not break fan-out for a second,
+    healthy subscriber on the same feed."""
+
+    def starter(key, sink):
+        return _FakeWorkerHandle()
+
+    async def scenario() -> None:
+        hub = FeedHub(grace_period_seconds=0.2, subscriber_queue_maxsize=1)
+        slow = await hub.subscribe(KEY, source="oanda_practice", starter=starter)
+        fast = await hub.subscribe(KEY, source="oanda_practice", starter=starter)
+
+        hub._publish_candle(KEY, _update("150.10"))
+        await fast.queue.get()  # fast drains promptly; slow never does
+
+        hub._publish_candle(KEY, _update("150.20"))  # overflows only slow's queue
+        delivered = await fast.queue.get()
+        assert delivered.ohlcv.close == Decimal("150.20")
+
+        overflow_marker = slow.queue.get_nowait()
+        assert isinstance(overflow_marker, SubscriberOverflow)
+        assert fast.queue.empty()
+
+        await slow.close()
+        await fast.close()
 
     asyncio.run(scenario())

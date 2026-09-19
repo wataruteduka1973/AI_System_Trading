@@ -273,6 +273,7 @@ Application抽出を先行する。OANDA確認やHorizon 1全体を完了扱い�
 - 切断と再接続でローソク足の重複・欠損を残さない
 - 画面更新とDB確定値が一定時間内に収束する
 - 24時間以上のsoak testでメモリ増大、再接続ループ、ジョブ滞留が許容範囲内
+  （実施時期は`decisions/0001-defer-realtime-stream-soak-test.md`を参照）
 - stream ticketが短命・一回限りで、ログやURLに長期資格情報を残さない
 
 ### Horizon 3: Paper Tradingコア（5〜8か月）

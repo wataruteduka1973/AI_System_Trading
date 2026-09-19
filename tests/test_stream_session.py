@@ -24,6 +24,7 @@ from app.market_data.infrastructure.candle_stream import (
 from app.market_data.infrastructure.stream_session import (
     CLOSE_ACCESS_DENIED,
     CLOSE_FEED_START_FAILED,
+    CLOSE_SUBSCRIBER_OVERFLOW,
     CLOSE_TICKET_REJECTED,
     Disconnected,
     StreamAccessDenied,
@@ -305,6 +306,51 @@ async def test_live_events_are_forwarded_and_heartbeat_fires_when_idle() -> None
     await _run_with_timeout(session_task)
     await asyncio.sleep(0.03)  # let the grace-period teardown task actually run (RT-05)
     assert hub.active_feed_count() == 0
+
+
+@pytest.mark.anyio
+async def test_subscriber_overflow_closes_the_connection_for_reconnect_gap_fill() -> None:
+    """A subscriber that falls behind enough to overflow its bounded queue
+    (candle_stream.SubscriberOverflow) is force-disconnected with a
+    retryable close code, so the client reconnects and gap-fills instead of
+    silently missing events with no client-visible signal."""
+    hub = FeedHub(grace_period_seconds=0.01, subscriber_queue_maxsize=1)
+    sink_box: dict = {}
+
+    def starter(key: StreamFeedKey, sink: FeedSink) -> FeedWorkerHandle:
+        sink_box["sink"] = sink
+        return _FakeWorkerHandle()
+
+    async def build_starter(claims, loop):
+        return starter, "binance_testnet"
+
+    transport = _FakeTransport()
+    session_task = asyncio.create_task(
+        run_stream_session(
+            transport,
+            StreamSessionParams(ticket=_issue_ticket()),
+            ticket_secret=TICKET_SECRET,
+            used_tickets=UsedTicketStore(),
+            hub=hub,
+            build_starter=build_starter,
+            heartbeat_interval_seconds=5.0,
+        )
+    )
+    await asyncio.sleep(0.02)  # let it connect and reach the pump loop
+    assert transport.accepted
+
+    sink = sink_box["sink"]
+    # Both publishes happen synchronously with no `await` in between (see
+    # candle_stream.FeedHub's concurrency note), so the pump's pending
+    # queue.get() cannot drain the first one before the second overflows
+    # the maxsize=1 queue.
+    sink.publish_candle(NormalizedCandleUpdate(datetime(2026, 9, 17, tzinfo=UTC), _ohlcv(), False))
+    sink.publish_candle(
+        NormalizedCandleUpdate(datetime(2026, 9, 17, 0, 1, tzinfo=UTC), _ohlcv(), False)
+    )
+
+    await _run_with_timeout(session_task)
+    assert transport.closed == (CLOSE_SUBSCRIBER_OVERFLOW, "subscriber_overflow")
 
 
 def _ohlcv() -> OHLCV:
