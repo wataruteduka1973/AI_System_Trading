@@ -13,14 +13,25 @@ but is not held as a separate persisted step here because this implementation ha
 validation stage between them (risk-gate approval, which the transition table's
 `pending -> submitted` trigger refers to, is out of scope -- see the implementation plan).
 
-`expected_slippage` is hardcoded to 0 (TODO: no bid/ask/spread data exists anywhere in this
-system -- confirmed by inspecting the DB schema, `app/market_data/infrastructure/
-oanda_stream.py` (which discards bid/ask right after computing `mid`), and the Binance kline
-adapter (no bid/ask concept at all). Wire a real spread source before relying on this for
-risk sizing; once available, apply spread*0.5 (OANDA) / spread*1.0 (Binance) against
-`candle.close` here, moved unfavorably by `order.side`). `fee_buffer` from
-08_取引アルゴリズムとリスク初期値.md§5.1's draft (unapproved) values is still applied since it
-does not depend on spread: OANDA=0, Binance=notional×0.1%.
+`expected_slippage` (2026-09-20 update): OANDA now reads the latest persisted bid/ask
+(`fx.instrument_spread`, fed by `app/market_data/infrastructure/oanda_stream.py`'s live
+PricingStream connection -- see `InstrumentSpread`'s docstring) and applies
+`spread * 0.5` per 08_取引アルゴリズムとリスク初期値.md§5.1's draft (unapproved)
+coefficient. If no spread row exists yet for the instrument (nothing has streamed it
+since this feature shipped, or the DB write raced/failed -- see
+`OandaFeedWorker.record_spread`'s docstring), this falls back to `expected_slippage = 0`,
+same as before, rather than failing the fill: a missing spread degrades slippage accuracy,
+it does not mean the order can't be filled. TODO(binance-spread): Binance still has no
+bid/ask concept at all (kline-only adapter) and stays hardcoded to 0. `fee_buffer` from
+08_取引アルゴリズムとリスク初期値.md§5.1's draft (unapproved) values does not depend on
+spread and is unchanged: OANDA=0, Binance=notional×0.1%.
+
+Known limitation: `instrument_spread` is only populated while the OANDA live stream is
+actually running for that instrument (`FeedHub` only starts a feed once a WebSocket
+subscriber connects -- see `app/market_data/infrastructure/candle_stream.py`), unlike
+`candle`, which a separate polling worker keeps populated regardless of live viewers. If
+no one has had that instrument's live chart open recently, `expected_slippage` silently
+falls back to 0 exactly as before this change.
 
 Positions are long-only in this module: `trading_position.side` allows long/short/net at the
 DB level, but neither the concept ER doc nor an approved risk profile define hedging/
@@ -49,10 +60,13 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID, uuid4
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
 from app.models.audit import AuditLog
 from app.models.connections import Exchange, ExchangeConnection
 from app.models.instruments import Instrument
-from app.models.market_data import Candle
+from app.models.market_data import Candle, InstrumentSpread
 from app.models.strategy import RiskDecision, Signal
 from app.models.trading import (
     Fill,
@@ -63,8 +77,6 @@ from app.models.trading import (
     TradingAccount,
     TradingPosition,
 )
-from sqlalchemy import select
-from sqlalchemy.orm import Session
 
 OrderSide = Literal["buy", "sell"]
 OrderTypeLiteral = Literal["market", "limit"]
@@ -301,9 +313,7 @@ def _simulate_fill(
         )
     exchange_code = _exchange_code_for_account(db, account)
     fee_amount = _fee_buffer(exchange_code, candle.close, order.quantity)
-
-    # TODO(spread): expected_slippage is hardcoded to 0 -- see module docstring.
-    expected_slippage = Decimal(0)
+    expected_slippage = _expected_slippage(db, exchange_code, order.instrument_id)
     fill_price = (
         candle.close + expected_slippage
         if order.side == "buy"
@@ -347,6 +357,26 @@ def _exchange_code_for_account(db: Session, account: TradingAccount) -> str:
             "exchange_not_found", "Exchange for this account's connection could not be resolved"
         )
     return exchange_code
+
+
+_SLIPPAGE_COEFFICIENT_BY_EXCHANGE = {"oanda": Decimal("0.5")}
+"""Draft, unapproved coefficient from 08_取引アルゴリズムとリスク初期値.md§5.1
+(2026-09-19). Binance is intentionally absent: no bid/ask source exists for it yet
+(TODO(binance-spread), see module docstring), so `_expected_slippage` always falls
+back to 0 for it."""
+
+
+def _expected_slippage(db: Session, exchange_code: str, instrument_id: UUID) -> Decimal:
+    coefficient = _SLIPPAGE_COEFFICIENT_BY_EXCHANGE.get(exchange_code)
+    if coefficient is None:
+        return Decimal(0)
+    spread_row = db.get(InstrumentSpread, instrument_id)
+    if spread_row is None:
+        # Not yet streamed (or the stream isn't currently running for this
+        # instrument) -- degrade to 0 rather than fail the fill. See module
+        # docstring's "Known limitation".
+        return Decimal(0)
+    return (spread_row.ask - spread_row.bid) * coefficient
 
 
 def _fee_buffer(exchange_code: str, price: Decimal, quantity: Decimal) -> Decimal:

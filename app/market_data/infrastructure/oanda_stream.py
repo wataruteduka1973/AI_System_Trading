@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 
+import structlog
 from oandapyV20 import API
 from oandapyV20.endpoints.pricing import PricingStream
 from oandapyV20.exceptions import StreamTerminated, V20Error
@@ -35,6 +36,8 @@ from app.market_data.infrastructure.candle_stream import (
     NormalizedCandleUpdate,
     StreamFeedKey,
 )
+
+logger = structlog.get_logger("app.market_data.oanda_stream")
 
 _REQUEST_TIMEOUT_SECONDS = 65.0
 """OANDA sends a heartbeat roughly every 5s over the stream; a generous
@@ -52,6 +55,11 @@ class OandaStreamError(RuntimeError):
 class OandaPriceTick:
     time: datetime
     mid: Decimal
+    bid: Decimal
+    """Kept (2026-09-20) so callers can persist the spread (see `OandaFeedWorker`'s
+    `record_spread` parameter) -- previously computed and discarded here. `mid` remains
+    the only value used for candle synthesis; this does not change."""
+    ask: Decimal
 
 
 def parse_price_tick(payload: object) -> OandaPriceTick | None:
@@ -71,9 +79,9 @@ def parse_price_tick(payload: object) -> OandaPriceTick | None:
     except (KeyError, IndexError, TypeError, ValueError, InvalidOperation):
         return None
     mid = (bid + ask) / 2
-    if mid <= 0:
+    if mid <= 0 or bid <= 0 or ask < bid:
         return None
-    return OandaPriceTick(time=tick_time, mid=mid)
+    return OandaPriceTick(time=tick_time, mid=mid, bid=bid, ask=ask)
 
 
 def iter_oanda_price_ticks(
@@ -205,7 +213,17 @@ class _ThreadWorkerHandle:
 class OandaFeedWorker:
     """Runs one OANDA PricingStream connection on a background thread and
     reports normalized candle updates (and failures) into a FeedHub feed
-    via `sink`."""
+    via `sink`.
+
+    `record_spread` (2026-09-20 addition, optional): called synchronously, once per raw
+    tick, on this worker's own background thread (the same thread already doing blocking
+    network reads for the stream itself -- see `_run`) -- never on the asyncio event
+    loop, unlike `sink`. A failure here is logged and swallowed rather than propagated:
+    the live price/candle stream (already working, higher-value) must not go down
+    because a spread write failed. See `app/market_data/application/spread_tracking.py`
+    for the real (DB-backed) implementation wired in at the composition root
+    (`app/api/routes/market_stream_ws.py`); tests inject a stub or leave this `None`.
+    """
 
     def __init__(
         self,
@@ -218,6 +236,7 @@ class OandaFeedWorker:
         sink: FeedSink,
         loop: asyncio.AbstractEventLoop,
         tick_source: Callable[..., Iterator[OandaPriceTick]] = iter_oanda_price_ticks,
+        record_spread: Callable[[OandaPriceTick], None] | None = None,
     ) -> None:
         self._base_url = base_url
         self._token = token
@@ -227,6 +246,7 @@ class OandaFeedWorker:
         self._sink = sink
         self._loop = loop
         self._tick_source = tick_source
+        self._record_spread = record_spread
         self._stop_event = threading.Event()
         self._normalizer = TickToCandleNormalizer(timeframe)
 
@@ -248,6 +268,11 @@ class OandaFeedWorker:
                 symbol=self._symbol,
                 stop_event=self._stop_event,
             ):
+                if self._record_spread is not None:
+                    try:
+                        self._record_spread(tick)
+                    except Exception:  # noqa: BLE001 - see class docstring
+                        logger.warning("oanda_spread_record_failed", symbol=self._symbol)
                 for update in self._normalizer.add_tick(tick.time, tick.mid):
                     self._loop.call_soon_threadsafe(self._sink.publish_candle, update)
         except OandaStreamError as exc:
@@ -263,11 +288,16 @@ def make_oanda_feed_starter(
     account_id: str,
     loop: asyncio.AbstractEventLoop,
     tick_source: Callable[..., Iterator[OandaPriceTick]] = iter_oanda_price_ticks,
+    record_spread: Callable[[str, OandaPriceTick], None] | None = None,
 ) -> Callable[[StreamFeedKey, FeedSink], FeedWorkerHandle]:
     """Builds a `FeedStarter` (see candle_stream.py) bound to one already-
     resolved OANDA connection. Work unit 5 (ticket verification + WS
     termination) is expected to call this once it has decrypted the
-    credentials for the first subscriber of a feed."""
+    credentials for the first subscriber of a feed.
+
+    `record_spread` (optional) takes `(symbol, tick)`; `key.symbol` is only known once
+    `starter()` runs, so it is bound into a per-worker closure here and handed to
+    `OandaFeedWorker` as the single-argument callback described on that class."""
 
     def starter(key: StreamFeedKey, sink: FeedSink) -> FeedWorkerHandle:
         if key.exchange != "oanda":
@@ -281,6 +311,9 @@ def make_oanda_feed_starter(
             sink=sink,
             loop=loop,
             tick_source=tick_source,
+            record_spread=(
+                (lambda tick: record_spread(key.symbol, tick)) if record_spread else None
+            ),
         )
         return worker.start()
 
