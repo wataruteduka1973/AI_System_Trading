@@ -5,10 +5,12 @@ Maps tables already created by `alembic/versions/20260816_0001_initial_schema.py
 module does not create any new tables or columns, it only adds the ORM layer
 that was missing for them. See the Paper Trading data-model PR summary for the
 full comparison against `docs/concept/FXtrading_rebuild/03_ER図とデータ定義.md`
-and `05_アーキテクチャと移行計画.md`. Known gap not resolved here:
-`TradeOrder.status`'s DB CHECK constraint allows `cancel_pending`/`unknown` in
-addition to the 7 values in the approved order state-transition table
-(`05_アーキテクチャと移行計画.md`"注文状態遷移表", itself matching FR-ORD-05).
+and `05_アーキテクチャと移行計画.md`. `TradeOrder.status`'s DB CHECK constraint allows
+`cancel_pending`/`unknown` in addition to the 7 values in FR-ORD-05's base list; their
+semantics were finalized 2026-09-20 in `05_アーキテクチャと移行計画.md`"注文状態遷移表"
+while implementing `app/trading/application/order_flow.py` -- that module's fully
+synchronous fill simulation never sets either value itself (both are reserved for a
+future async exchange round-trip / crash-recovery flow).
 
 `Fill` and `LedgerEntry` intentionally have no status/lifecycle column: both
 are append-only records of things that already happened (see ER doc §1
@@ -133,11 +135,14 @@ class TradeOrder(Base):
     __tablename__ = "trade_order"
     __table_args__ = (
         UniqueConstraint("account_id", "client_order_id", name="uq_trade_order_client_id"),
+        # NOT `postgresql_nulls_not_distinct` (unlike `Fill.uq_fill_external_id` below):
+        # self-simulated paper orders never get an external_order_id (FR-ORD-15), so
+        # treating every NULL as a duplicate would cap a paper account at one order ever.
+        # See alembic/versions/20260920_0006_paper_order_external_id_uniqueness.py.
         UniqueConstraint(
             "account_id",
             "external_order_id",
             name="uq_trade_order_external_id",
-            postgresql_nulls_not_distinct=True,
         ),
         {"schema": SCHEMA},
     )
