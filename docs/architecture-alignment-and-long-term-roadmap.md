@@ -330,29 +330,48 @@ Horizon 6着手前の縮小スコープ(Horizon4-lite)としての先行着手�
 
 ### Horizon 5: 認証・監査・配布運用の完成（並行着手、9〜13か月）
 
+開始条件の充足状況、配布モデルの決定（セルフホスト型ソフトウェア販売への一本化、
+マルチテナントSaaS仲介モデルは取引所ToS上のリスクにより不採用）、および
+本節の実装・整備項目の再構成は`decisions/0005-horizon5-self-hosted-distribution.md`を、
+実装着手できる粒度の詳細仕様は`plans/horizon5-distribution-and-auth.md`（ドラフト、
+Horizon4-lite完了後に本格着手）を参照。
+
 #### 開始条件
 
-- 配布対象、利用者、運用責任、データ・SDK・取引所規約の確認範囲が決まっている
-- ローカル単独利用を超える必要性が承認されている
+- ~~配布対象、利用者、運用責任、データ・SDK・取引所規約の確認範囲が決まっている~~
+  → ADR 0005により充足（配布対象=クローズドβ、運用責任=利用者本人単独、取引所ToSは
+  一次調査済み・残存リスクはADR 0005「残存リスク」節に記録）
+- ~~ローカル単独利用を超える必要性が承認されている~~ → 承認済み（第三者への
+  ソフトウェア販売、ADR 0005）
 
 #### 実装・整備
 
-- OIDC Authorization Code + PKCEへ移行する
-- Owner/Operator/Viewer/System WorkerのRBACを全APIへ適用する
-- 本番・検証・開発環境を分離する
-- 配布環境ではSecret Manager/KMSを使用し、rotation/revocationを運用化する
-- Event Log、Outbox、Notification Worker、通知設定を実装する
-- Gmail API等の通知先はOAuth scopeと監査要件を確認後に導入する
-- backup/restore、migration rollback方針、障害対応手順、SLOを整備する
+ADR 0005によりroadmap原文の前提（運営者が本番環境を運用する）が変わったため、
+以下は`plans/horizon5-distribution-and-auth.md`の内容で読み替える。
+
+- OIDC Authorization Code + PKCEへ移行する（自己完結型IdPと外部IdP接続の両対応）
+- Owner/Operator/Viewer/System WorkerのRBACを全APIへ適用する（`user_membership`は
+  DBスキーマに既存、ORM未実装。System Workerは別テーブルのサービスアカウントとして新設）
+- ~~本番・検証・開発環境を分離する~~ → 運営者自身のリリースエンジニアリング
+  （ビルド・配布パイプライン）の話に限定。顧客の環境分離は顧客の運用判断とする
+- ~~配布環境ではSecret Manager/KMSを使用し、rotation/revocationを運用化する~~ →
+  Secret管理をプラガブル設計にし、顧客が自分の環境のSecret Manager/KMSを選べるようにする
+- Event Log、Outbox、Notification Worker、通知設定を実装する（通知は汎用SMTPを
+  デフォルトとし、Gmail API等は任意アダプタとして後続タスクに回す）
+- ~~backup/restore、migration rollback方針、障害対応手順、SLOを整備する~~ →
+  運営者によるSLO保証ではなく、顧客向けの手順書提供に変更する
 - dependency、SBOM、secret scan、脆弱性対応をrelease gateへ組み込む
+- （新規）ライセンスキー機構（オフライン検証、署名済みライセンスファイル）を実装する
 
 #### 完了条件
 
 - Dev Owner tokenを無効化できる
 - 権限境界、CSRF/CORS、session、secret rotation、監査ログのsecurity testが通る
-- DB/secret/configの復旧訓練が成功する
+- ~~DB/secret/configの復旧訓練が成功する~~ → 顧客向け復旧手順書の内容で実際に
+  復旧できることを検証する（運営者側の復旧訓練ではない）
 - 通知の重複、欠落、再送をOutboxから追跡できる
-- 配布物と利用するデータ・SDK・モデルの権利確認記録がある
+- 配布物と利用するデータ・SDK・モデルの権利確認記録がある（ADR 0005の一次調査済み。
+  公開ベータ・有償販売開始前に残存リスクの最終確認が必要）
 
 ### Horizon 6: AI Model Lab（任意、12〜18か月以降）
 
