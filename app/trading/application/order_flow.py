@@ -96,6 +96,7 @@ from app.models.trading import (
     TradingAccount,
     TradingPosition,
 )
+from app.trading.application.account_valuation import record_account_snapshot
 
 OrderSide = Literal["buy", "sell"]
 OrderTypeLiteral = Literal["market", "limit"]
@@ -269,6 +270,7 @@ def place_order(db: Session, command: PlaceOrderCommand) -> TradeOrder:
             db, account, instrument, fill, command.side, exchange_code
         )
         _record_ledger(db, account, instrument, fill, command.side, realized_pnl)
+        record_account_snapshot(db, account, instrument)
         _audit(
             db,
             command.workspace_id,

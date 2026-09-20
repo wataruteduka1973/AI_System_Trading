@@ -267,7 +267,7 @@ def test_place_order_buy_opens_position_and_records_ledger() -> None:
     account = _account()
     instrument = _instrument()
     candle = _candle(Decimal("150.000"), instrument_id=instrument.id)
-    db.scalar.side_effect = [account, "oanda", candle, None]
+    db.scalar.side_effect = [account, "oanda", candle, None, None, Decimal("0")]
     db.get.side_effect = [instrument, None]  # Instrument, then no InstrumentSpread row yet
     command = flow.PlaceOrderCommand(
         workspace_id=account.workspace_id,
@@ -315,7 +315,7 @@ def test_place_order_sell_closes_position_with_fee_and_realized_pnl() -> None:
         quantity=Decimal("1"),
         average_entry_price=Decimal("100"),
     )
-    db.scalar.side_effect = [account, "binance", candle, existing_position]
+    db.scalar.side_effect = [account, "binance", candle, existing_position, None, Decimal("0")]
     db.get.return_value = instrument
     command = flow.PlaceOrderCommand(
         workspace_id=account.workspace_id,
@@ -401,7 +401,7 @@ def test_place_order_oanda_sell_with_no_position_opens_a_short() -> None:
     account = _account()
     instrument = _instrument()
     candle = _candle(Decimal("150.000"), instrument_id=instrument.id)
-    db.scalar.side_effect = [account, "oanda", candle, None]
+    db.scalar.side_effect = [account, "oanda", candle, None, None, Decimal("0")]
     db.get.side_effect = [instrument, None]  # Instrument, then no InstrumentSpread row yet
     command = flow.PlaceOrderCommand(
         workspace_id=account.workspace_id,
@@ -636,7 +636,7 @@ def test_place_order_buy_applies_oanda_spread_to_fill_price() -> None:
     spread_row = InstrumentSpread(
         instrument_id=instrument.id, bid=Decimal("149.90"), ask=Decimal("150.10")
     )
-    db.scalar.side_effect = [account, "oanda", candle, None]
+    db.scalar.side_effect = [account, "oanda", candle, None, None, Decimal("0")]
     db.get.side_effect = [instrument, spread_row]
     command = flow.PlaceOrderCommand(
         workspace_id=account.workspace_id,
