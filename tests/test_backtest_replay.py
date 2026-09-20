@@ -114,7 +114,7 @@ def test_run_replay_with_no_candles_is_a_no_op() -> None:
         initial_equity=Decimal("1000"),
     )
     assert result == replay.ReplayResult(
-        trades=[], ending_equity=Decimal("1000"), ending_position=None
+        trades=[], ending_equity=Decimal("1000"), ending_position=None, equity_curve=[]
     )
 
 
