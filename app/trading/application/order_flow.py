@@ -33,11 +33,30 @@ subscriber connects -- see `app/market_data/infrastructure/candle_stream.py`), u
 no one has had that instrument's live chart open recently, `expected_slippage` silently
 falls back to 0 exactly as before this change.
 
-Positions are long-only in this module: `trading_position.side` allows long/short/net at the
-DB level, but neither the concept ER doc nor an approved risk profile define hedging/
-short-selling behavior yet, and Binance spot cannot short at all. A sell that would exceed
-the held long quantity raises `OrderFlowError("short_not_supported", ...)` rather than
-opening a short position; hedging/netting/short support is left for a future task.
+Positions (2026-09-20 update): OANDA now supports a **net** position model -- one open
+`trading_position` row per (account, instrument), whose `side` toggles between `long` and
+`short` as the net direction changes. This reuses the DB's existing `long`/`short` enum
+values on `side`; the literal string `'net'` (also a valid DB value) is never written --
+"net" describes the *accounting model* (one netted row, not separate hedged long/short
+rows), not a `side` value. `quantity` always stays the DB-required `>= 0` magnitude; no
+migration was needed. A fill that exceeds the currently held opposite-direction quantity
+**flips** the position in one step (closes the existing leg, opens the remainder in the new
+direction at the same fill price) rather than being split into two orders -- see
+`_apply_fill_to_position`'s docstring for why. Binance keeps the original long-only
+behavior unchanged: a sell exceeding the held long quantity still raises
+`OrderFlowError("short_not_supported", ...)`, per conservative-v1's Binance-specific
+"レバレッジ・借入・空売り: 禁止" rule and Binance spot's inability to short at all.
+`_apply_fill_to_position` takes `exchange_code` to select between the two behaviors.
+
+Known asymmetry NOT implemented here (found, not silently added -- see the completion
+report): OANDA charges/pays daily financing (rollover/swap) based on the interest-rate
+differential between the pair's two currencies, and its sign/magnitude differs between a
+long and a short position in the same instrument. `ledger_entry.entry_type` already has a
+`financing` value (unused by this module) that is plausibly meant for exactly this. No
+formula or data source for it is implemented; conservative-v1's existing risk parameters
+(stop distance, position-size-from-risk, leverage cap, margin thresholds) are otherwise
+applied identically regardless of direction, since none of them are direction-dependent by
+nature -- but neither is Risk Gate itself applied yet (out of scope, see below).
 
 TODO(trading_halt): `place_order` does not check `trading_halt` for the account/bot before
 submitting -- trading_halt activation/release is explicitly out of scope for this module. A
@@ -77,6 +96,7 @@ from app.models.trading import (
     TradingAccount,
     TradingPosition,
 )
+from app.trading.application.account_valuation import record_account_snapshot
 
 OrderSide = Literal["buy", "sell"]
 OrderTypeLiteral = Literal["market", "limit"]
@@ -196,6 +216,7 @@ def place_order(db: Session, command: PlaceOrderCommand) -> TradeOrder:
         instrument = db.get(Instrument, command.instrument_id)
         if instrument is None:
             raise OrderFlowError("instrument_not_found", "Instrument not found")
+        exchange_code = _exchange_code_for_account(db, account)
 
         if command.order_intent_id is not None:
             order_intent = db.get(OrderIntent, command.order_intent_id)
@@ -244,9 +265,12 @@ def place_order(db: Session, command: PlaceOrderCommand) -> TradeOrder:
             },
         )
 
-        fill = _simulate_fill(db, order, account, instrument)
-        _, realized_pnl = _apply_fill_to_position(db, account, instrument, fill, command.side)
+        fill = _simulate_fill(db, order, instrument, exchange_code)
+        _, realized_pnl = _apply_fill_to_position(
+            db, account, instrument, fill, command.side, exchange_code
+        )
         _record_ledger(db, account, instrument, fill, command.side, realized_pnl)
+        record_account_snapshot(db, account, instrument)
         _audit(
             db,
             command.workspace_id,
@@ -298,7 +322,7 @@ def cancel_order(db: Session, order: TradeOrder, *, reason_code: str) -> TradeOr
 
 
 def _simulate_fill(
-    db: Session, order: TradeOrder, account: TradingAccount, instrument: Instrument
+    db: Session, order: TradeOrder, instrument: Instrument, exchange_code: str
 ) -> Fill:
     candle = db.scalar(
         select(Candle)
@@ -311,7 +335,6 @@ def _simulate_fill(
             "market_price_unavailable",
             "No final candle available for this instrument; cannot simulate a fill",
         )
-    exchange_code = _exchange_code_for_account(db, account)
     fee_amount = _fee_buffer(exchange_code, candle.close, order.quantity)
     expected_slippage = _expected_slippage(db, exchange_code, order.instrument_id)
     fill_price = (
@@ -398,69 +421,101 @@ def _apply_fill_to_position(
     instrument: Instrument,
     fill: Fill,
     order_side: OrderSide,
+    exchange_code: str,
 ) -> tuple[TradingPosition, Decimal]:
-    """Long-only position bookkeeping (see module docstring). Returns (position,
-    realized_pnl): realized_pnl is 0 for an opening/increasing buy and the booked P&L for a
-    closing/reducing sell."""
+    """Net position bookkeeping (one open row per account+instrument; see module
+    docstring). `exchange_code == "oanda"` allows the row to flip between `long` and
+    `short`; any other exchange keeps the original long-only behavior (a sell exceeding
+    the held long quantity raises `short_not_supported`).
+
+    A fill that exceeds the currently held opposite-direction quantity flips the position
+    in one step -- closes the existing leg (realizing P&L on it) and opens the remainder
+    in the new direction at the same fill price -- rather than requiring two separate
+    orders (close, then reopen). Chosen over the two-step alternative because OANDA
+    itself nets a single order this way for a netting-mode account, and Risk Gate sizing
+    (which would be the natural place to *limit* how large a single flip can be) is out
+    of scope for this module regardless of whether flips happen in one step or two, so
+    splitting it into two steps here would not have made risk management any easier --
+    only added an extra round trip. Returns (position, realized_pnl): realized_pnl is 0
+    for an opening/increasing fill and the booked P&L for the closed portion of a
+    reducing or flipping fill."""
     position = db.scalar(
         select(TradingPosition).where(
             TradingPosition.account_id == account.id,
             TradingPosition.instrument_id == instrument.id,
-            TradingPosition.side == "long",
             TradingPosition.status == "open",
         )
     )
+    allow_short = exchange_code == "oanda"
     now = datetime.now(UTC)
-    if order_side == "buy":
-        if position is None:
-            position = TradingPosition(
-                account_id=account.id,
-                instrument_id=instrument.id,
-                side="long",
-                quantity=fill.quantity,
-                average_entry_price=fill.price,
-                status="open",
-                opened_at=now,
-                updated_at=now,
+    opening_side = "long" if order_side == "buy" else "short"
+
+    if position is None:
+        if opening_side == "short" and not allow_short:
+            raise OrderFlowError(
+                "short_not_supported",
+                "Opening a short position is not supported for this exchange "
+                "(see order_flow.py module docstring)",
             )
-            db.add(position)
-        else:
-            if position.average_entry_price is None:
-                raise OrderFlowError(
-                    "position_missing_entry_price",
-                    "Open long position has no average_entry_price; cannot average in a fill",
-                )
-            total_cost = (
-                position.average_entry_price * position.quantity + fill.price * fill.quantity
-            )
-            position.quantity += fill.quantity
-            position.average_entry_price = total_cost / position.quantity
-            position.version += 1
-            position.updated_at = now
+        position = TradingPosition(
+            account_id=account.id,
+            instrument_id=instrument.id,
+            side=opening_side,
+            quantity=fill.quantity,
+            average_entry_price=fill.price,
+            status="open",
+            opened_at=now,
+            updated_at=now,
+        )
+        db.add(position)
         db.flush()
         db.refresh(position)
         return position, Decimal(0)
 
-    # sell
-    if position is None or position.quantity < fill.quantity:
-        raise OrderFlowError(
-            "short_not_supported",
-            "Sell quantity exceeds the held long position; opening a short position is not "
-            "supported by this implementation (see order_flow.py module docstring)",
-        )
     if position.average_entry_price is None:
         raise OrderFlowError(
             "position_missing_entry_price",
-            "Open long position has no average_entry_price; cannot realize P&L",
+            "Open position has no average_entry_price; cannot apply a fill",
         )
-    realized_pnl = (fill.price - position.average_entry_price) * fill.quantity
-    position.quantity -= fill.quantity
+
+    same_direction = opening_side == position.side
+    if same_direction:
+        total_cost = position.average_entry_price * position.quantity + fill.price * fill.quantity
+        position.quantity += fill.quantity
+        position.average_entry_price = total_cost / position.quantity
+        position.version += 1
+        position.updated_at = now
+        db.flush()
+        db.refresh(position)
+        return position, Decimal(0)
+
+    # Opposite direction: reduce, exactly close, or flip.
+    direction_sign = Decimal(1) if position.side == "long" else Decimal(-1)
+    closing_quantity = min(fill.quantity, position.quantity)
+    realized_pnl = (fill.price - position.average_entry_price) * closing_quantity * direction_sign
     position.realized_pnl += realized_pnl
     position.version += 1
     position.updated_at = now
-    if position.quantity == 0:
+
+    remainder = fill.quantity - position.quantity
+    if remainder > 0:
+        if not allow_short:
+            raise OrderFlowError(
+                "short_not_supported",
+                "Fill quantity exceeds the held long position; opening a short position "
+                "is not supported for this exchange (see order_flow.py module docstring)",
+            )
+        position.side = opening_side
+        position.quantity = remainder
+        position.average_entry_price = fill.price
+        position.opened_at = now
+    elif remainder == 0:
+        position.quantity = Decimal(0)
         position.status = "closed"
         position.closed_at = now
+    else:
+        position.quantity -= fill.quantity
+
     db.flush()
     db.refresh(position)
     return position, realized_pnl

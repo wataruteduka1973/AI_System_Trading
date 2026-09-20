@@ -242,7 +242,7 @@ def test_place_order_order_intent_side_mismatch() -> None:
     account = _account()
     instrument = _instrument()
     order_intent = OrderIntent(id=uuid4(), side="sell")
-    db.scalar.side_effect = [account]
+    db.scalar.side_effect = [account, "oanda"]
     db.get.side_effect = [instrument, order_intent]
     command = flow.PlaceOrderCommand(
         workspace_id=uuid4(),
@@ -267,7 +267,7 @@ def test_place_order_buy_opens_position_and_records_ledger() -> None:
     account = _account()
     instrument = _instrument()
     candle = _candle(Decimal("150.000"), instrument_id=instrument.id)
-    db.scalar.side_effect = [account, candle, "oanda", None]
+    db.scalar.side_effect = [account, "oanda", candle, None, None, Decimal("0")]
     db.get.side_effect = [instrument, None]  # Instrument, then no InstrumentSpread row yet
     command = flow.PlaceOrderCommand(
         workspace_id=account.workspace_id,
@@ -315,7 +315,7 @@ def test_place_order_sell_closes_position_with_fee_and_realized_pnl() -> None:
         quantity=Decimal("1"),
         average_entry_price=Decimal("100"),
     )
-    db.scalar.side_effect = [account, candle, "binance", existing_position]
+    db.scalar.side_effect = [account, "binance", candle, existing_position, None, Decimal("0")]
     db.get.return_value = instrument
     command = flow.PlaceOrderCommand(
         workspace_id=account.workspace_id,
@@ -343,13 +343,13 @@ def test_place_order_sell_closes_position_with_fee_and_realized_pnl() -> None:
     assert realized_entry.amount == Decimal("20")
 
 
-def test_place_order_sell_exceeding_position_is_not_supported() -> None:
+def test_place_order_binance_sell_with_no_position_is_not_supported() -> None:
     db = MagicMock()
     account = _account()
     instrument = _instrument()
     candle = _candle(Decimal("120"), instrument_id=instrument.id)
-    db.scalar.side_effect = [account, candle, "oanda", None]
-    db.get.side_effect = [instrument, None]  # Instrument, then no InstrumentSpread row yet
+    db.scalar.side_effect = [account, "binance", candle, None]
+    db.get.return_value = instrument
     command = flow.PlaceOrderCommand(
         workspace_id=account.workspace_id,
         account_id=account.id,
@@ -365,6 +365,63 @@ def test_place_order_sell_exceeding_position_is_not_supported() -> None:
     db.rollback.assert_called_once()
 
 
+def test_place_order_binance_sell_exceeding_long_position_is_not_supported() -> None:
+    db = MagicMock()
+    account = _account()
+    instrument = _instrument()
+    candle = _candle(Decimal("120"), instrument_id=instrument.id)
+    existing_long = _position(
+        account_id=account.id,
+        instrument_id=instrument.id,
+        side="long",
+        quantity=Decimal("1"),
+        average_entry_price=Decimal("100"),
+    )
+    db.scalar.side_effect = [account, "binance", candle, existing_long]
+    db.get.return_value = instrument
+    command = flow.PlaceOrderCommand(
+        workspace_id=account.workspace_id,
+        account_id=account.id,
+        instrument_id=instrument.id,
+        side="sell",
+        order_type="market",
+        quantity=Decimal("2"),  # exceeds the held 1 -- would require flipping short
+        client_order_id="c3b",
+    )
+    with pytest.raises(flow.OrderFlowError) as exc:
+        flow.place_order(db, command)
+    assert exc.value.code == "short_not_supported"
+    # No flip happened: position must remain untouched (long, quantity 1).
+    assert existing_long.side == "long"
+    assert existing_long.quantity == Decimal("1")
+
+
+def test_place_order_oanda_sell_with_no_position_opens_a_short() -> None:
+    db = MagicMock()
+    account = _account()
+    instrument = _instrument()
+    candle = _candle(Decimal("150.000"), instrument_id=instrument.id)
+    db.scalar.side_effect = [account, "oanda", candle, None, None, Decimal("0")]
+    db.get.side_effect = [instrument, None]  # Instrument, then no InstrumentSpread row yet
+    command = flow.PlaceOrderCommand(
+        workspace_id=account.workspace_id,
+        account_id=account.id,
+        instrument_id=instrument.id,
+        side="sell",
+        order_type="market",
+        quantity=Decimal("1000"),
+        client_order_id="c5",
+    )
+    flow.place_order(db, command)
+    positions = [
+        call.args[0] for call in db.add.call_args_list if isinstance(call.args[0], TradingPosition)
+    ]
+    assert len(positions) == 1
+    assert positions[0].side == "short"
+    assert positions[0].quantity == Decimal("1000")
+    assert positions[0].average_entry_price == Decimal("150.000")
+
+
 # ---- _apply_fill_to_position: weighted average on a second buy ----
 
 
@@ -375,15 +432,150 @@ def test_apply_fill_to_position_weighted_average_on_increase() -> None:
     existing_position = _position(
         account_id=account.id,
         instrument_id=instrument.id,
+        side="long",
         quantity=Decimal("10"),
         average_entry_price=Decimal("100"),
     )
     db.scalar.return_value = existing_position
     fill = _fill(price=Decimal("120"), quantity=Decimal("10"))
-    position, realized_pnl = flow._apply_fill_to_position(db, account, instrument, fill, "buy")
+    position, realized_pnl = flow._apply_fill_to_position(
+        db, account, instrument, fill, "buy", "oanda"
+    )
     assert realized_pnl == Decimal("0")
     assert position.quantity == Decimal("20")
     assert position.average_entry_price == Decimal("110")  # (100*10 + 120*10) / 20
+
+
+# ---- _apply_fill_to_position: short side (OANDA only) ----
+
+
+def test_apply_fill_to_position_short_increases_with_weighted_average() -> None:
+    db = MagicMock()
+    account = _account()
+    instrument = _instrument()
+    existing_short = _position(
+        account_id=account.id,
+        instrument_id=instrument.id,
+        side="short",
+        quantity=Decimal("10"),
+        average_entry_price=Decimal("100"),
+    )
+    db.scalar.return_value = existing_short
+    fill = _fill(price=Decimal("90"), quantity=Decimal("10"))
+    position, realized_pnl = flow._apply_fill_to_position(
+        db, account, instrument, fill, "sell", "oanda"
+    )
+    assert realized_pnl == Decimal("0")
+    assert position.side == "short"
+    assert position.quantity == Decimal("20")
+    assert position.average_entry_price == Decimal("95")  # (100*10 + 90*10) / 20
+
+
+def test_apply_fill_to_position_short_reduces_with_profit_when_price_drops() -> None:
+    db = MagicMock()
+    account = _account()
+    instrument = _instrument()
+    existing_short = _position(
+        account_id=account.id,
+        instrument_id=instrument.id,
+        side="short",
+        quantity=Decimal("10"),
+        average_entry_price=Decimal("100"),
+    )
+    db.scalar.return_value = existing_short
+    fill = _fill(price=Decimal("80"), quantity=Decimal("4"))  # buy to cover, price dropped
+    position, realized_pnl = flow._apply_fill_to_position(
+        db, account, instrument, fill, "buy", "oanda"
+    )
+    assert realized_pnl == Decimal("80")  # (100-80)*4 -- short profits when price falls
+    assert position.side == "short"
+    assert position.quantity == Decimal("6")
+    assert position.status == "open"
+
+
+def test_apply_fill_to_position_short_fully_closes_on_exact_buy() -> None:
+    db = MagicMock()
+    account = _account()
+    instrument = _instrument()
+    existing_short = _position(
+        account_id=account.id,
+        instrument_id=instrument.id,
+        side="short",
+        quantity=Decimal("10"),
+        average_entry_price=Decimal("100"),
+    )
+    db.scalar.return_value = existing_short
+    fill = _fill(price=Decimal("110"), quantity=Decimal("10"))  # loss: covered above entry
+    position, realized_pnl = flow._apply_fill_to_position(
+        db, account, instrument, fill, "buy", "oanda"
+    )
+    assert realized_pnl == Decimal("-100")  # (100-110)*10
+    assert position.quantity == Decimal("0")
+    assert position.status == "closed"
+    assert position.closed_at is not None
+
+
+def test_apply_fill_to_position_flips_long_to_short_in_one_fill() -> None:
+    db = MagicMock()
+    account = _account()
+    instrument = _instrument()
+    existing_long = _position(
+        account_id=account.id,
+        instrument_id=instrument.id,
+        side="long",
+        quantity=Decimal("10"),
+        average_entry_price=Decimal("100"),
+    )
+    db.scalar.return_value = existing_long
+    fill = _fill(price=Decimal("90"), quantity=Decimal("15"))  # sell 15, only 10 held long
+    position, realized_pnl = flow._apply_fill_to_position(
+        db, account, instrument, fill, "sell", "oanda"
+    )
+    assert realized_pnl == Decimal("-100")  # closing the long: (90-100)*10
+    assert position.side == "short"
+    assert position.quantity == Decimal("5")  # the remaining 5 opened short
+    assert position.average_entry_price == Decimal("90")
+    assert position.status == "open"  # never closes mid-flip, same row continues
+
+
+def test_apply_fill_to_position_flips_short_to_long_in_one_fill() -> None:
+    db = MagicMock()
+    account = _account()
+    instrument = _instrument()
+    existing_short = _position(
+        account_id=account.id,
+        instrument_id=instrument.id,
+        side="short",
+        quantity=Decimal("10"),
+        average_entry_price=Decimal("100"),
+    )
+    db.scalar.return_value = existing_short
+    fill = _fill(price=Decimal("105"), quantity=Decimal("15"))  # buy 15, only 10 held short
+    position, realized_pnl = flow._apply_fill_to_position(
+        db, account, instrument, fill, "buy", "oanda"
+    )
+    assert realized_pnl == Decimal("-50")  # closing the short: (100-105)*10
+    assert position.side == "long"
+    assert position.quantity == Decimal("5")
+    assert position.average_entry_price == Decimal("105")
+
+
+def test_apply_fill_to_position_binance_never_flips() -> None:
+    db = MagicMock()
+    account = _account()
+    instrument = _instrument()
+    existing_long = _position(
+        account_id=account.id,
+        instrument_id=instrument.id,
+        side="long",
+        quantity=Decimal("10"),
+        average_entry_price=Decimal("100"),
+    )
+    db.scalar.return_value = existing_long
+    fill = _fill(price=Decimal("90"), quantity=Decimal("15"))
+    with pytest.raises(flow.OrderFlowError) as exc:
+        flow._apply_fill_to_position(db, account, instrument, fill, "sell", "binance")
+    assert exc.value.code == "short_not_supported"
 
 
 # ---- _fee_buffer / _exchange_code_for_account ----
@@ -444,7 +636,7 @@ def test_place_order_buy_applies_oanda_spread_to_fill_price() -> None:
     spread_row = InstrumentSpread(
         instrument_id=instrument.id, bid=Decimal("149.90"), ask=Decimal("150.10")
     )
-    db.scalar.side_effect = [account, candle, "oanda", None]
+    db.scalar.side_effect = [account, "oanda", candle, None, None, Decimal("0")]
     db.get.side_effect = [instrument, spread_row]
     command = flow.PlaceOrderCommand(
         workspace_id=account.workspace_id,

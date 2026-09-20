@@ -41,7 +41,7 @@ relationship is an ordinary list.
 
 from datetime import datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import (
@@ -54,6 +54,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.config import settings
@@ -98,6 +99,7 @@ class TradingAccount(Base):
     trading_positions: Mapped[list["TradingPosition"]] = relationship(back_populates="account")
     ledger_transactions: Mapped[list["LedgerTransaction"]] = relationship(back_populates="account")
     ledger_entries: Mapped[list["LedgerEntry"]] = relationship(back_populates="account")
+    account_snapshots: Mapped[list["AccountSnapshot"]] = relationship(back_populates="account")
 
 
 class OrderIntent(Base):
@@ -286,3 +288,32 @@ class LedgerEntry(Base):
     transaction: Mapped["LedgerTransaction"] = relationship(back_populates="ledger_entries")
     account: Mapped["TradingAccount"] = relationship(back_populates="ledger_entries")
     fill: Mapped["Fill | None"] = relationship(back_populates="ledger_entries")
+
+
+class AccountSnapshot(Base):
+    """Point-in-time equity/margin observation (2026-08-16 initial migration; this
+    ORM mapping added 2026-09-20 while implementing the Risk Gate, which needs a
+    time series of equity to check daily/weekly loss, peak drawdown, etc. -- no
+    other module in this codebase reads or writes this table yet."""
+
+    __tablename__ = "account_snapshot"
+    __table_args__ = (
+        UniqueConstraint("account_id", "captured_at", name="uq_account_snapshot_time"),
+        {"schema": SCHEMA},
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, server_default=func.gen_random_uuid())
+    account_id: Mapped[UUID] = mapped_column(
+        ForeignKey(f"{SCHEMA}.trading_account.id", ondelete="CASCADE")
+    )
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    balances: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    equity: Mapped[Decimal] = mapped_column(Numeric(38, 18))
+    unrealized_pnl: Mapped[Decimal] = mapped_column(Numeric(38, 18), server_default="0")
+    margin_used: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
+    margin_available: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
+    margin_call_percent: Mapped[Decimal | None] = mapped_column(Numeric(20, 10))
+    margin_closeout_percent: Mapped[Decimal | None] = mapped_column(Numeric(20, 10))
+    source: Mapped[str] = mapped_column(Text)
+
+    account: Mapped["TradingAccount"] = relationship(back_populates="account_snapshots")
