@@ -32,7 +32,7 @@ dev = [
   "pytest-cov>=7.1.0,<8",
   "httpx>=0.28,<1",
   "respx>=0.22,<1",
-  "ruff==0.16.3",
+  "ruff==0.16.8",
   "mypy>=2.3,<3",
   "types-requests>=2.32,<3",
 ]
