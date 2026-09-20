@@ -1,9 +1,18 @@
-"""**Placeholder signal logic for pipeline wiring only -- not a real trading
-strategy.** A real predictive model (e.g. Chronos) is deliberately not integrated yet
-(separate, on-hold task); this exists solely so the Signal -> RiskDecision ->
+"""**Placeholder signal logic, originally for pipeline wiring only -- not a real
+trading strategy.** A real predictive model (e.g. Chronos) is deliberately not
+integrated yet (separate, on-hold task); this exists so the Signal -> RiskDecision ->
 OrderIntent -> TradeOrder -> Fill pipeline can be exercised end-to-end while that
-model integration is pending. Do not tune, backtest, or treat this as a strategy
-worth evaluating -- it is scaffolding.
+model integration is pending. Do not tune this to chase performance -- it is
+intentionally a simple, explainable rule, not a strategy under active development.
+
+**Update (Horizon4-lite, 2026-09-20, per user confirmation -- see
+`docs/decisions/0003-horizon4-lite-backtest-before-chronos.md` and
+`docs/plans/horizon4-lite-backtest.md`)**: this function is now also the default
+`signal_generator` for `backtest_replay.run_replay`, serving as the non-AI baseline
+Chronos will eventually be compared against. The original "do not backtest this"
+line above no longer applies -- it described a time before any backtest capability
+existed to point at; comparing this rule's backtest performance against Chronos's is
+now the explicit purpose ADR 0003 exists for.
 """
 
 from collections.abc import Sequence
