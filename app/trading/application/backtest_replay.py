@@ -107,6 +107,10 @@ class ReplayResult:
     trades: list[TradeRecord]
     ending_equity: Decimal
     ending_position: fill_sim.BacktestPosition | None
+    equity_curve: list[tuple[datetime, Decimal]]
+    """Mark-to-market equity at the close of every bar processed (Unit 5's max
+    drawdown needs this; it is the same value each bar feeds into `RiskState.equity`
+    /`peak_equity`, just also kept here instead of being discarded after the loop)."""
 
 
 @dataclass
@@ -122,6 +126,7 @@ class _ReplayState:
     consecutive_losses: int = 0
     last_order_time: datetime | None = None
     trades: list[TradeRecord] = field(default_factory=list)
+    equity_curve: list[tuple[datetime, Decimal]] = field(default_factory=list)
     next_sequence_no: int = 1
 
 
@@ -210,7 +215,9 @@ def run_replay(
     the look-ahead-bias guarantee: no code path in this function reads `candles[j]`
     for `j > i` while evaluating bar `i`."""
     if not candles:
-        return ReplayResult(trades=[], ending_equity=initial_equity, ending_position=None)
+        return ReplayResult(
+            trades=[], ending_equity=initial_equity, ending_position=None, equity_curve=[]
+        )
 
     allow_short = exchange_code == "oanda"
     bar_seconds = TIMEFRAME_SECONDS[timeframe]
@@ -221,6 +228,7 @@ def run_replay(
         history = candles[: i + 1]
 
         mark_to_market_equity = state.cash_equity + _unrealized_pnl(state.position, candle.close)
+        state.equity_curve.append((now, mark_to_market_equity))
         state.peak_equity = max(state.peak_equity, mark_to_market_equity)
 
         today = now.date()
@@ -311,5 +319,8 @@ def run_replay(
 
     ending_equity = state.cash_equity + _unrealized_pnl(state.position, candles[-1].close)
     return ReplayResult(
-        trades=state.trades, ending_equity=ending_equity, ending_position=state.position
+        trades=state.trades,
+        ending_equity=ending_equity,
+        ending_position=state.position,
+        equity_curve=state.equity_curve,
     )
