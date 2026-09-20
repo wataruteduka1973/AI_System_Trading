@@ -4,14 +4,20 @@ producing a `risk_decision` row and, when approved, a quantity to trade.
 
 **Scope decision (reported, not decided silently -- see the implementation plan and
 completion report): both the "初期値" (initial) and "system hard limit" columns of §4
-are applied as *deny* thresholds for an individual order here.** `trading_halt`
-activation/release (a persistent account/bot state, with its own release workflow) is
-out of scope for this module and is never written here. Treating "初期値" as inert
-until a future halt-state task exists would mean conservative-v1's own numbers are not
-actually enforced yet, which defeats this task's purpose; treating only "hard limit"
-as binding would silently loosen the approved profile. Both are therefore enforced as
-DB-level `risk_decision.outcome="deny"` per order, while the *state* of being halted
-(and requiring an explicit release) remains future work.
+are applied as *deny* thresholds for an individual order here.** Treating "初期値" as
+inert until a future halt-state task exists would mean conservative-v1's own numbers
+are not actually enforced yet, which defeats this task's purpose; treating only "hard
+limit" as binding would silently loosen the approved profile. Both are therefore
+enforced as DB-level `risk_decision.outcome="deny"` per order.
+
+**`trading_halt` (updated, ADR 0004/docs/plans/trading-halt-mvp.md)**: this module
+used to leave `trading_halt` activation/release entirely out of scope. It no longer
+does, for exactly two causes: `evaluate_signal` now calls
+`app.trading.application.trading_halt` to activate/escalate on a data-delay or
+daily/weekly-loss/peak-drawdown hard breach, and to relax one step when the
+corresponding check passes again -- see `_sync_trading_halts` below. The other 8
+causes in 05番's 取引停止マトリクス still have no detection code anywhere and remain
+out of scope (ADR 0004's explicit MVP boundary).
 
 **Approximation (reported): "全open positionの想定損失合計"** would need each open
 position's stop-loss-implied risk, but this codebase does not place or track real
@@ -82,6 +88,7 @@ from app.models.trading import (
     TradingAccount,
     TradingPosition,
 )
+from app.trading.application import trading_halt
 from app.trading.application.account_valuation import compute_equity
 
 CONSERVATIVE_V1_RULES: dict[str, object] = {
@@ -665,4 +672,54 @@ def evaluate_signal(
     db.add(decision)
     db.flush()
     db.refresh(decision)
+    _sync_trading_halts(db, bot, account, result, now)
     return RiskEvaluationResult(decision=decision, approved_quantity=result.approved_quantity)
+
+
+def _rule_passed(rule_results: dict[str, object], key: str) -> bool:
+    """`PureRiskResult.rule_results` is `dict[str, object]` (each value itself a
+    small `{"passed": bool, ...}` dict) -- this narrows one value back to that
+    shape for mypy, instead of scattering `# type: ignore[index]` at every call
+    site."""
+    rule = rule_results[key]
+    assert isinstance(rule, dict)
+    return bool(rule["passed"])
+
+
+def _sync_trading_halts(
+    db: Session, bot: TradingBot, account: TradingAccount, result: PureRiskResult, now: datetime
+) -> None:
+    """ADR 0004 / docs/plans/trading-halt-mvp.md Unit B: reflects the two in-scope
+    hard-breach checks into `trading_halt` (activate/escalate to `entry_halted` on
+    breach, relax one step on recovery). Not called from the `equity <= 0`
+    short-circuit path above -- that case has no `result.rule_results` to read (see
+    module docstring's "Unit 2 refactor" note) and is a different, more severe
+    problem than either of these two causes. Uses `evaluate_signal`'s own `now`
+    (not a fresh clock read), matching the rest of this function's single-`now`
+    convention."""
+    data_delay_scope = trading_halt.HaltScope(
+        workspace_id=bot.workspace_id, scope_type="bot", scope_id=bot.id
+    )
+    if _rule_passed(result.rule_results, "data_delay"):
+        trading_halt.deescalate_one_step(db, data_delay_scope, reason_code="data_delay", now=now)
+    else:
+        trading_halt.activate_or_escalate(
+            db, data_delay_scope, reason_code="data_delay", level="entry_halted"
+        )
+
+    loss_dd_scope = trading_halt.HaltScope(
+        workspace_id=bot.workspace_id, scope_type="account", scope_id=account.id
+    )
+    loss_dd_ok = (
+        _rule_passed(result.rule_results, "daily_loss")
+        and _rule_passed(result.rule_results, "weekly_loss")
+        and _rule_passed(result.rule_results, "peak_drawdown")
+    )
+    if loss_dd_ok:
+        trading_halt.deescalate_one_step(
+            db, loss_dd_scope, reason_code="daily_loss_dd_limit", now=now
+        )
+    else:
+        trading_halt.activate_or_escalate(
+            db, loss_dd_scope, reason_code="daily_loss_dd_limit", level="entry_halted"
+        )

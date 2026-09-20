@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 from app.models.instruments import Instrument
 from app.models.market_data import Candle
-from app.models.strategy import RiskProfileVersion, Signal, TradingBot
+from app.models.strategy import RiskProfileVersion, Signal, TradingBot, TradingHalt
 from app.models.trading import TradingAccount
 from app.trading.application import risk_gate as gate
 
@@ -243,3 +243,109 @@ def test_evaluate_conservative_v1_adjusts_quantity_down_to_broker_limit() -> Non
     result = gate._evaluate_conservative_v1(_state(instrument=small_max))
     assert result.outcome == "allow_with_adjustment"
     assert result.approved_quantity == Decimal("100")
+
+
+# ---- _sync_trading_halts ----
+#
+# ADR 0004 / docs/plans/trading-halt-mvp.md Unit B: db.scalar is mocked to return
+# None (no pre-existing active halt for either scope) unless a test says otherwise,
+# so any db.add call in these tests unambiguously means a *new* halt was created.
+
+
+def _passing_rule_results(**overrides: dict[str, object]) -> dict[str, object]:
+    defaults: dict[str, object] = {
+        "data_delay": {"passed": True},
+        "daily_loss": {"passed": True},
+        "weekly_loss": {"passed": True},
+        "peak_drawdown": {"passed": True},
+    }
+    defaults.update(overrides)
+    return defaults
+
+
+def _pure_result(rule_results: dict[str, object]) -> gate.PureRiskResult:
+    return gate.PureRiskResult(
+        rule_results=rule_results, outcome="allow", approved_quantity=Decimal("1"), reason_code=None
+    )
+
+
+def test_sync_trading_halts_activates_bot_scoped_halt_on_data_delay_breach() -> None:
+    db = MagicMock()
+    db.scalar.return_value = None
+    bot = _bot()
+    account = _account()
+    result = _pure_result(_passing_rule_results(data_delay={"passed": False}))
+
+    gate._sync_trading_halts(db, bot, account, result, datetime.now(UTC))
+
+    db.add.assert_called_once()
+    added = db.add.call_args[0][0]
+    assert added.scope_type == "bot"
+    assert added.scope_id == bot.id
+    assert added.reason_code == "data_delay"
+    assert added.level == "entry_halted"
+
+
+def test_sync_trading_halts_activates_account_scoped_halt_on_daily_loss_breach() -> None:
+    db = MagicMock()
+    db.scalar.return_value = None
+    bot = _bot()
+    account = _account()
+    result = _pure_result(_passing_rule_results(daily_loss={"passed": False}))
+
+    gate._sync_trading_halts(db, bot, account, result, datetime.now(UTC))
+
+    db.add.assert_called_once()
+    added = db.add.call_args[0][0]
+    assert added.scope_type == "account"
+    assert added.scope_id == account.id
+    assert added.reason_code == "daily_loss_dd_limit"
+
+
+def test_sync_trading_halts_requires_all_three_loss_dd_checks_to_pass_before_relaxing() -> None:
+    db = MagicMock()
+
+    bot = _bot()
+    account = _account()
+    existing = TradingHalt(
+        id=uuid4(),
+        workspace_id=account.workspace_id,
+        scope_type="account",
+        scope_id=account.id,
+        level="entry_halted",
+        reason_code="daily_loss_dd_limit",
+        status="active",
+    )
+    # Call order matches _sync_trading_halts: data_delay scope lookup first (no
+    # active halt there), then loss_dd scope lookup (the row under test).
+    db.scalar.side_effect = [None, existing]
+    # peak_drawdown still failing -> must not relax even though the other two pass.
+    result = _pure_result(_passing_rule_results(peak_drawdown={"passed": False}))
+
+    gate._sync_trading_halts(db, bot, account, result, datetime.now(UTC))
+
+    assert existing.level == "entry_halted"  # unchanged, not relaxed
+
+
+def test_sync_trading_halts_relaxes_when_all_checks_pass() -> None:
+    db = MagicMock()
+
+    bot = _bot()
+    account = _account()
+    existing = TradingHalt(
+        id=uuid4(),
+        workspace_id=bot.workspace_id,
+        scope_type="bot",
+        scope_id=bot.id,
+        level="entry_halted",
+        reason_code="data_delay",
+        status="active",
+    )
+    # data_delay scope lookup returns the row under test; loss_dd scope lookup (no
+    # active halt there) returns None, isolating this to the data_delay branch.
+    db.scalar.side_effect = [existing, None]
+    result = _pure_result(_passing_rule_results())
+
+    gate._sync_trading_halts(db, bot, account, result, datetime.now(UTC))
+
+    assert existing.level == "warning"

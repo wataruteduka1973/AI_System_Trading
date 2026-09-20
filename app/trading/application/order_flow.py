@@ -58,10 +58,14 @@ formula or data source for it is implemented; conservative-v1's existing risk pa
 applied identically regardless of direction, since none of them are direction-dependent by
 nature -- but neither is Risk Gate itself applied yet (out of scope, see below).
 
-TODO(trading_halt): `place_order` does not check `trading_halt` for the account/bot before
-submitting -- trading_halt activation/release is explicitly out of scope for this module. A
-future risk-gate/halt task must add that check (here, or in every caller) before this module
-is wired up to real Bot execution.
+trading_halt (updated, ADR 0004/docs/plans/trading-halt-mvp.md Unit C): `place_order` now
+blocks a new/increasing entry when an `entry_halted`-or-more active halt covers the account
+(or bot, if `PlaceOrderCommand.bot_id` is given) -- closing/reducing an opposite-direction
+position is always allowed. This module still never activates/escalates/releases a halt
+itself (that remains `trading_halt.py`'s and `risk_gate.py`'s job); it only reads. Only the
+two causes ADR 0004 wired up (data delay, daily/weekly loss·peak drawdown) can ever set one
+of these halts today -- the other 8 causes in 05番's 取引停止マトリクス have no detection
+code anywhere and so can never block an order here yet.
 
 TODO(order_status_history): the live DB has an `order_status_history` table (order_id,
 from_status, to_status, reason_code, raw_ref, occurred_at) with no ORM mapping anywhere in
@@ -96,6 +100,7 @@ from app.models.trading import (
     TradingAccount,
     TradingPosition,
 )
+from app.trading.application import trading_halt
 from app.trading.application.account_valuation import record_account_snapshot
 
 OrderSide = Literal["buy", "sell"]
@@ -146,6 +151,12 @@ class PlaceOrderCommand:
     limit_price: Decimal | None = None
     stop_price: Decimal | None = None
     time_in_force: str = "gtc"
+    bot_id: UUID | None = None
+    """Optional (ADR 0004/docs/plans/trading-halt-mvp.md Unit C): when the caller
+    knows which bot this order is for (e.g. `dummy_pipeline.py`), passing it lets
+    `place_order` also check a bot-scoped `trading_halt` (data-delay), on top of the
+    account-scoped one it always checks. A manual/direct order with no bot behind it
+    leaves this `None` and only the account-scoped check applies."""
 
 
 def _validate_order_type_price(order_type: OrderTypeLiteral, limit_price: Decimal | None) -> None:
@@ -227,7 +238,39 @@ def place_order(db: Session, command: PlaceOrderCommand) -> TradeOrder:
                     "order_intent_mismatch", "TradeOrder side does not match its OrderIntent"
                 )
 
-        # TODO(trading_halt): see module docstring -- no halt check happens here yet.
+        # trading_halt (ADR 0004/docs/plans/trading-halt-mvp.md Unit C): a new or
+        # same-direction/increasing order is blocked while an entry_halted-or-more
+        # active halt covers this account (or bot, if known) -- closing/reducing an
+        # existing opposite-direction position is always allowed (matches every row
+        # in 05番's 取引停止マトリクス, which permits 決済 at entry_halted). Only the
+        # two causes ADR 0004 wired up in risk_gate.py can ever set one of these
+        # halts today; see that module and trading_halt.py's own docstrings for why
+        # the other 8 causes never reach this check yet, and why a broader
+        # workspace/system-scoped halt is not checked here either.
+        existing_position = _open_position(db, account, instrument)
+        is_closing_or_reducing = existing_position is not None and (
+            (command.side == "sell" and existing_position.side == "long")
+            or (command.side == "buy" and existing_position.side == "short")
+        )
+        if not is_closing_or_reducing:
+            account_scope = trading_halt.HaltScope(
+                workspace_id=command.workspace_id, scope_type="account", scope_id=account.id
+            )
+            halted = trading_halt.has_active_halt_at_or_above(
+                db, account_scope, min_level="entry_halted"
+            )
+            if not halted and command.bot_id is not None:
+                bot_scope = trading_halt.HaltScope(
+                    workspace_id=command.workspace_id, scope_type="bot", scope_id=command.bot_id
+                )
+                halted = trading_halt.has_active_halt_at_or_above(
+                    db, bot_scope, min_level="entry_halted"
+                )
+            if halted:
+                raise OrderFlowError(
+                    "trading_halted",
+                    "A new or increasing entry is blocked by an active trading_halt",
+                )
 
         now = datetime.now(UTC)
         order = TradeOrder(
@@ -362,6 +405,22 @@ def _simulate_fill(
     db.flush()
     db.refresh(fill)
     return fill
+
+
+def _open_position(
+    db: Session, account: TradingAccount, instrument: Instrument
+) -> TradingPosition | None:
+    """Standalone lookup for `place_order`'s trading_halt pre-check (ADR 0004 Unit
+    C), kept separate from `_apply_fill_to_position`'s own internal position query
+    rather than refactored to share one: that function's query is exercised by an
+    existing, already-tested code path this task does not otherwise need to touch."""
+    return db.scalar(
+        select(TradingPosition).where(
+            TradingPosition.account_id == account.id,
+            TradingPosition.instrument_id == instrument.id,
+            TradingPosition.status == "open",
+        )
+    )
 
 
 def _exchange_code_for_account(db: Session, account: TradingAccount) -> str:
