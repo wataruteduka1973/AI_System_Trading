@@ -12,18 +12,28 @@ from app.models.market_data import Candle
 
 
 def average_true_range(candles: Sequence[Candle], period: int = 14) -> Decimal | None:
-    """Simple (unweighted) moving average of the true range over `period` bars, from
-    `period + 1` chronologically ascending candles (the extra one supplies the
-    "previous close" the first true range needs). This is a plain SMA of true range,
-    not Wilder's exponential smoothing that most charting platforms label "ATR" --
-    chosen because it needs no persisted smoothing state between calls, which fits
-    this module's "minimal, only what's needed" scope. Returns None if fewer than
-    `period + 1` candles are given."""
+    """Wilder's exponential smoothing of the true range (2026-09-20; the original
+    version was a plain SMA of true range -- see git history), over `period` bars, from
+    chronologically ascending candles. True Range itself is unchanged:
+    `max(high-low, |high-previous_close|, |low-previous_close|)`.
+
+    Wilder's formula is recursive: the first ATR is the simple average of the first
+    `period` true ranges (the "seed"), and each subsequent one blends the prior ATR
+    with the new true range: `ATR[t] = (ATR[t-1] * (period - 1) + TR[t]) / period`.
+    This means the result **depends on how much history is passed in**, not just on
+    the most recent `period + 1` candles: with exactly `period + 1` candles there is
+    only a seed and no smoothing has happened yet (identical to the old SMA version);
+    with more history, each additional candle rolls the smoothing forward and more
+    heavily weights recent volatility, which is the whole point of using Wilder's
+    method here (see the task this was implemented for: faster reaction to recent
+    volatility than a flat SMA, since both crypto and FX can move sharply).
+    `risk_gate.py`'s caller was updated to fetch more than the bare minimum candles
+    for this reason. Returns None if fewer than `period + 1` candles are given (not
+    enough for even a seed)."""
     if len(candles) < period + 1:
         return None
-    window = candles[-(period + 1) :]
     true_ranges: list[Decimal] = []
-    for previous, current in zip(window, window[1:], strict=False):
+    for previous, current in zip(candles, candles[1:], strict=False):
         true_ranges.append(
             max(
                 current.high - current.low,
@@ -31,4 +41,7 @@ def average_true_range(candles: Sequence[Candle], period: int = 14) -> Decimal |
                 abs(current.low - previous.close),
             )
         )
-    return sum(true_ranges, Decimal(0)) / len(true_ranges)
+    atr = sum(true_ranges[:period], Decimal(0)) / period
+    for true_range in true_ranges[period:]:
+        atr = (atr * (period - 1) + true_range) / period
+    return atr

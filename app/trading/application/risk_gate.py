@@ -115,6 +115,15 @@ def _decimal(rules: dict, key: str) -> Decimal:
     return Decimal(str(rules[key]))
 
 
+_ATR_HISTORY_CANDLES = 100
+"""How many candles to fetch for `average_true_range`'s ATR(14). Wilder's smoothing
+(see indicators.py) only reflects recent volatility once it has enough bars to roll
+forward past the initial seed -- fetching just `period + 1` (15) would give the same
+result as the old flat-SMA version, defeating the point of switching to Wilder's
+method. 100 is a judgment call (not derived from a formula): enough bars that the
+seed's influence has decayed by roughly (13/14)^85, without an unbounded query."""
+
+
 def _recent_final_candles(
     db: Session, instrument_id: UUID, timeframe: str, limit: int
 ) -> list[Candle]:
@@ -273,7 +282,7 @@ def evaluate_signal(
     hard_breach = False
     initial_breach = False
 
-    candles = _recent_final_candles(db, instrument.id, bot.timeframe, 15)
+    candles = _recent_final_candles(db, instrument.id, bot.timeframe, _ATR_HISTORY_CANDLES)
     latest_candle = candles[-1] if candles else None
     if latest_candle is None:
         raise RiskGateError(
