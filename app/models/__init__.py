@@ -1,4 +1,5 @@
 from app.models.audit import AuditLog, SystemEvent
+from app.models.backtest import BacktestRun, BacktestTrade, DatasetSnapshot
 from app.models.connections import (
     AccountSelectionPolicy,
     Exchange,
@@ -36,8 +37,11 @@ __all__ = [
     "AppUser",
     "AuditLog",
     "BackfillJob",
+    "BacktestRun",
+    "BacktestTrade",
     "BotRun",
     "Candle",
+    "DatasetSnapshot",
     "Exchange",
     "ExchangeConnection",
     "ExternalAccount",
