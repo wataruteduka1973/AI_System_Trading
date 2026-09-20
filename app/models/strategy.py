@@ -38,6 +38,16 @@ have this problem -- their own foreign keys resolve entirely within
 already-in-scope tables (workspace/exchange_connection/trading_account/
 instrument/strategy_version/risk_profile_version).
 
+**Update (Horizon4-lite, see `docs/decisions/0003-horizon4-lite-backtest-before-chronos.md`)**:
+`DatasetSnapshot` -- one member of the above Horizon 6 cluster -- is now mapped
+in `app/models/backtest.py`, as a narrow ADR-recorded exception:
+`backtest_run.dataset_snapshot_id` is a NOT NULL foreign key, so a `BacktestRun`
+cannot exist without it. `model_artifact`/`model_candidate`/`training_run`/
+`model_source` remain unmapped; this does not reopen the Horizon 6 gate.
+`StrategyVersion.backtest_runs`/`RiskProfileVersion.backtest_runs` below are
+the corresponding bidirectional `relationship()`s to `backtest.py`'s
+`BacktestRun`.
+
 `relationship()` (2026-09-20 addition): unlike `market_data.py`/`instruments.py`,
 this module follows `workspace.py`/`connections.py`'s convention of declaring
 bidirectional `relationship()`s, since this module's tables form a genuinely
@@ -96,6 +106,7 @@ from app.db.session import Base
 
 if TYPE_CHECKING:
     from app.models.audit import SystemEvent
+    from app.models.backtest import BacktestRun
     from app.models.trading import OrderIntent, TradingAccount
 
 SCHEMA = settings.database_schema
@@ -147,6 +158,7 @@ class StrategyVersion(Base):
     strategy: Mapped["Strategy"] = relationship(back_populates="strategy_versions")
     signals: Mapped[list["Signal"]] = relationship(back_populates="strategy_version")
     trading_bots: Mapped[list["TradingBot"]] = relationship(back_populates="strategy_version")
+    backtest_runs: Mapped[list["BacktestRun"]] = relationship(back_populates="strategy_version")
 
 
 class RiskProfile(Base):
@@ -197,6 +209,7 @@ class RiskProfileVersion(Base):
         back_populates="risk_profile_version"
     )
     trading_bots: Mapped[list["TradingBot"]] = relationship(back_populates="risk_profile_version")
+    backtest_runs: Mapped[list["BacktestRun"]] = relationship(back_populates="risk_profile_version")
 
 
 class TradingBot(Base):
