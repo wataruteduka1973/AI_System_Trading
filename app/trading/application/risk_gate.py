@@ -35,6 +35,30 @@ Not implemented (found, not fabricated -- see completion report): OANDA's
 data from the broker; this paper simulator has no such data source (paper accounts
 never call OANDA's account endpoints), so these two checks are omitted rather than
 computed from a fabricated value.
+
+**Unit 2 refactor (docs/plans/horizon4-lite-backtest.md)**: `evaluate_signal`'s body
+used to interleave DB reads with conservative-v1's rule logic in one function. It is
+now split into two phases: this module still does all the DB reads (unchanged
+queries, unchanged order, unchanged `RiskDecision` persistence), but everything it
+learns from the DB is now collected into a `RiskState` value first, and every
+conservative-v1 threshold check now lives in `_evaluate_conservative_v1`, a function
+that takes only a `RiskState` and returns a `PureRiskResult` -- no `Session`, no
+`datetime.now()`, no other DB-shaped object. `evaluate_signal`'s own signature,
+external behavior, and the sequence/count of queries it issues are unchanged (see
+the test suite's `side_effect` lists, which assert query count for the equity<=0
+path). The point of the split: `_evaluate_conservative_v1` can be called with a
+backtest replay's *simulated* state just as easily as with the live DB's current
+state, without duplicating conservative-v1's logic -- the eventual backtest harness
+(Unit 3/4) builds its own `RiskState` instead of adding a second implementation of
+this function.
+
+**One deliberate, reported behavior change**: the old code called `compute_equity`
+twice for a Binance signal -- once into `equity`, and again into a same-valued
+`available_jpy` inside the Binance `broker_limit` branch (nothing mutates the
+account between the two calls within one `evaluate_signal` invocation, so they were
+always equal). `_evaluate_conservative_v1` now reuses `state.equity` for that
+calculation instead, removing the redundant second query. Every other query this
+module issues is unchanged in both count and order.
 """
 
 from dataclasses import dataclass
@@ -242,7 +266,7 @@ def _consecutive_losses(db: Session, account: TradingAccount) -> int:
     return count
 
 
-def _minutes_since_last_order(db: Session, bot_id: UUID) -> Decimal | None:
+def _minutes_since_last_order(db: Session, bot_id: UUID, now: datetime) -> Decimal | None:
     last = db.scalar(
         select(TradeOrder.created_at)
         .join(OrderIntent, TradeOrder.order_intent_id == OrderIntent.id)
@@ -254,81 +278,68 @@ def _minutes_since_last_order(db: Session, bot_id: UUID) -> Decimal | None:
     )
     if last is None:
         return None
-    delta = datetime.now(UTC) - last
+    delta = now - last
     return Decimal(delta.total_seconds()) / Decimal(60)
 
 
-def evaluate_signal(
-    db: Session,
-    signal: Signal,
-    account: TradingAccount,
-    instrument: Instrument,
-    bot: TradingBot,
-    risk_profile_version: RiskProfileVersion,
-    exchange_code: str,
-) -> RiskEvaluationResult:
-    """Evaluate one `buy`/`sell` Signal against conservative-v1 and persist the
-    resulting `risk_decision`. Caller (`dummy_pipeline.py`) is responsible for
-    deciding *whether* to call this at all (e.g. `hold` signals, or a signal that
-    dote-gating says must be close-only, never reach this function)."""
-    if signal.action not in ("buy", "sell"):
-        raise RiskGateError(
-            "invalid_signal_action", f"Cannot risk-evaluate a '{signal.action}' signal"
-        )
+@dataclass(frozen=True)
+class RiskState:
+    """Every DB-/clock-derived input conservative-v1's threshold checks need,
+    already resolved to plain values -- gathering these (the only "impure" part of
+    risk evaluation) is `evaluate_signal`'s job; `_evaluate_conservative_v1` below
+    is a pure function of a `RiskState`. `instrument` is included as-is (not
+    decomposed into its individual fields) since it is static reference data, not
+    time-varying account/market state -- passing it whole matches how
+    `_stop_distance` already takes it."""
 
-    rules = risk_profile_version.rules
-    now = datetime.now(UTC)
-    results: dict[str, object] = {}
+    signal_action: str
+    now: datetime
+    rules: dict
+    exchange_code: str
+    instrument: Instrument
+    market_price: Decimal
+    latest_candle_close_time: datetime
+    bar_seconds: int
+    stop_distance: Decimal
+    expected_slippage: Decimal
+    fee_buffer_per_unit: Decimal
+    equity: Decimal
+    existing_open_risk: Decimal
+    has_open_position: bool
+    day_start_equity: Decimal | None
+    week_start_equity: Decimal | None
+    peak_equity: Decimal | None
+    consecutive_losses: int
+    minutes_since_last_order: Decimal | None
+
+
+@dataclass(frozen=True)
+class PureRiskResult:
+    rule_results: dict[str, object]
+    outcome: str
+    approved_quantity: Decimal | None
+    reason_code: str | None
+
+
+def _evaluate_conservative_v1(state: RiskState) -> PureRiskResult:
+    """conservative-v1's threshold checks (08_取引アルゴリズムとリスク初期値.md§4/§5),
+    given a `RiskState`. Caller (`evaluate_signal`) is responsible for the
+    `state.equity <= 0` short-circuit -- see its own docstring/comment for why that
+    case stays there instead of here."""
+    rules = state.rules
+    instrument = state.instrument
+    results: dict[str, object] = {"equity": {"passed": True, "value": str(state.equity)}}
     hard_breach = False
     initial_breach = False
 
-    candles = _recent_final_candles(db, instrument.id, bot.timeframe, _ATR_HISTORY_CANDLES)
-    latest_candle = candles[-1] if candles else None
-    if latest_candle is None:
-        raise RiskGateError(
-            "market_price_unavailable", "No final candle available for this instrument"
-        )
-    market_price = latest_candle.close
+    stress_adjusted_stop = state.stop_distance + state.expected_slippage + state.fee_buffer_per_unit
 
-    spread = _spread(db, exchange_code, instrument.id)
-    stop_distance = _stop_distance(exchange_code, instrument, candles, spread, rules)
-    expected_slippage = spread * (
-        Decimal("0.5")
-        if exchange_code == "oanda"
-        else Decimal("1.0")
-        if exchange_code == "binance"
-        else Decimal(0)
-    )
-    fee_buffer = _fee_buffer_per_unit(exchange_code, market_price, rules)
-    stress_adjusted_stop = stop_distance + expected_slippage + fee_buffer
-
-    equity = compute_equity(db, account, instrument)
-    if equity <= 0:
-        # Short-circuit: every downstream check divides by or scales with equity, so
-        # there is nothing meaningful left to compute once it's non-positive (and no
-        # further queries are needed to know the answer is deny).
-        results["equity"] = {"passed": False, "value": str(equity)}
-        decision = RiskDecision(
-            signal_id=signal.id,
-            risk_profile_version_id=risk_profile_version.id,
-            outcome="deny",
-            rule_results=results,
-            adjusted_quantity=None,
-            reason_code="hard_limit_breach",
-        )
-        db.add(decision)
-        db.flush()
-        db.refresh(decision)
-        return RiskEvaluationResult(decision=decision, approved_quantity=None)
-    results["equity"] = {"passed": True, "value": str(equity)}
-
-    risk_budget = equity * _decimal(rules, "risk_per_trade")
+    risk_budget = state.equity * _decimal(rules, "risk_per_trade")
     raw_quantity = (risk_budget / stress_adjusted_stop) if stress_adjusted_stop > 0 else Decimal(0)
 
     # --- exposure_limit: remaining room under the "all open positions" risk cap ---
-    existing_open_risk = _existing_open_risk(db, account, instrument)
-    all_open_limit_amount = equity * _decimal(rules, "all_open_risk_limit")
-    remaining_risk_budget = all_open_limit_amount - existing_open_risk
+    all_open_limit_amount = state.equity * _decimal(rules, "all_open_risk_limit")
+    remaining_risk_budget = all_open_limit_amount - state.existing_open_risk
     exposure_limit_quantity = (
         (remaining_risk_budget / stress_adjusted_stop)
         if remaining_risk_budget > 0 and stress_adjusted_stop > 0
@@ -337,23 +348,24 @@ def evaluate_signal(
 
     # --- broker_limit ---
     broker_limit_quantity = instrument.max_quantity if instrument.max_quantity is not None else None
-    if exchange_code == "binance":
-        available_jpy = compute_equity(db, account, instrument)  # single-instrument paper account
-        order_limit_notional = available_jpy * _decimal(
+    if state.exchange_code == "binance":
+        order_limit_notional = state.equity * _decimal(
             rules["binance"], "order_limit_pct_of_available"
         )
         binance_order_limit_quantity = (
-            order_limit_notional / market_price if market_price > 0 else Decimal(0)
+            order_limit_notional / state.market_price if state.market_price > 0 else Decimal(0)
         )
         broker_limit_quantity = (
             binance_order_limit_quantity
             if broker_limit_quantity is None
             else min(broker_limit_quantity, binance_order_limit_quantity)
         )
-    if exchange_code == "oanda":
+    if state.exchange_code == "oanda":
         leverage_cap = _decimal(rules["oanda"], "leverage_cap")
         leverage_limit_quantity = (
-            (equity * leverage_cap / market_price) if market_price > 0 else Decimal(0)
+            (state.equity * leverage_cap / state.market_price)
+            if state.market_price > 0
+            else Decimal(0)
         )
         broker_limit_quantity = (
             leverage_limit_quantity
@@ -383,9 +395,9 @@ def evaluate_signal(
             str(broker_limit_quantity) if broker_limit_quantity is not None else None
         ),
         "final_quantity": str(quantity),
-        "stop_distance": str(stop_distance),
-        "expected_slippage": str(expected_slippage),
-        "fee_buffer_per_unit": str(fee_buffer),
+        "stop_distance": str(state.stop_distance),
+        "expected_slippage": str(state.expected_slippage),
+        "fee_buffer_per_unit": str(state.fee_buffer_per_unit),
         "passed": not quantity_too_small,
     }
     if quantity_too_small:
@@ -393,7 +405,7 @@ def evaluate_signal(
 
     # --- per-trade loss (self-consistent by construction; verified defensively) ---
     loss_at_stop = quantity * stress_adjusted_stop
-    loss_pct = (loss_at_stop / equity) if equity > 0 else Decimal(1)
+    loss_pct = (loss_at_stop / state.equity) if state.equity > 0 else Decimal(1)
     results["per_trade_loss"] = {
         "passed": loss_pct <= _decimal(rules, "risk_per_trade_hard"),
         "pct": str(loss_pct),
@@ -404,7 +416,11 @@ def evaluate_signal(
         initial_breach = True
 
     # --- all-open risk ---
-    all_open_pct = ((existing_open_risk + loss_at_stop) / equity) if equity > 0 else Decimal(1)
+    all_open_pct = (
+        ((state.existing_open_risk + loss_at_stop) / state.equity)
+        if state.equity > 0
+        else Decimal(1)
+    )
     results["all_open_risk"] = {
         "passed": all_open_pct <= _decimal(rules, "all_open_risk_limit_hard"),
         "pct": str(all_open_pct),
@@ -416,17 +432,14 @@ def evaluate_signal(
         initial_breach = True
 
     # --- daily / weekly loss ---
-    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    week_start = day_start - timedelta(days=now.weekday())
-    for label, window_start, limit_key, limit_key_hard in (
-        ("daily_loss", day_start, "daily_loss_limit", "daily_loss_limit_hard"),
-        ("weekly_loss", week_start, "weekly_loss_limit", "weekly_loss_limit_hard"),
+    for label, window_equity, limit_key, limit_key_hard in (
+        ("daily_loss", state.day_start_equity, "daily_loss_limit", "daily_loss_limit_hard"),
+        ("weekly_loss", state.week_start_equity, "weekly_loss_limit", "weekly_loss_limit_hard"),
     ):
-        window_start_equity = _equity_at(db, account, window_start)
-        if window_start_equity is None or window_start_equity <= 0:
+        if window_equity is None or window_equity <= 0:
             results[label] = {"passed": True, "note": "no snapshot yet in this window"}
             continue
-        loss_pct_window = max(Decimal(0), (window_start_equity - equity) / window_start_equity)
+        loss_pct_window = max(Decimal(0), (window_equity - state.equity) / window_equity)
         results[label] = {
             "passed": loss_pct_window <= _decimal(rules, limit_key_hard),
             "pct": str(loss_pct_window),
@@ -437,11 +450,10 @@ def evaluate_signal(
             initial_breach = True
 
     # --- peak drawdown ---
-    peak_equity = _peak_equity(db, account)
-    if peak_equity is None or peak_equity <= 0:
+    if state.peak_equity is None or state.peak_equity <= 0:
         results["peak_drawdown"] = {"passed": True, "note": "no snapshot history yet"}
     else:
-        dd_pct = max(Decimal(0), (peak_equity - equity) / peak_equity)
+        dd_pct = max(Decimal(0), (state.peak_equity - state.equity) / state.peak_equity)
         results["peak_drawdown"] = {
             "passed": dd_pct <= _decimal(rules, "peak_drawdown_limit_hard"),
             "pct": str(dd_pct),
@@ -452,14 +464,13 @@ def evaluate_signal(
             initial_breach = True
 
     # --- consecutive losses ---
-    losses = _consecutive_losses(db, account)
     results["consecutive_losses"] = {
-        "passed": losses <= int(rules["consecutive_loss_limit_hard"]),
-        "count": losses,
+        "passed": state.consecutive_losses <= int(rules["consecutive_loss_limit_hard"]),
+        "count": state.consecutive_losses,
     }
-    if losses > int(rules["consecutive_loss_limit_hard"]):
+    if state.consecutive_losses > int(rules["consecutive_loss_limit_hard"]):
         hard_breach = True
-    elif losses > int(rules["consecutive_loss_limit"]):
+    elif state.consecutive_losses > int(rules["consecutive_loss_limit"]):
         initial_breach = True
 
     # --- reward/risk (see dummy_signal.py: constructed to satisfy this by design) ---
@@ -474,23 +485,22 @@ def evaluate_signal(
         initial_breach = True
 
     # --- order interval ---
-    minutes_since = _minutes_since_last_order(db, bot.id)
-    if minutes_since is None:
+    if state.minutes_since_last_order is None:
         results["order_interval"] = {"passed": True, "note": "no prior order for this bot"}
     else:
         results["order_interval"] = {
-            "passed": minutes_since >= Decimal(rules["min_order_interval_minutes_hard"]),
-            "minutes_since_last_order": str(minutes_since),
+            "passed": state.minutes_since_last_order
+            >= Decimal(rules["min_order_interval_minutes_hard"]),
+            "minutes_since_last_order": str(state.minutes_since_last_order),
         }
-        if minutes_since < Decimal(rules["min_order_interval_minutes_hard"]):
+        if state.minutes_since_last_order < Decimal(rules["min_order_interval_minutes_hard"]):
             hard_breach = True
-        elif minutes_since < Decimal(rules["min_order_interval_minutes"]):
+        elif state.minutes_since_last_order < Decimal(rules["min_order_interval_minutes"]):
             initial_breach = True
 
     # --- data delay ---
-    bar_seconds = TIMEFRAME_SECONDS[bot.timeframe]
-    delay_seconds = (now - latest_candle.close_time).total_seconds()
-    delay_bars = Decimal(delay_seconds) / Decimal(bar_seconds)
+    delay_seconds = (state.now - state.latest_candle_close_time).total_seconds()
+    delay_bars = Decimal(delay_seconds) / Decimal(state.bar_seconds)
     results["data_delay"] = {
         "passed": delay_bars <= Decimal(rules["max_data_delay_bars_hard"]),
         "bars": str(delay_bars),
@@ -502,14 +512,14 @@ def evaluate_signal(
 
     # --- Binance-specific re-checks (defense in depth; order_flow.py also enforces
     #     no-short structurally) ---
-    if exchange_code == "binance":
-        if signal.action == "sell" and _open_position(db, account, instrument) is None:
+    if state.exchange_code == "binance":
+        if state.signal_action == "sell" and not state.has_open_position:
             results["binance_no_short"] = {"passed": False}
             hard_breach = True
         else:
             results["binance_no_short"] = {"passed": True}
-        btc_cap = equity * _decimal(rules["binance"], "btc_holding_cap_pct_of_equity")
-        prospective_notional = quantity * market_price
+        btc_cap = state.equity * _decimal(rules["binance"], "btc_holding_cap_pct_of_equity")
+        prospective_notional = quantity * state.market_price
         results["binance_btc_holding_cap"] = {
             "passed": prospective_notional <= btc_cap,
             "prospective_notional": str(prospective_notional),
@@ -531,15 +541,128 @@ def evaluate_signal(
         approved_quantity = quantity
         reason_code = None
 
+    return PureRiskResult(
+        rule_results=results,
+        outcome=outcome,
+        approved_quantity=approved_quantity,
+        reason_code=reason_code,
+    )
+
+
+def evaluate_signal(
+    db: Session,
+    signal: Signal,
+    account: TradingAccount,
+    instrument: Instrument,
+    bot: TradingBot,
+    risk_profile_version: RiskProfileVersion,
+    exchange_code: str,
+) -> RiskEvaluationResult:
+    """Evaluate one `buy`/`sell` Signal against conservative-v1 and persist the
+    resulting `risk_decision`. Caller (`dummy_pipeline.py`) is responsible for
+    deciding *whether* to call this at all (e.g. `hold` signals, or a signal that
+    dote-gating says must be close-only, never reach this function).
+
+    This function's job is now only to gather DB/clock state (unchanged queries,
+    unchanged order) and persist the resulting `RiskDecision`; the conservative-v1
+    threshold logic itself lives in `_evaluate_conservative_v1`. See the module
+    docstring's "Unit 2 refactor" note."""
+    if signal.action not in ("buy", "sell"):
+        raise RiskGateError(
+            "invalid_signal_action", f"Cannot risk-evaluate a '{signal.action}' signal"
+        )
+
+    rules = risk_profile_version.rules
+    now = datetime.now(UTC)
+
+    candles = _recent_final_candles(db, instrument.id, bot.timeframe, _ATR_HISTORY_CANDLES)
+    latest_candle = candles[-1] if candles else None
+    if latest_candle is None:
+        raise RiskGateError(
+            "market_price_unavailable", "No final candle available for this instrument"
+        )
+    market_price = latest_candle.close
+
+    spread = _spread(db, exchange_code, instrument.id)
+    stop_distance = _stop_distance(exchange_code, instrument, candles, spread, rules)
+    expected_slippage = spread * (
+        Decimal("0.5")
+        if exchange_code == "oanda"
+        else Decimal("1.0")
+        if exchange_code == "binance"
+        else Decimal(0)
+    )
+    fee_buffer = _fee_buffer_per_unit(exchange_code, market_price, rules)
+
+    equity = compute_equity(db, account, instrument)
+    if equity <= 0:
+        # Short-circuit, kept here (not in `_evaluate_conservative_v1`): every
+        # downstream check divides by or scales with equity, so there is nothing
+        # meaningful left to compute once it's non-positive, and -- the reason this
+        # stays a DB-layer concern -- no further queries are needed to know the
+        # answer is deny (see the test suite's `side_effect` list for this path).
+        decision = RiskDecision(
+            signal_id=signal.id,
+            risk_profile_version_id=risk_profile_version.id,
+            outcome="deny",
+            rule_results={"equity": {"passed": False, "value": str(equity)}},
+            adjusted_quantity=None,
+            reason_code="hard_limit_breach",
+        )
+        db.add(decision)
+        db.flush()
+        db.refresh(decision)
+        return RiskEvaluationResult(decision=decision, approved_quantity=None)
+
+    existing_open_risk = _existing_open_risk(db, account, instrument)
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = day_start - timedelta(days=now.weekday())
+    day_start_equity = _equity_at(db, account, day_start)
+    week_start_equity = _equity_at(db, account, week_start)
+    peak_equity = _peak_equity(db, account)
+    consecutive_losses = _consecutive_losses(db, account)
+    minutes_since_last_order = _minutes_since_last_order(db, bot.id, now)
+    # Matches the original code's query count exactly: `_open_position` was only
+    # ever queried a second time (on top of `_existing_open_risk`'s own internal
+    # call) for Binance's no-short re-check, so only fetch it here for Binance too.
+    has_open_position = (
+        _open_position(db, account, instrument) is not None if exchange_code == "binance" else False
+    )
+
+    state = RiskState(
+        signal_action=signal.action,
+        now=now,
+        rules=rules,
+        exchange_code=exchange_code,
+        instrument=instrument,
+        market_price=market_price,
+        latest_candle_close_time=latest_candle.close_time,
+        bar_seconds=TIMEFRAME_SECONDS[bot.timeframe],
+        stop_distance=stop_distance,
+        expected_slippage=expected_slippage,
+        fee_buffer_per_unit=fee_buffer,
+        equity=equity,
+        existing_open_risk=existing_open_risk,
+        has_open_position=has_open_position,
+        day_start_equity=day_start_equity,
+        week_start_equity=week_start_equity,
+        peak_equity=peak_equity,
+        consecutive_losses=consecutive_losses,
+        minutes_since_last_order=minutes_since_last_order,
+    )
+    result = _evaluate_conservative_v1(state)
+
     decision = RiskDecision(
         signal_id=signal.id,
         risk_profile_version_id=risk_profile_version.id,
-        outcome=outcome,
-        rule_results=results,
-        adjusted_quantity=approved_quantity if outcome == "allow_with_adjustment" else None,
-        reason_code=reason_code,
+        outcome=result.outcome,
+        rule_results=result.rule_results,
+        adjusted_quantity=(
+            result.approved_quantity if result.outcome == "allow_with_adjustment" else None
+        ),
+        reason_code=result.reason_code,
     )
     db.add(decision)
     db.flush()
     db.refresh(decision)
-    return RiskEvaluationResult(decision=decision, approved_quantity=approved_quantity)
+    return RiskEvaluationResult(decision=decision, approved_quantity=result.approved_quantity)
