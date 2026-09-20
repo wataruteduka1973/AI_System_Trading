@@ -304,6 +304,9 @@ Application抽出を先行する。OANDA確認やHorizon 1全体を完了扱い�
 
 ### Horizon 4: 再現可能なBacktestと戦略ガバナンス（8〜11か月）
 
+Horizon 6着手前の縮小スコープ(Horizon4-lite)としての先行着手方針は
+`decisions/0003-horizon4-lite-backtest-before-chronos.md`を参照。
+
 #### 開始条件
 
 - Paper Tradingの注文・約定・台帳モデルが安定している
@@ -352,6 +355,9 @@ Application抽出を先行する。OANDA確認やHorizon 1全体を完了扱い�
 - 配布物と利用するデータ・SDK・モデルの権利確認記録がある
 
 ### Horizon 6: AI Model Lab（任意、12〜18か月以降）
+
+開始条件のうち「Backtest」実績の充足方法は`decisions/0003-horizon4-lite-backtest-before-chronos.md`
+（フルHorizon4ではなくHorizon4-liteの完了をもって充足とする）を参照。
 
 #### 開始条件
 
