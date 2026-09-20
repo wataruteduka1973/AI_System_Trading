@@ -9,7 +9,7 @@ import pytest
 from app.models.audit import AuditLog
 from app.models.instruments import Instrument
 from app.models.market_data import Candle, InstrumentSpread
-from app.models.strategy import RiskDecision, Signal
+from app.models.strategy import RiskDecision, Signal, TradingHalt
 from app.models.trading import (
     Fill,
     LedgerEntry,
@@ -267,7 +267,8 @@ def test_place_order_buy_opens_position_and_records_ledger() -> None:
     account = _account()
     instrument = _instrument()
     candle = _candle(Decimal("150.000"), instrument_id=instrument.id)
-    db.scalar.side_effect = [account, "oanda", candle, None, None, Decimal("0")]
+    db.scalar.side_effect = [account, "oanda", None, candle, None, None, Decimal("0")]
+    db.scalars.return_value.all.return_value = []  # no active trading_halt
     db.get.side_effect = [instrument, None]  # Instrument, then no InstrumentSpread row yet
     command = flow.PlaceOrderCommand(
         workspace_id=account.workspace_id,
@@ -315,7 +316,15 @@ def test_place_order_sell_closes_position_with_fee_and_realized_pnl() -> None:
         quantity=Decimal("1"),
         average_entry_price=Decimal("100"),
     )
-    db.scalar.side_effect = [account, "binance", candle, existing_position, None, Decimal("0")]
+    db.scalar.side_effect = [
+        account,
+        "binance",
+        existing_position,
+        candle,
+        existing_position,
+        None,
+        Decimal("0"),
+    ]
     db.get.return_value = instrument
     command = flow.PlaceOrderCommand(
         workspace_id=account.workspace_id,
@@ -348,7 +357,8 @@ def test_place_order_binance_sell_with_no_position_is_not_supported() -> None:
     account = _account()
     instrument = _instrument()
     candle = _candle(Decimal("120"), instrument_id=instrument.id)
-    db.scalar.side_effect = [account, "binance", candle, None]
+    db.scalar.side_effect = [account, "binance", None, candle, None]
+    db.scalars.return_value.all.return_value = []  # no active trading_halt
     db.get.return_value = instrument
     command = flow.PlaceOrderCommand(
         workspace_id=account.workspace_id,
@@ -377,7 +387,7 @@ def test_place_order_binance_sell_exceeding_long_position_is_not_supported() -> 
         quantity=Decimal("1"),
         average_entry_price=Decimal("100"),
     )
-    db.scalar.side_effect = [account, "binance", candle, existing_long]
+    db.scalar.side_effect = [account, "binance", existing_long, candle, existing_long]
     db.get.return_value = instrument
     command = flow.PlaceOrderCommand(
         workspace_id=account.workspace_id,
@@ -401,7 +411,8 @@ def test_place_order_oanda_sell_with_no_position_opens_a_short() -> None:
     account = _account()
     instrument = _instrument()
     candle = _candle(Decimal("150.000"), instrument_id=instrument.id)
-    db.scalar.side_effect = [account, "oanda", candle, None, None, Decimal("0")]
+    db.scalar.side_effect = [account, "oanda", None, candle, None, None, Decimal("0")]
+    db.scalars.return_value.all.return_value = []  # no active trading_halt
     db.get.side_effect = [instrument, None]  # Instrument, then no InstrumentSpread row yet
     command = flow.PlaceOrderCommand(
         workspace_id=account.workspace_id,
@@ -420,6 +431,80 @@ def test_place_order_oanda_sell_with_no_position_opens_a_short() -> None:
     assert positions[0].side == "short"
     assert positions[0].quantity == Decimal("1000")
     assert positions[0].average_entry_price == Decimal("150.000")
+
+
+# ---- place_order: trading_halt (ADR 0004/docs/plans/trading-halt-mvp.md Unit C) ----
+
+
+def test_place_order_blocks_a_new_entry_while_account_scoped_halt_is_active() -> None:
+    db = MagicMock()
+    account = _account()
+    instrument = _instrument()
+    db.scalar.side_effect = [account, "oanda", None]  # account, exchange_code, _open_position
+    db.scalars.return_value.all.return_value = [
+        TradingHalt(
+            id=uuid4(),
+            workspace_id=account.workspace_id,
+            scope_type="account",
+            scope_id=account.id,
+            level="entry_halted",
+            reason_code="daily_loss_dd_limit",
+            status="active",
+        )
+    ]
+    db.get.return_value = instrument
+    command = flow.PlaceOrderCommand(
+        workspace_id=account.workspace_id,
+        account_id=account.id,
+        instrument_id=instrument.id,
+        side="buy",
+        order_type="market",
+        quantity=Decimal("1000"),
+        client_order_id="c-halted",
+    )
+    with pytest.raises(flow.OrderFlowError) as exc:
+        flow.place_order(db, command)
+    assert exc.value.code == "trading_halted"
+    db.rollback.assert_called_once()
+
+
+def test_place_order_allows_closing_an_existing_position_despite_an_active_halt() -> None:
+    db = MagicMock()
+    account = _account()
+    instrument = _instrument()
+    candle = _candle(Decimal("120"), instrument_id=instrument.id)
+    existing_position = _position(
+        account_id=account.id,
+        instrument_id=instrument.id,
+        side="long",
+        quantity=Decimal("1"),
+        average_entry_price=Decimal("100"),
+    )
+    # account, exchange_code, _open_position (existing long -> this sell closes it,
+    # so has_active_halt_at_or_above is never called), candle, _apply_fill_to_position's
+    # own position lookup, _equity_at/_cash_balance-shaped calls.
+    db.scalar.side_effect = [
+        account,
+        "oanda",
+        existing_position,
+        candle,
+        existing_position,
+        None,
+        Decimal("0"),
+    ]
+    db.get.side_effect = [instrument, None]  # Instrument, then no InstrumentSpread row
+    command = flow.PlaceOrderCommand(
+        workspace_id=account.workspace_id,
+        account_id=account.id,
+        instrument_id=instrument.id,
+        side="sell",
+        order_type="market",
+        quantity=Decimal("1"),
+        client_order_id="c-close-despite-halt",
+    )
+    order = flow.place_order(db, command)
+    assert order.status == "filled"
+    db.scalars.assert_not_called()  # the halt check itself was never reached
 
 
 # ---- _apply_fill_to_position: weighted average on a second buy ----
@@ -636,7 +721,8 @@ def test_place_order_buy_applies_oanda_spread_to_fill_price() -> None:
     spread_row = InstrumentSpread(
         instrument_id=instrument.id, bid=Decimal("149.90"), ask=Decimal("150.10")
     )
-    db.scalar.side_effect = [account, "oanda", candle, None, None, Decimal("0")]
+    db.scalar.side_effect = [account, "oanda", None, candle, None, None, Decimal("0")]
+    db.scalars.return_value.all.return_value = []  # no active trading_halt
     db.get.side_effect = [instrument, spread_row]
     command = flow.PlaceOrderCommand(
         workspace_id=account.workspace_id,

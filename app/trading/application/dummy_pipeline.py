@@ -292,6 +292,7 @@ def run_dummy_pipeline_once(db: Session, bot: TradingBot, bot_run: BotRun) -> di
                 order_type="market",
                 quantity=existing.quantity,
                 client_order_id=f"dote-close-{uuid4().hex[:12]}",
+                bot_id=bot.id,
             ),
         )
         db.add(
@@ -366,6 +367,7 @@ def run_dummy_pipeline_once(db: Session, bot: TradingBot, bot_run: BotRun) -> di
             quantity=result.approved_quantity,
             client_order_id=f"dummy-{uuid4().hex[:12]}",
             order_intent_id=intent.id,
+            bot_id=bot.id,
         ),
     )
     return {
