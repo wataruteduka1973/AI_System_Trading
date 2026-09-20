@@ -302,3 +302,87 @@ def test_oanda_feed_worker_reports_stream_errors_as_gap_notice() -> None:
         await sub.close()
 
     asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# OandaFeedWorker.record_spread / make_oanda_feed_starter(record_spread=...)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _FakeSpreadTick:
+    time: datetime
+    mid: Decimal
+    bid: Decimal
+    ask: Decimal
+
+
+def _fake_spread_tick_source(*, base_url, token, account_id, symbol, stop_event):
+    ticks = [
+        _FakeSpreadTick(
+            datetime(2026, 9, 20, 2, 0, 1, tzinfo=UTC),
+            Decimal("150.0"),
+            Decimal("149.9"),
+            Decimal("150.1"),
+        ),
+        _FakeSpreadTick(
+            datetime(2026, 9, 20, 2, 0, 2, tzinfo=UTC),
+            Decimal("150.5"),
+            Decimal("150.4"),
+            Decimal("150.6"),
+        ),
+    ]
+    for tick in ticks:
+        if stop_event.is_set():
+            return
+        yield tick
+
+
+def test_record_spread_is_called_once_per_tick_with_symbol_and_tick() -> None:
+    async def scenario() -> None:
+        hub = FeedHub(grace_period_seconds=1.0)
+        key = StreamFeedKey("oanda", "USD_JPY", "1m")
+        calls: list[tuple[str, _FakeSpreadTick]] = []
+        starter = make_oanda_feed_starter(
+            base_url="https://api-fxpractice.oanda.com",
+            token="private-token",
+            account_id="101-001-1-001",
+            loop=asyncio.get_running_loop(),
+            tick_source=_fake_spread_tick_source,
+            record_spread=lambda symbol, tick: calls.append((symbol, tick)),
+        )
+        sub = await hub.subscribe(key, source="oanda_practice", starter=starter)
+        await asyncio.wait_for(sub.queue.get(), timeout=2.0)
+        await asyncio.wait_for(sub.queue.get(), timeout=2.0)
+        # give the background thread a moment to run past the 2nd tick's record_spread
+        await asyncio.sleep(0.05)
+        assert [symbol for symbol, _ in calls] == ["USD_JPY", "USD_JPY"]
+        assert [tick.bid for _, tick in calls] == [Decimal("149.9"), Decimal("150.4")]
+        assert [tick.ask for _, tick in calls] == [Decimal("150.1"), Decimal("150.6")]
+        await sub.close()
+
+    asyncio.run(scenario())
+
+
+def test_record_spread_failure_does_not_break_the_candle_stream() -> None:
+    def failing_record_spread(symbol, tick):
+        raise RuntimeError("db unavailable")
+
+    async def scenario() -> None:
+        hub = FeedHub(grace_period_seconds=1.0)
+        key = StreamFeedKey("oanda", "USD_JPY", "1m")
+        starter = make_oanda_feed_starter(
+            base_url="https://api-fxpractice.oanda.com",
+            token="private-token",
+            account_id="101-001-1-001",
+            loop=asyncio.get_running_loop(),
+            tick_source=_fake_spread_tick_source,
+            record_spread=failing_record_spread,
+        )
+        sub = await hub.subscribe(key, source="oanda_practice", starter=starter)
+        # Candle events still arrive even though every record_spread call raises.
+        event = await asyncio.wait_for(sub.queue.get(), timeout=2.0)
+        assert event.event_type == "provisional_update"
+        await sub.close()
+
+    asyncio.run(scenario())

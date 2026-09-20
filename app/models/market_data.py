@@ -51,6 +51,27 @@ class Candle(Base):
     corrected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class InstrumentSpread(Base):
+    """Latest observed bid/ask per instrument -- a continuously UPSERTed
+    "current state" row (see alembic/versions/20260920_0007_instrument_spread.py),
+    not an append-only tick history. `instrument_id` is the primary key directly
+    (no surrogate `id`), matching `market_data_lease`'s precedent for this kind
+    of table. Fed from the live OANDA PricingStream; read by
+    app/trading/application/order_flow.py to compute expected_slippage."""
+
+    __tablename__ = "instrument_spread"
+    __table_args__ = {"schema": SCHEMA}
+
+    instrument_id: Mapped[UUID] = mapped_column(
+        ForeignKey(f"{SCHEMA}.instrument.id", ondelete="CASCADE"), primary_key=True
+    )
+    bid: Mapped[Decimal] = mapped_column(Numeric(38, 18))
+    ask: Mapped[Decimal] = mapped_column(Numeric(38, 18))
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    source: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class MarketDataGap(Base):
     __tablename__ = "market_data_gap"
     __table_args__ = {"schema": SCHEMA}

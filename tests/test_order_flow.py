@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 from app.models.audit import AuditLog
 from app.models.instruments import Instrument
-from app.models.market_data import Candle
+from app.models.market_data import Candle, InstrumentSpread
 from app.models.strategy import RiskDecision, Signal
 from app.models.trading import (
     Fill,
@@ -268,7 +268,7 @@ def test_place_order_buy_opens_position_and_records_ledger() -> None:
     instrument = _instrument()
     candle = _candle(Decimal("150.000"), instrument_id=instrument.id)
     db.scalar.side_effect = [account, candle, "oanda", None]
-    db.get.return_value = instrument
+    db.get.side_effect = [instrument, None]  # Instrument, then no InstrumentSpread row yet
     command = flow.PlaceOrderCommand(
         workspace_id=account.workspace_id,
         account_id=account.id,
@@ -349,7 +349,7 @@ def test_place_order_sell_exceeding_position_is_not_supported() -> None:
     instrument = _instrument()
     candle = _candle(Decimal("120"), instrument_id=instrument.id)
     db.scalar.side_effect = [account, candle, "oanda", None]
-    db.get.return_value = instrument
+    db.get.side_effect = [instrument, None]  # Instrument, then no InstrumentSpread row yet
     command = flow.PlaceOrderCommand(
         workspace_id=account.workspace_id,
         account_id=account.id,
@@ -409,6 +409,56 @@ def test_exchange_code_for_account_requires_connection() -> None:
     with pytest.raises(flow.OrderFlowError) as exc:
         flow._exchange_code_for_account(db, account)
     assert exc.value.code == "connection_missing"
+
+
+# ---- _expected_slippage ----
+
+
+def test_expected_slippage_oanda_uses_persisted_spread() -> None:
+    db = MagicMock()
+    instrument_id = uuid4()
+    db.get.return_value = InstrumentSpread(
+        instrument_id=instrument_id, bid=Decimal("149.98"), ask=Decimal("150.02")
+    )
+    result = flow._expected_slippage(db, "oanda", instrument_id)
+    assert result == Decimal("0.02")  # (150.02 - 149.98) * 0.5
+
+
+def test_expected_slippage_oanda_falls_back_to_zero_when_no_spread_row() -> None:
+    db = MagicMock()
+    db.get.return_value = None
+    assert flow._expected_slippage(db, "oanda", uuid4()) == Decimal("0")
+
+
+def test_expected_slippage_binance_is_always_zero_without_a_db_lookup() -> None:
+    db = MagicMock()
+    assert flow._expected_slippage(db, "binance", uuid4()) == Decimal("0")
+    db.get.assert_not_called()
+
+
+def test_place_order_buy_applies_oanda_spread_to_fill_price() -> None:
+    db = MagicMock()
+    account = _account()
+    instrument = _instrument()
+    candle = _candle(Decimal("150.000"), instrument_id=instrument.id)
+    spread_row = InstrumentSpread(
+        instrument_id=instrument.id, bid=Decimal("149.90"), ask=Decimal("150.10")
+    )
+    db.scalar.side_effect = [account, candle, "oanda", None]
+    db.get.side_effect = [instrument, spread_row]
+    command = flow.PlaceOrderCommand(
+        workspace_id=account.workspace_id,
+        account_id=account.id,
+        instrument_id=instrument.id,
+        side="buy",
+        order_type="market",
+        quantity=Decimal("1000"),
+        client_order_id="c4",
+    )
+    flow.place_order(db, command)
+    fills = [call.args[0] for call in db.add.call_args_list if isinstance(call.args[0], Fill)]
+    # buy moves unfavorably upward: market price + (ask-bid)*0.5 = 150.000 + 0.10
+    assert fills[0].price == Decimal("150.100")
 
 
 # ---- cancel_order ----

@@ -36,17 +36,19 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from datetime import datetime
-from functools import lru_cache
+from functools import cache, lru_cache
 from uuid import UUID
 
 import structlog
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal
+from app.market_data.application.spread_tracking import record_spread_observation
 from app.market_data.infrastructure.binance_stream import make_binance_feed_starter
 from app.market_data.infrastructure.candle_stream import FeedHub, FeedStarter
-from app.market_data.infrastructure.oanda_stream import make_oanda_feed_starter
+from app.market_data.infrastructure.oanda_stream import OandaPriceTick, make_oanda_feed_starter
 from app.market_data.infrastructure.stream_connection_access import (
     StreamConnectionCredentials,
     resolve_stream_connection_credentials,
@@ -61,6 +63,8 @@ from app.market_data.infrastructure.stream_tickets import (
     StreamTicketClaims,
     get_default_used_ticket_store,
 )
+from app.models.connections import Exchange
+from app.models.instruments import Instrument
 from app.services.market_data import MarketDataAccessError
 from app.services.secrets import get_secret_store
 
@@ -106,6 +110,35 @@ def _resolve_credentials_sync(workspace_id: UUID, exchange: str) -> StreamConnec
         )
 
 
+@cache
+def _resolve_oanda_instrument_id(symbol: str) -> UUID | None:
+    # Cached for the process lifetime, matching get_default_feed_hub()'s own caching:
+    # (exchange, symbol) -> instrument_id is effectively static reference data. A `None`
+    # result (instrument not yet known) is cached too, so adding an instrument requires
+    # a process restart to be picked up here -- acceptable for this project's scale.
+    with SessionLocal() as db:
+        return db.scalar(
+            select(Instrument.id)
+            .join(Exchange, Instrument.exchange_id == Exchange.id)
+            .where(Exchange.code == "oanda", Instrument.symbol == symbol)
+        )
+
+
+def _record_oanda_spread(symbol: str, tick: OandaPriceTick) -> None:
+    instrument_id = _resolve_oanda_instrument_id(symbol)
+    if instrument_id is None:
+        return
+    with SessionLocal() as db:
+        record_spread_observation(
+            db,
+            instrument_id,
+            bid=tick.bid,
+            ask=tick.ask,
+            observed_at=tick.time,
+            source="oanda_practice",
+        )
+
+
 def _build_starter_for(
     credentials: StreamConnectionCredentials, loop: asyncio.AbstractEventLoop
 ) -> FeedStarter:
@@ -117,6 +150,7 @@ def _build_starter_for(
             token=credentials.token,
             account_id=credentials.account_id,
             loop=loop,
+            record_spread=_record_oanda_spread,
         )
     assert credentials.api_key is not None
     assert credentials.secret_key is not None
