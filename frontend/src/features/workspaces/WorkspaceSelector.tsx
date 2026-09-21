@@ -1,18 +1,18 @@
-import type { WorkspaceSummary } from './types'
+import type { WorkspaceOption } from './types'
+
+const ROLE_LABEL: Record<WorkspaceOption['role'], string> = {
+  viewer: '閲覧者',
+  operator: '操作者',
+  owner: 'オーナー',
+}
 
 export default function WorkspaceSelector({
-  ownerToken,
-  onOwnerTokenChange,
-  onLoadWorkspaces,
   workspaces,
   selectedWorkspaceId,
   onSelectWorkspace,
   workspaceMessage,
 }: {
-  ownerToken: string
-  onOwnerTokenChange: (value: string) => void
-  onLoadWorkspaces: () => void
-  workspaces: WorkspaceSummary[]
+  workspaces: WorkspaceOption[]
   selectedWorkspaceId: string
   onSelectWorkspace: (workspaceId: string) => void
   workspaceMessage: string
@@ -20,25 +20,12 @@ export default function WorkspaceSelector({
   return (
     <>
       <div>
-        <p className="eyebrow">DEVELOPMENT OWNER</p>
         <h2>Workspace選択</h2>
         <p className="panel-description">
-          Tokenはこの画面のメモリ上だけで使用し、ブラウザへ保存しません。
+          ログイン中のユーザーが所属するWorkspaceのみ表示されます。
         </p>
       </div>
       <div className="workspace-controls">
-        <label>
-          Owner token
-          <input
-            type="password"
-            value={ownerToken}
-            onChange={(event) => onOwnerTokenChange(event.target.value)}
-            autoComplete="off"
-          />
-        </label>
-        <button type="button" onClick={onLoadWorkspaces} disabled={!ownerToken}>
-          読み込む
-        </button>
         <label>
           Workspace
           <select
@@ -49,7 +36,7 @@ export default function WorkspaceSelector({
             <option value="">選択してください</option>
             {workspaces.map((workspace) => (
               <option key={workspace.id} value={workspace.id}>
-                {workspace.name} ({workspace.status})
+                {workspace.name} ({ROLE_LABEL[workspace.role]})
               </option>
             ))}
           </select>

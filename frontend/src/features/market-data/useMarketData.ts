@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DisplayedRange } from '../../components/CandleChart'
 import { mergeCandlePages, type ChartCandle } from '../../components/marketData'
-import { apiBaseUrl, apiErrorMessage } from '../../lib/api'
+import { apiBaseUrl, apiErrorMessage, apiFetch } from '../../lib/api'
 import type { BackfillJob, CandleCoverage, MarketDataSubscription, Timeframe } from './types'
 
 export function useMarketData(
-  ownerToken: string,
   selectedWorkspaceId: string,
   activeInstrumentId: string,
 ) {
@@ -27,25 +26,22 @@ export function useMarketData(
     '銘柄と時間足を選ぶと、確定済みローソク足を表示できます。',
   )
 
-  const ownerHeaders = { 'X-Owner-Token': ownerToken }
-
   const loadMarketData = useCallback(async (
     workspaceId: string,
     instrumentId: string,
     frame: Timeframe,
     replaceCandles = false,
   ) => {
-    if (!workspaceId || !instrumentId || !ownerToken) return
+    if (!workspaceId || !instrumentId) return
     const generation = marketGeneration.current
     const request = ++marketRequest.current
     if (replaceCandles) setMarketDataLoading(true)
     try {
-      const headers = { 'X-Owner-Token': ownerToken }
       const [candleResponse, jobResponse, subscriptionResponse, coverageResponse] = await Promise.all([
-        fetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/instruments/${instrumentId}/candles?timeframe=${frame}&limit=500`, { headers }),
-        fetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/candle-backfills?instrument_id=${instrumentId}&timeframe=${frame}&limit=10`, { headers }),
-        fetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/market-data-subscriptions`, { headers }),
-        fetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/instruments/${instrumentId}/candle-coverage?timeframe=${frame}`, { headers }),
+        apiFetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/instruments/${instrumentId}/candles?timeframe=${frame}&limit=500`),
+        apiFetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/candle-backfills?instrument_id=${instrumentId}&timeframe=${frame}&limit=10`),
+        apiFetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/market-data-subscriptions`),
+        apiFetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/instruments/${instrumentId}/candle-coverage?timeframe=${frame}`),
       ])
       const [loaded, jobs, feeds, report] = await Promise.all([
         candleResponse.ok ? candleResponse.json() as Promise<ChartCandle[]> : null,
@@ -71,11 +67,11 @@ export function useMarketData(
     } finally {
       if (replaceCandles && generation === marketGeneration.current) setMarketDataLoading(false)
     }
-  }, [ownerToken])
+  }, [])
 
   const loadOlderCandles = useCallback(async () => {
     if (
-      !selectedWorkspaceId || !activeInstrumentId || !ownerToken ||
+      !selectedWorkspaceId || !activeInstrumentId ||
       olderCandlesLoading || !hasOlderCandles || candles.length === 0
     ) return
     const generation = marketGeneration.current
@@ -83,9 +79,8 @@ export function useMarketData(
     setCandleError(null)
     try {
       const before = encodeURIComponent(candles[0].open_time)
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/instruments/${activeInstrumentId}/candles?timeframe=${timeframe}&limit=500&before=${before}`,
-        { headers: { 'X-Owner-Token': ownerToken } },
       )
       if (generation !== marketGeneration.current) return
       if (!response.ok) {
@@ -107,7 +102,6 @@ export function useMarketData(
     candles,
     hasOlderCandles,
     olderCandlesLoading,
-    ownerToken,
     selectedWorkspaceId,
     timeframe,
   ])
@@ -119,11 +113,11 @@ export function useMarketData(
     const generation = marketGeneration.current
     try {
       setMarketDataMessage('過去1年分の取得を開始しています。処理中も画面を閉じられます。')
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/candle-backfills`,
         {
           method: 'POST',
-          headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ instrument_id: activeInstrumentId, timeframe, days: 365 }),
         },
       )
@@ -149,11 +143,11 @@ export function useMarketData(
     setSubmittingMarketAction(true)
     const generation = marketGeneration.current
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/market-data-subscriptions`,
         {
           method: 'PUT',
-          headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ instrument_id: activeInstrumentId, enabled }),
         },
       )
