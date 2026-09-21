@@ -12,6 +12,11 @@ vi.mock('./components/CandleChart', () => ({
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
+const authMe = {
+  user: { id: 'user-1', email: 'owner@example.com', display_name: 'Test Owner', status: 'active' },
+  memberships: [{ workspace_id: 'ws', workspace_name: 'Test', role: 'owner' }],
+}
+
 it('ignores a late previous-timeframe response and scopes job requests', async () => {
   let finishOld: (value: Response) => void = () => {}
   const delayed = new Promise<Response>((resolve) => { finishOld = resolve })
@@ -19,12 +24,12 @@ it('ignores a late previous-timeframe response and scopes job requests', async (
   const changes: { instrument_id: string; enabled: boolean; timeframe?: string }[] = []
   const request = vi.fn((input: string, options?: RequestInit) => {
     const url = new URL(input)
+    if (url.pathname.endsWith('/auth/me')) return json(authMe)
     if (url.pathname.endsWith('/market-data-subscriptions') && options?.method === 'PUT') {
       changes.push(JSON.parse(String(options?.body)))
       return json({})
     }
     if (url.pathname.endsWith('/health') || url.pathname.endsWith('/health/db')) return json({ status: 'ok' })
-    if (url.pathname.endsWith('/workspaces')) return json([{ id: 'ws', name: 'Test', status: 'active' }])
     if (url.pathname.endsWith('/instruments')) return json([{
       id: 'btc', exchange_code: 'binance', symbol: 'BTCJPY', quote_asset: 'JPY', price_scale: 0,
       tick_size: '1',
@@ -40,8 +45,6 @@ it('ignores a late previous-timeframe response and scopes job requests', async (
   })
   vi.stubGlobal('fetch', request)
   render(<MemoryRouter initialEntries={['/workspaces/ws/markets/binance']}><App /></MemoryRouter>)
-  fireEvent.change(screen.getByLabelText('Owner token'), { target: { value: 'fake-test-token' } })
-  fireEvent.click(screen.getByRole('button', { name: '読み込む' }))
   await screen.findByLabelText('時間足')
   await waitFor(() => expect(request.mock.calls.some(([url]) => url.includes('/candles?timeframe=1m'))).toBe(true))
   fireEvent.change(screen.getByLabelText('時間足'), { target: { value: '5m' } })
@@ -71,17 +74,11 @@ const baseInstrument = {
   tick_size: '1',
 }
 
-const loadMarketPanel = async () => {
-  fireEvent.change(screen.getByLabelText('Owner token'), { target: { value: 'fake-test-token' } })
-  fireEvent.click(screen.getByRole('button', { name: '読み込む' }))
-  await screen.findByLabelText('時間足')
-}
-
 it('shows a blocked subscription distinctly from enabled/disabled', async () => {
   const request = vi.fn((input: string) => {
     const url = new URL(input)
+    if (url.pathname.endsWith('/auth/me')) return jsonResponse(authMe)
     if (url.pathname.endsWith('/health') || url.pathname.endsWith('/health/db')) return jsonResponse({ status: 'ok' })
-    if (url.pathname.endsWith('/workspaces')) return jsonResponse([{ id: 'ws', name: 'Test', status: 'active' }])
     if (url.pathname.endsWith('/instruments')) return jsonResponse([baseInstrument])
     if (url.pathname.endsWith('/candles')) return jsonResponse([])
     if (url.pathname.endsWith('/candle-coverage')) return jsonResponse(null)
@@ -98,7 +95,7 @@ it('shows a blocked subscription distinctly from enabled/disabled', async () => 
   })
   vi.stubGlobal('fetch', request)
   const { container } = render(<MemoryRouter initialEntries={['/workspaces/ws/markets/binance']}><App /></MemoryRouter>)
-  await loadMarketPanel()
+  await screen.findByLabelText('時間足')
   await screen.findByText('自動取得停止中（要確認）')
   expect(container.querySelector('.collection-status.blocked')).not.toBeNull()
   expect(container.textContent).toContain('連続失敗3回')
@@ -108,8 +105,8 @@ it('shows a blocked subscription distinctly from enabled/disabled', async () => 
 it('shows the next retry time for a queued backfill with prior failures', async () => {
   const request = vi.fn((input: string) => {
     const url = new URL(input)
+    if (url.pathname.endsWith('/auth/me')) return jsonResponse(authMe)
     if (url.pathname.endsWith('/health') || url.pathname.endsWith('/health/db')) return jsonResponse({ status: 'ok' })
-    if (url.pathname.endsWith('/workspaces')) return jsonResponse([{ id: 'ws', name: 'Test', status: 'active' }])
     if (url.pathname.endsWith('/instruments')) return jsonResponse([baseInstrument])
     if (url.pathname.endsWith('/candles')) return jsonResponse([])
     if (url.pathname.endsWith('/candle-coverage')) return jsonResponse(null)
@@ -125,7 +122,7 @@ it('shows the next retry time for a queued backfill with prior failures', async 
   })
   vi.stubGlobal('fetch', request)
   const { container } = render(<MemoryRouter initialEntries={['/workspaces/ws/markets/binance']}><App /></MemoryRouter>)
-  await loadMarketPanel()
+  await screen.findByLabelText('時間足')
   await screen.findByText('過去取得 (1m): 待機中')
   expect(container.querySelector('.backfill-status.queued')).not.toBeNull()
   expect(container.textContent).toContain('次回再試行予定')

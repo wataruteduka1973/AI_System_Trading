@@ -1,51 +1,62 @@
-import { useState } from 'react'
-import { apiBaseUrl } from '../../lib/api'
-import type { WorkspaceSummary } from './types'
+import { useEffect, useRef, useState } from 'react'
+import type { WorkspaceMembership } from '../auth/types'
+import type { WorkspaceOption } from './types'
 
-/** `ownerToken` is owned by the caller: every feature's fetch calls need it, so it is
- * plain shared state in App.tsx rather than something this workspace-scoped hook owns.
+/** `memberships` come from `useAuth` (GET /api/v1/auth/me), already
+ * role-filtered server-side -- this hook no longer fetches its own,
+ * unfiltered workspace list. It only derives display options from them and
+ * owns which workspace is currently selected.
  *
  * `onWorkspaceSelected` may return a status message; if it does, this hook shows it as the
  * workspace message. This keeps the callback (defined in App.tsx, before this hook is called)
  * from needing this hook's own `setWorkspaceMessage` in its closure. */
 export function useWorkspaces(
   routeWorkspaceId: string | null,
-  ownerToken: string,
+  memberships: WorkspaceMembership[],
   onWorkspaceSelected: (workspaceId: string) => Promise<string | void>,
 ) {
-  const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(routeWorkspaceId ?? '')
-  const [workspaceMessage, setWorkspaceMessage] = useState(
-    '開発用Owner tokenを入力してWorkspaceを読み込みます。',
-  )
+  const [workspaceMessage, setWorkspaceMessage] = useState('Workspaceを読み込んでいます。')
+  // Guards against re-running the route-driven auto-select every time
+  // `memberships` is replaced with a new (but equal) array reference.
+  const appliedRouteWorkspaceId = useRef<string | null>(null)
+  // `onWorkspaceSelected` is a fresh closure every render (App.tsx), so it is read
+  // through a ref rather than added to the effect's dependency array below.
+  const onWorkspaceSelectedRef = useRef(onWorkspaceSelected)
+  useEffect(() => {
+    onWorkspaceSelectedRef.current = onWorkspaceSelected
+  }, [onWorkspaceSelected])
 
-  const loadWorkspaces = async () => {
-    setWorkspaceMessage('Workspaceを読み込んでいます。')
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/workspaces`, {
-        headers: { 'X-Owner-Token': ownerToken },
-      })
-      if (!response.ok) {
-        setWorkspaceMessage(`認証または取得に失敗しました（HTTP ${response.status}）。`)
-        return
+  const workspaces: WorkspaceOption[] = memberships.map((membership) => ({
+    id: membership.workspace_id,
+    name: membership.workspace_name,
+    role: membership.role,
+  }))
+
+  useEffect(() => {
+    if (memberships.length === 0) return
+    // Deferred by one tick (mirrors useMarketData.ts's own initial-load
+    // effect): calling setState synchronously in an effect body triggers
+    // an avoidable extra render, so the auto-select decision and the
+    // setState calls it makes both happen inside this callback instead.
+    const timer = window.setTimeout(() => {
+      if (routeWorkspaceId && routeWorkspaceId !== appliedRouteWorkspaceId.current) {
+        const routedMembership = memberships.some((m) => m.workspace_id === routeWorkspaceId)
+        appliedRouteWorkspaceId.current = routeWorkspaceId
+        if (routedMembership) {
+          setSelectedWorkspaceId(routeWorkspaceId)
+          void onWorkspaceSelectedRef.current(routeWorkspaceId).then((message) => {
+            if (message) setWorkspaceMessage(message)
+          })
+          return
+        }
       }
-      const loaded = (await response.json()) as WorkspaceSummary[]
-      setWorkspaces(loaded)
-      const routedWorkspace = routeWorkspaceId
-      if (routedWorkspace && loaded.some((workspace) => workspace.id === routedWorkspace)) {
-        setSelectedWorkspaceId(routedWorkspace)
-        const message = await onWorkspaceSelected(routedWorkspace)
-        if (message) setWorkspaceMessage(message)
-      } else {
-        setSelectedWorkspaceId('')
-        setWorkspaceMessage(
-          loaded.length > 0 ? `${loaded.length}件のWorkspaceを取得しました。` : 'Workspaceは未登録です。',
-        )
+      if (!routeWorkspaceId) {
+        setWorkspaceMessage(`${memberships.length}件のWorkspaceを利用できます。`)
       }
-    } catch {
-      setWorkspaceMessage('Workspace APIへ接続できません。')
-    }
-  }
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [memberships, routeWorkspaceId])
 
   const selectWorkspace = async (workspaceId: string) => {
     setSelectedWorkspaceId(workspaceId)
@@ -58,7 +69,6 @@ export function useWorkspaces(
     selectedWorkspaceId,
     workspaceMessage,
     setWorkspaceMessage,
-    loadWorkspaces,
     selectWorkspace,
   }
 }

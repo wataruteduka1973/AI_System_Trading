@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { Route, Routes, useLocation, useNavigate } from 'react-router'
 import AppShell from './app/AppShell'
 import { connectionPath, resolveAppRoute } from './app/routes'
@@ -8,6 +8,7 @@ import HomePage from './pages/HomePage'
 import NotFoundPage from './pages/NotFoundPage'
 import { useHealth } from './features/health/useHealth'
 import HealthPanel from './features/health/HealthPanel'
+import { useAuth } from './features/auth/useAuth'
 import { useWorkspaces } from './features/workspaces/useWorkspaces'
 import WorkspaceSelector from './features/workspaces/WorkspaceSelector'
 import { useInstruments } from './features/instruments/useInstruments'
@@ -18,7 +19,6 @@ import { useMarketData } from './features/market-data/useMarketData'
 import { useMarketStream } from './features/market-data/useMarketStream'
 import MarketDataPanel from './features/market-data/MarketDataPanel'
 import { apiBaseUrl } from './lib/api'
-import { setOwnerTokenForErrorReporting } from './lib/errorReporting'
 import './App.css'
 
 function App() {
@@ -26,11 +26,8 @@ function App() {
   const navigate = useNavigate()
   const route = resolveAppRoute(location.pathname)
   const { apiHealth, dbHealth, refreshHealth } = useHealth()
-  const [ownerToken, setOwnerToken] = useState('')
-  useEffect(() => {
-    setOwnerTokenForErrorReporting(ownerToken)
-  }, [ownerToken])
-  const instruments = useInstruments(ownerToken)
+  const auth = useAuth()
+  const instruments = useInstruments()
   const {
     workspaceInstruments,
     instrumentMessage,
@@ -65,11 +62,10 @@ function App() {
     selectedWorkspaceId,
     workspaceMessage,
     setWorkspaceMessage,
-    loadWorkspaces,
     selectWorkspace: selectWorkspaceState,
-  } = useWorkspaces(route.workspaceId, ownerToken, onWorkspaceSelected)
+  } = useWorkspaces(route.workspaceId, auth.memberships, onWorkspaceSelected)
 
-  const connections = useConnections(ownerToken, selectedWorkspaceId, setWorkspaceMessage)
+  const connections = useConnections(selectedWorkspaceId, setWorkspaceMessage)
   useEffect(() => {
     connectionsLoadRef.current = connections.load
   }, [connections.load])
@@ -79,9 +75,8 @@ function App() {
     navigate(workspaceId ? connectionPath(workspaceId) : '/')
   }
 
-  const marketData = useMarketData(ownerToken, selectedWorkspaceId, activeInstrumentId)
+  const marketData = useMarketData(selectedWorkspaceId, activeInstrumentId)
   const marketStream = useMarketStream(
-    ownerToken,
     selectedWorkspaceId,
     activeInstrumentId,
     marketData.timeframe,
@@ -89,8 +84,30 @@ function App() {
     marketData.reloadMarketData,
   )
 
+  if (auth.status === 'loading') {
+    return (
+      <main className="dashboard-shell">
+        <p>認証状態を確認しています…</p>
+      </main>
+    )
+  }
+
+  if (auth.status === 'unauthenticated') {
+    return (
+      <main className="dashboard-shell">
+        <section className="workspace-panel">
+          <h2>ログインが必要です</h2>
+          <p className="panel-description">続行するにはログインしてください。</p>
+          <button type="button" onClick={auth.login}>
+            ログイン
+          </button>
+        </section>
+      </main>
+    )
+  }
+
   return (
-    <AppShell workspaceId={selectedWorkspaceId}>
+    <AppShell workspaceId={selectedWorkspaceId} user={auth.user} onLogout={() => void auth.logout()}>
     <main className="dashboard-shell">
       <Routes>
         <Route
@@ -119,9 +136,6 @@ function App() {
       {route.kind !== 'not-found' && (
       <section className="workspace-panel">
         <WorkspaceSelector
-          ownerToken={ownerToken}
-          onOwnerTokenChange={setOwnerToken}
-          onLoadWorkspaces={() => void loadWorkspaces()}
           workspaces={workspaces}
           selectedWorkspaceId={selectedWorkspaceId}
           onSelectWorkspace={(workspaceId) => void selectWorkspace(workspaceId)}

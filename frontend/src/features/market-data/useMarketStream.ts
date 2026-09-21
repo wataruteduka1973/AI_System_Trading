@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChartCandle } from '../../components/marketData'
-import { apiBaseUrl } from '../../lib/api'
+import { apiBaseUrl, apiFetch } from '../../lib/api'
 import {
   buildStreamUrl,
   eventToLiveCandle,
@@ -43,7 +43,6 @@ export type MarketStreamState = {
 }
 
 export function useMarketStream(
-  ownerToken: string,
   workspaceId: string,
   instrumentId: string,
   timeframe: Timeframe,
@@ -81,11 +80,15 @@ export function useMarketStream(
       setConnectionStatus((current) => (current === 'idle' ? 'connecting' : current))
       let ticket: string
       try {
-        const response = await fetch(
+        // Minting the ticket is a normal, cookie-authenticated REST call; the
+        // ticket itself is then a separate one-time-use credential carried as
+        // a query param on the WebSocket URL below (buildStreamUrl) -- that
+        // part of the flow is unrelated to session auth and unchanged here.
+        const response = await apiFetch(
           `${apiBaseUrl}/api/v1/workspaces/${workspaceId}/market-stream-tickets`,
           {
             method: 'POST',
-            headers: { 'X-Owner-Token': ownerToken, 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ instrument_id: instrumentId, timeframe }),
           },
         )
@@ -166,7 +169,7 @@ export function useMarketStream(
       setGapCount(0)
       setLastGapReason(null)
       setLiveCandle(null)
-      if (!enabled || !ownerToken || !workspaceId || !instrumentId) return
+      if (!enabled || !workspaceId || !instrumentId) return
 
       heartbeatWatch = window.setInterval(() => {
         if (cancelled) return
@@ -188,7 +191,7 @@ export function useMarketStream(
       if (heartbeatWatch !== null) window.clearInterval(heartbeatWatch)
       socket?.close(1000, 'client_navigating')
     }
-  }, [enabled, ownerToken, workspaceId, instrumentId, timeframe])
+  }, [enabled, workspaceId, instrumentId, timeframe])
 
   return { connectionStatus, lastDataAt, gapCount, lastGapReason, liveCandle }
 }

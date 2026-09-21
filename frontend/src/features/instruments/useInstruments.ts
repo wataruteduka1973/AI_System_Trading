@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import { apiBaseUrl, apiErrorMessage } from '../../lib/api'
+import { apiBaseUrl, apiErrorMessage, apiFetch } from '../../lib/api'
 import type { WorkspaceInstrument } from './types'
 
-export function useInstruments(ownerToken: string) {
+export function useInstruments() {
   const [workspaceInstruments, setWorkspaceInstruments] = useState<WorkspaceInstrument[]>([])
   const [instrumentMessage, setInstrumentMessage] = useState(
     '利用口座を選択すると、取引所から最新の銘柄ルールを同期できます。',
@@ -14,9 +14,7 @@ export function useInstruments(ownerToken: string) {
     setSelectedInstrumentId('')
     if (!workspaceId) return
     try {
-      const response = await fetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/instruments`, {
-        headers: { 'X-Owner-Token': ownerToken },
-      })
+      const response = await apiFetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/instruments`)
       if (response.ok) {
         const instruments = (await response.json()) as WorkspaceInstrument[]
         setWorkspaceInstruments(instruments)
@@ -32,9 +30,9 @@ export function useInstruments(ownerToken: string) {
     if (!workspaceId) return
     setInstrumentMessage('選択済み口座から銘柄ルールを同期しています。')
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBaseUrl}/api/v1/workspaces/${workspaceId}/instruments/sync`,
-        { method: 'POST', headers: { 'X-Owner-Token': ownerToken } },
+        { method: 'POST' },
       )
       if (!response.ok) {
         setInstrumentMessage(await apiErrorMessage(response, '銘柄ルールの同期に失敗しました'))

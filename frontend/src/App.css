@@ -141,6 +141,22 @@ button:disabled {
   font-size: 0.9rem;
 }
 
+.session-status {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-left: auto;
+  color: #9fb0c6;
+  font-size: 0.85rem;
+}
+
+.session-status button {
+  padding: 0.45rem 0.8rem;
+  color: #eaf2ff;
+  background: #38506f;
+  font-size: 0.8rem;
+}
+
 .page-header {
   padding-bottom: 0.5rem;
 }

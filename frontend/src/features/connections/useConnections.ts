@@ -1,17 +1,14 @@
 import { useState } from 'react'
-import { apiBaseUrl, apiErrorMessage } from '../../lib/api'
+import { apiBaseUrl, apiErrorMessage, apiFetch } from '../../lib/api'
 import type { BinanceVerification, ConnectionSummary, OandaVerification, WorkspaceAccount } from './types'
 
-/** `ownerToken`/`selectedWorkspaceId` are shared across features (see useWorkspaces); this hook
- * receives them rather than owning them. `setWorkspaceMessage` is the same shared status line
- * used by workspace loading, so connection actions report into it too. */
+/** `selectedWorkspaceId` is shared across features (see useWorkspaces); this hook receives it
+ * rather than owning it. `setWorkspaceMessage` is the same shared status line used by workspace
+ * loading, so connection actions report into it too. */
 export function useConnections(
-  ownerToken: string,
   selectedWorkspaceId: string,
   setWorkspaceMessage: (message: string) => void,
 ) {
-  const ownerHeaders = { 'X-Owner-Token': ownerToken }
-
   const [connections, setConnections] = useState<ConnectionSummary[]>([])
   const [workspaceAccounts, setWorkspaceAccounts] = useState<WorkspaceAccount[]>([])
   const [connectionLabel, setConnectionLabel] = useState('OANDA practice')
@@ -37,19 +34,13 @@ export function useConnections(
     setSelectedBinanceConnectionId('')
     if (!workspaceId) return undefined
     try {
-      const response = await fetch(
-        `${apiBaseUrl}/api/v1/workspaces/${workspaceId}/connections`,
-        { headers: ownerHeaders },
-      )
+      const response = await apiFetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/connections`)
       if (!response.ok) {
         return `接続一覧の取得に失敗しました（HTTP ${response.status}）。`
       }
       const loaded = (await response.json()) as ConnectionSummary[]
       setConnections(loaded)
-      const accountsResponse = await fetch(
-        `${apiBaseUrl}/api/v1/workspaces/${workspaceId}/accounts`,
-        { headers: ownerHeaders },
-      )
+      const accountsResponse = await apiFetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/accounts`)
       if (accountsResponse.ok) {
         setWorkspaceAccounts((await accountsResponse.json()) as WorkspaceAccount[])
       }
@@ -62,11 +53,11 @@ export function useConnections(
   const manageConnection = async (connection: ConnectionSummary, action: 'disable' | 'delete') => {
     if (!selectedWorkspaceId) return
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/connections/${connection.id}${
           action === 'disable' ? '/disable' : ''
         }`,
-        { method: action === 'disable' ? 'POST' : 'DELETE', headers: ownerHeaders },
+        { method: action === 'disable' ? 'POST' : 'DELETE' },
       )
       setWorkspaceMessage(
         response.ok
@@ -88,11 +79,11 @@ export function useConnections(
   const selectAccount = async (account: WorkspaceAccount) => {
     if (!selectedWorkspaceId) return
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/account-selections/${account.exchange_code}`,
         {
           method: 'PUT',
-          headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ external_account_id: account.id }),
         },
       )
@@ -112,9 +103,9 @@ export function useConnections(
     setRegistrationMessage('TokenをOANDA practiceで検証しています。')
     setVerifiedAccounts([])
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/connections/${connectionId}/verify`,
-        { method: 'POST', headers: ownerHeaders },
+        { method: 'POST' },
       )
       if (!response.ok) {
         setRegistrationMessage(await apiErrorMessage(response, 'OANDA検証に失敗しました'))
@@ -140,13 +131,13 @@ export function useConnections(
     )
     setVerifiedAccounts([])
     try {
-      const saveResponse = await fetch(
+      const saveResponse = await apiFetch(
         isUpdate
           ? `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/connections/${selectedOandaConnectionId}/credentials`
           : `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/connections`,
         {
           method: isUpdate ? 'PUT' : 'POST',
-          headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(
             isUpdate
               ? { credentials: { token: oandaToken } }
@@ -188,9 +179,9 @@ export function useConnections(
     setBinanceMessage('Binance Spot TestnetでAPI資格情報を検証しています。')
     setBinanceAccounts([])
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/connections/${connectionId}/verify`,
-        { method: 'POST', headers: ownerHeaders },
+        { method: 'POST' },
       )
       if (!response.ok) {
         setBinanceMessage(await apiErrorMessage(response, 'Binance検証に失敗しました'))
@@ -219,13 +210,13 @@ export function useConnections(
     )
     setBinanceAccounts([])
     try {
-      const saveResponse = await fetch(
+      const saveResponse = await apiFetch(
         isUpdate
           ? `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/connections/${selectedBinanceConnectionId}/credentials`
           : `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/connections`,
         {
           method: isUpdate ? 'PUT' : 'POST',
-          headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(
             isUpdate
               ? { credentials: { api_key: binanceApiKey, secret_key: binanceSecretKey } }

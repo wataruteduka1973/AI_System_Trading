@@ -6,18 +6,14 @@ import { apiBaseUrl } from './api'
  * fields below are ever sent -- never a request payload, form field
  * value, or anything else that could carry a credential.
  *
- * The backend endpoint requires the same X-Owner-Token every other API
- * call uses. Global error handlers (window.onerror /
- * unhandledrejection) live outside the React tree and have no direct
- * access to that token, so App.tsx pushes it in here whenever it
- * changes via setOwnerTokenForErrorReporting.
+ * The backend endpoint requires any authenticated user (no workspace role),
+ * enforced via the `session` cookie. That cookie is `HttpOnly`, so it
+ * cannot be read or attached manually -- `credentials: 'include'` is both
+ * necessary and sufficient for the browser to send it. If the user is not
+ * logged in yet, the backend rejects with 401 and the request is dropped
+ * silently (see the `.catch` below): errors before login are visible in
+ * the browser console only.
  */
-
-let ownerToken = ''
-
-export function setOwnerTokenForErrorReporting(token: string): void {
-  ownerToken = token
-}
 
 function truncate(value: string, maxLength: number): string {
   return value.length > maxLength ? value.slice(0, maxLength) : value
@@ -30,13 +26,6 @@ export interface ReportableError {
 }
 
 export function reportClientError(entry: ReportableError): void {
-  if (!ownerToken) {
-    // Not signed in yet (or token not entered) -- nothing to authenticate
-    // this request with. Errors before that point are visible in the
-    // browser console only.
-    return
-  }
-
   const payload = {
     message: truncate(entry.message, 2000),
     stack: entry.stack ? truncate(entry.stack, 8000) : undefined,
@@ -47,7 +36,8 @@ export function reportClientError(entry: ReportableError): void {
 
   void fetch(`${apiBaseUrl}/api/v1/client-logs`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Owner-Token': ownerToken },
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   }).catch(() => {
     // Best-effort only: reporting a failure to report must never itself
