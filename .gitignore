@@ -11,6 +11,7 @@ dist/
 build/
 logs/
 *.pyc
+soak_test_log.jsonl
 
 # Virtual environments
 .venv/
