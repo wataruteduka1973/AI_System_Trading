@@ -35,10 +35,28 @@
 
 `docs/plans/horizon5-distribution-and-auth.md` は「本格着手はHorizon4-lite（Backtest）完了後に、利用者へ改めて承認を得てから行う。本ドキュメント単体を実装着手の許可として扱わない」と明記している。本計画も同じ制約を引き継ぐ。**実装エージェントは、着手前に次の2点を利用者に確認すること。**
 
-1. Horizon4-lite（`docs/plans/horizon4-lite-backtest.md`）が完了しているか（2026-09-20時点で本計画作成者が確認した範囲では、直近コミット `33de62d`（Unit6: walk-forward分割）が最後のHorizon4-lite関連コミットであり、同計画書内に明示的な完了宣言（`状態: [x] 実装済み`のような記載）は見当たらなかった）。
+1. Horizon4-lite（`docs/plans/horizon4-lite-backtest.md`）が完了しているか。
 2. Horizon5本体（本計画のUnit 1以降）に着手してよいか。
 
 この確認を経るまで、Unit 1以降のコード変更を開始しない。
+
+**2026-09-21確認・完了(利用者確認済み)**: 上記1点目について、Horizon4-liteの完了を確認した。
+
+- 根拠1: `docs/plans/horizon4-lite-backtest.md`が定義するUnit 1〜6が全てコミット済み。
+  `fae90a0`(ADR 0003・計画書追加)に始まり、`37572ad`(Unit1)、`88c2b91`(Unit2)、
+  `1b61851`(Unit3)、`9f0cdcf`(Unit4)、`1147c25`(Unit5)、`33de62d`(Unit6、
+  walk-forward分割)で完結し、全てPR(#44〜#47)としてmainへマージ済み。
+- 根拠2: 各Unitのpytest/ruff/mypyが全てグリーンであることをUnit完了ごとに確認済み
+  （各コミットの完了報告を参照）。`run_and_persist_backtest()`/
+  `run_and_persist_walk_forward()`が実際にcandle列からbacktestを実行し
+  `BacktestRun`/`BacktestTrade`として永続化・baseline比較・walk-forward評価まで
+  行える状態であることを、Unit 5・Unit 6のテストで確認済み。
+- なお`docs/plans/horizon4-lite-backtest.md`自体には`状態: [x] 実装済み`という
+  形式の完了宣言は追記していない（同計画書は各Unit節の記述を更新する運用を
+  採っていなかったため）。完了の記録は本節と、上記コミット履歴・マージ済みPRを
+  正とする。
+
+これにより、着手条件2点目（Horizon5本体への着手可否）の確認へ進む。
 
 #### 0.2a 承認は5グループに分割する(2026-09-21改訂 #10)
 
