@@ -38,9 +38,7 @@ def _configure_oidc(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "oidc_issuer", "https://idp.example.com")
     monkeypatch.setattr(settings, "oidc_client_id", "client-1")
     monkeypatch.setattr(settings, "oidc_client_secret", SecretStr("secret-1"))
-    monkeypatch.setattr(
-        settings, "session_signing_secret", SecretStr("session-secret-value-at-least-32-bytes")
-    )
+    monkeypatch.setattr(settings, "session_signing_secret", SecretStr("test-session-secret"))
     monkeypatch.setattr(settings, "app_env", "local")
 
 

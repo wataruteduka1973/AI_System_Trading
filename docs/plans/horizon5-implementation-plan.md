@@ -436,7 +436,9 @@ def verify_id_token(
 ##### 3.5 `AppUser` 解決
 
 ```python
-def resolve_or_create_app_user(db: Session, *, oidc_subject: str, email: str, display_name: str) -> AppUser:
+def resolve_or_create_app_user(
+    db: Session, *, oidc_subject: str, email: str, display_name: str
+) -> AppUser:
     user = db.scalar(select(AppUser).where(AppUser.oidc_subject == oidc_subject))
     if user is not None:
         return user
@@ -445,7 +447,9 @@ def resolve_or_create_app_user(db: Session, *, oidc_subject: str, email: str, di
         user.oidc_subject = oidc_subject  # invited via email, first login links the subject
         user.status = "active"
         return user
-    user = AppUser(email=email, display_name=display_name, oidc_subject=oidc_subject, status="active")
+    user = AppUser(
+        email=email, display_name=display_name, oidc_subject=oidc_subject, status="active"
+    )
     db.add(user)
     db.flush()
     return user
@@ -478,7 +482,9 @@ def require_authenticated_user(
             session, secret=settings.session_signing_secret.get_secret_value()
         )
     except SessionTokenError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated") from exc
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
+        ) from exc
     user = db.get(AppUser, claims.app_user_id)
     if user is None or user.status != "active":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
@@ -754,7 +760,12 @@ app/licensing/public_key.py."""
 import base64
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, PublicFormat
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PrivateFormat,
+    PublicFormat,
+)
 
 private_key = Ed25519PrivateKey.generate()
 public_key = private_key.public_key()
@@ -975,7 +986,9 @@ def require_valid_license() -> None:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="License is missing or invalid"
         )
     if claims.is_expired(now=datetime.now(UTC)):
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="License has expired")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="License has expired"
+        )
 ```
 
 `verify_license_document`の`payload`引数は`document["payload"]`（`dict[str, object]`からの取り出しのため静的には`object`型）をそのまま渡している。`python -m mypy`を通すため、実装時は`isinstance(payload, dict)`のガード、またはpydanticモデル（`app/schemas/`の既存`OrmModel`と同様のBaseModel）でのパースに置き換え、`payload["license_id"]`等の添字アクセスがmypyにとって安全な型から行われるようにすること。
@@ -1035,7 +1048,9 @@ class AwsSecretsManagerStore:
     def put(self, values: dict[str, str]) -> str:
         secret_id = uuid4().hex
         name = f"{self._secret_name_prefix}{secret_id}"
-        self._secrets_client.create_secret(Name=name, SecretString=json.dumps(values, sort_keys=True))
+        self._secrets_client.create_secret(
+            Name=name, SecretString=json.dumps(values, sort_keys=True)
+        )
         return f"aws-secrets-manager://{name}"
 
     def get(self, secret_ref: str) -> dict[str, str]:
@@ -1117,7 +1132,9 @@ class OutboxEvent(Base):
     correlation_id: Mapped[UUID]
     status: Mapped[str] = mapped_column(Text, server_default="pending")
     attempts: Mapped[int] = mapped_column(server_default="0")
-    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 ```
@@ -1253,7 +1270,9 @@ def deliver_pending_notifications(
             )
             db.add(notification)
             try:
-                adapter.send(recipient=recipient_ref, subject=event.event_type, body=str(event.payload))
+                adapter.send(
+                    recipient=recipient_ref, subject=event.event_type, body=str(event.payload)
+                )
                 notification.status = "sent"
             except (OSError, smtplib.SMTPException):
                 # 2026-09-21改訂 #6: OSErrorだけでは接続レベルの失敗(DNS不達、接続

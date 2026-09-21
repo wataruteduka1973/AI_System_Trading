@@ -11,7 +11,7 @@ import jwt
 import pytest
 from app.security import session as session_mod
 
-SECRET = "test-signing-secret-at-least-32-bytes-long"
+SECRET = "test-signing-secret"
 
 
 def test_issue_and_verify_round_trip() -> None:

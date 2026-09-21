@@ -12,7 +12,7 @@ import respx
 from app.security import oidc
 
 ISSUER = "https://idp.example.com"
-STATE_SECRET = "test-oidc-state-secret-at-least-32-bytes"
+STATE_SECRET = "test-oidc-state-secret"
 
 
 def test_generate_pkce_pair_challenge_matches_verifier() -> None:
