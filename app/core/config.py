@@ -26,7 +26,6 @@ class Settings(BaseSettings):
     cors_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["http://localhost:5173"]
     )
-    dev_owner_token: SecretStr | None = None
     secret_encryption_key: SecretStr | None = None
     secret_store_path: Path = Path(".secrets")
     trading_env: str = "paper"
@@ -45,6 +44,15 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_rotation_max_bytes: int = 10 * 1024 * 1024
     log_rotation_backup_count: int = 5
+    # Horizon5 Group A (docs/plans/horizon5-implementation-plan.md Unit 3): OIDC
+    # Authorization Code + PKCE against an external IdP the customer provides.
+    oidc_issuer: str | None = None
+    oidc_client_id: str | None = None
+    oidc_client_secret: SecretStr | None = None
+    oidc_redirect_uri: str = "http://localhost:8000/api/v1/auth/callback"
+    oidc_scopes: str = "openid email profile"
+    session_signing_secret: SecretStr | None = None
+    session_ttl_seconds: int = 8 * 60 * 60
 
     @field_validator("cors_origins", mode="before")
     @classmethod

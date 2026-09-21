@@ -11,17 +11,22 @@ from app.core.config import Settings
 from app.db.session import get_db
 from app.main import app
 from app.market_data.infrastructure.page_access import AccessSnapshot
-from app.security.auth import require_owner
+from app.models.workspace import AppUser
+from app.security.rbac import require_viewer_role
 from app.services.market_data import MarketDataAccessError
 from fastapi.testclient import TestClient
 
 client = TestClient(app)
 SECRET = "test-signing-secret"
 
+_TEST_USER = AppUser(
+    id=uuid4(), email="test@example.com", display_name="Test User", status="active"
+)
+
 
 def _override_database(session: MagicMock) -> None:
     app.dependency_overrides[get_db] = lambda: session
-    app.dependency_overrides[require_owner] = lambda: "test-owner"
+    app.dependency_overrides[require_viewer_role] = lambda: _TEST_USER
 
 
 def _configure_ticket_settings(monkeypatch, **overrides) -> None:

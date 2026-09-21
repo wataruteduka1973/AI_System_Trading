@@ -35,7 +35,7 @@ DATABASE_URL=postgresql+psycopg://postgres:実際のパスワード@localhost:54
 
 パスワードに`@`、`:`、`/`、`#`、`%`などが含まれる場合はURLエンコードが必要です。
 
-開発用Owner認証とローカル暗号化Secret Storeには、それぞれ別のランダム値を設定します。次のコマンドで値を生成し、表示された値を`.env`の`DEV_OWNER_TOKEN`と`SECRET_ENCRYPTION_KEY`へ設定してください。値はコミット、チャット送信、スクリーンショット共有をしないでください。
+セッションCookie署名鍵とローカル暗号化Secret Storeには、それぞれ別のランダム値を設定します。次のコマンドで値を生成し、表示された値を`.env`の`SESSION_SIGNING_SECRET`と`SECRET_ENCRYPTION_KEY`へ設定してください。値はコミット、チャット送信、スクリーンショット共有をしないでください。
 
 ```powershell
 .\.venv313\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(32))"
@@ -43,10 +43,12 @@ DATABASE_URL=postgresql+psycopg://postgres:実際のパスワード@localhost:54
 ```
 
 ```dotenv
-DEV_OWNER_TOKEN=1つ目のコマンドで生成した値
+SESSION_SIGNING_SECRET=1つ目のコマンドで生成した値
 SECRET_ENCRYPTION_KEY=2つ目のコマンドで生成した値
 SECRET_STORE_PATH=.secrets
 ```
+
+ログインには外部OIDC IdP(Auth0、Okta、Microsoft Entra ID等)が必要です。`.env`の`OIDC_ISSUER`/`OIDC_CLIENT_ID`/`OIDC_CLIENT_SECRET`をそのIdPの値に設定し、`OIDC_REDIRECT_URI`(既定値`http://localhost:8000/api/v1/auth/callback`)をそのIdP側のRedirect URI許可リストへ登録してください。未設定の間は`/auth/login`が503を返します(認証以外のAPI動作確認には影響しません)。
 
 FastAPIサーバーを起動する際には以下のコマンドで起動します。
 ```powershell

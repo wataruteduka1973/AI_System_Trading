@@ -31,14 +31,15 @@ from app.models.connections import (
     WorkspaceAccountSelection,
 )
 from app.models.instruments import Instrument
-from app.models.workspace import Workspace
+from app.models.workspace import AppUser, Workspace
 from app.schemas.instruments import WorkspaceInstrumentRead, WorkspaceInstrumentSyncRead
-from app.security.auth import require_owner
+from app.security.rbac import require_operator_role, require_viewer_role
 from app.services.secrets import LocalEncryptedSecretStore, get_secret_store
 
 router = APIRouter()
 DatabaseSession = Annotated[Session, Depends(get_db)]
-Owner = Annotated[str, Depends(require_owner)]
+Viewer = Annotated[AppUser, Depends(require_viewer_role)]
+Operator = Annotated[AppUser, Depends(require_operator_role)]
 SecretStore = Annotated[LocalEncryptedSecretStore, Depends(get_secret_store)]
 OandaClient = Annotated[OandaPracticeClient, Depends(get_oanda_practice_client)]
 BinanceClient = Annotated[BinanceSpotTestnetClient, Depends(get_binance_spot_testnet_client)]
@@ -50,7 +51,7 @@ BinanceClient = Annotated[BinanceSpotTestnetClient, Depends(get_binance_spot_tes
     tags=["instruments"],
 )
 def list_workspace_instruments(
-    workspace_id: UUID, db: DatabaseSession, _owner: Owner
+    workspace_id: UUID, db: DatabaseSession, _viewer: Viewer
 ) -> list[WorkspaceInstrumentRead]:
     if db.get(Workspace, workspace_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
@@ -82,7 +83,7 @@ async def sync_workspace_instruments(
     secret_store: SecretStore,
     oanda_client: OandaClient,
     binance_client: BinanceClient,
-    _owner: Owner,
+    _operator: Operator,
 ) -> WorkspaceInstrumentSyncRead:
     if db.get(Workspace, workspace_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")

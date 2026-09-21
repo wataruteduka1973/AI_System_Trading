@@ -4,11 +4,14 @@ from uuid import uuid4
 from app.db.session import get_db
 from app.main import app
 from app.models.connections import Exchange, ExchangeConnection, ExternalAccount
-from app.models.workspace import Workspace
-from app.security.auth import require_owner
+from app.models.workspace import AppUser, Workspace
+from app.security.rbac import require_viewer_role
 from fastapi.testclient import TestClient
 
 client = TestClient(app)
+_TEST_USER = AppUser(
+    id=uuid4(), email="test@example.com", display_name="Test User", status="active"
+)
 
 
 def test_workspace_account_exposes_unverified_connection_state() -> None:
@@ -37,7 +40,7 @@ def test_workspace_account_exposes_unverified_connection_state() -> None:
     session.get.return_value = Workspace(id=workspace_id, name="Personal", status="active")
     session.execute.return_value.all.return_value = [(account, connection, exchange, None)]
     app.dependency_overrides[get_db] = lambda: session
-    app.dependency_overrides[require_owner] = lambda: "test-owner"
+    app.dependency_overrides[require_viewer_role] = lambda: _TEST_USER
     try:
         response = client.get(f"/api/v1/workspaces/{workspace_id}/accounts")
     finally:

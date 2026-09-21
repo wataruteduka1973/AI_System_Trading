@@ -30,7 +30,7 @@ from app.models.trading import (
     TradingAccount,
     TradingPosition,
 )
-from app.models.workspace import AppUser, Workspace
+from app.models.workspace import AppUser, SessionRevocation, UserMembership, Workspace
 
 __all__ = [
     "AccountSelectionPolicy",
@@ -56,6 +56,7 @@ __all__ = [
     "RiskDecision",
     "RiskProfile",
     "RiskProfileVersion",
+    "SessionRevocation",
     "Signal",
     "Strategy",
     "StrategyVersion",
@@ -65,6 +66,7 @@ __all__ = [
     "TradingBot",
     "TradingHalt",
     "TradingPosition",
+    "UserMembership",
     "Workspace",
     "WorkspaceAccountSelection",
 ]
