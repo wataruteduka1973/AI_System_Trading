@@ -13,17 +13,29 @@ from app.exchanges.oanda import (
 from app.main import app
 from app.models.audit import AuditLog
 from app.models.connections import Exchange, ExchangeConnection, ExternalAccount, Market
-from app.models.workspace import Workspace
-from app.security.auth import require_owner
+from app.models.workspace import AppUser, Workspace
+from app.security.rbac import (
+    require_authenticated_user,
+    require_operator_role,
+    require_owner_role,
+    require_viewer_role,
+)
 from app.services.secrets import get_secret_store
 from fastapi.testclient import TestClient
 
 client = TestClient(app)
 
+_TEST_USER = AppUser(
+    id=uuid4(), email="test@example.com", display_name="Test User", status="active"
+)
+
 
 def override_database(session: MagicMock) -> None:
     app.dependency_overrides[get_db] = lambda: session
-    app.dependency_overrides[require_owner] = lambda: "test-owner"
+    app.dependency_overrides[require_authenticated_user] = lambda: _TEST_USER
+    app.dependency_overrides[require_viewer_role] = lambda: _TEST_USER
+    app.dependency_overrides[require_operator_role] = lambda: _TEST_USER
+    app.dependency_overrides[require_owner_role] = lambda: _TEST_USER
 
 
 def test_list_reference_catalog() -> None:

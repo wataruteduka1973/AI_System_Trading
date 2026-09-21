@@ -30,7 +30,7 @@ from app.models.connections import (
     Market,
     WorkspaceAccountSelection,
 )
-from app.models.workspace import Workspace
+from app.models.workspace import AppUser, Workspace
 from app.schemas.connections import (
     BinanceAccountRead,
     BinanceVerificationRead,
@@ -45,12 +45,20 @@ from app.schemas.connections import (
     WorkspaceAccountSelectionRead,
     WorkspaceAccountSelectionUpdate,
 )
-from app.security.auth import require_owner
+from app.security.rbac import (
+    require_authenticated_user,
+    require_operator_role,
+    require_owner_role,
+    require_viewer_role,
+)
 from app.services.secrets import LocalEncryptedSecretStore, get_secret_store
 
 router = APIRouter()
 DatabaseSession = Annotated[Session, Depends(get_db)]
-Owner = Annotated[str, Depends(require_owner)]
+AnyAuthenticatedUser = Annotated[AppUser, Depends(require_authenticated_user)]
+Viewer = Annotated[AppUser, Depends(require_viewer_role)]
+Operator = Annotated[AppUser, Depends(require_operator_role)]
+Owner = Annotated[AppUser, Depends(require_owner_role)]
 SecretStore = Annotated[LocalEncryptedSecretStore, Depends(get_secret_store)]
 OandaClient = Annotated[OandaPracticeClient, Depends(get_oanda_practice_client)]
 BinanceClient = Annotated[BinanceSpotTestnetClient, Depends(get_binance_spot_testnet_client)]
@@ -62,7 +70,7 @@ BinanceClient = Annotated[BinanceSpotTestnetClient, Depends(get_binance_spot_tes
     tags=["connections"],
 )
 def list_workspace_connections(
-    workspace_id: UUID, db: DatabaseSession, _owner: Owner
+    workspace_id: UUID, db: DatabaseSession, _viewer: Viewer
 ) -> list[ExchangeConnection]:
     if db.get(Workspace, workspace_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
@@ -85,7 +93,7 @@ def create_exchange_connection(
     payload: ExchangeConnectionCreate,
     db: DatabaseSession,
     secret_store: SecretStore,
-    _owner: Owner,
+    _operator: Operator,
 ) -> ExchangeConnection:
     if db.get(Workspace, workspace_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
@@ -139,7 +147,7 @@ def disable_exchange_connection(
     workspace_id: UUID,
     connection_id: UUID,
     db: DatabaseSession,
-    _owner: Owner,
+    _operator: Operator,
 ) -> ExchangeConnection:
     connection = db.scalar(
         select(ExchangeConnection).where(
@@ -233,7 +241,7 @@ async def update_connection_credentials_and_verify(
     secret_store: SecretStore,
     oanda_client: OandaClient,
     binance_client: BinanceClient,
-    _owner: Owner,
+    _operator: Operator,
 ) -> OandaVerificationRead | BinanceVerificationRead:
     connection = db.scalar(
         select(ExchangeConnection).where(
@@ -280,7 +288,7 @@ async def update_connection_credentials_and_verify(
             secret_store=secret_store,
             oanda_client=oanda_client,
             binance_client=binance_client,
-            _owner=_owner,
+            _operator=_operator,
         )
     except HTTPException as exc:
         if exc.status_code in {status.HTTP_401_UNAUTHORIZED, status.HTTP_502_BAD_GATEWAY}:
@@ -303,7 +311,7 @@ async def verify_exchange_connection(
     secret_store: SecretStore,
     oanda_client: OandaClient,
     binance_client: BinanceClient,
-    _owner: Owner,
+    _operator: Operator,
 ) -> OandaVerificationRead | BinanceVerificationRead:
     use_case = VerifyConnectionUseCase(
         db=db,
@@ -378,7 +386,7 @@ def _verification_response(
     tags=["accounts"],
 )
 def list_workspace_accounts(
-    workspace_id: UUID, db: DatabaseSession, _owner: Owner
+    workspace_id: UUID, db: DatabaseSession, _viewer: Viewer
 ) -> list[WorkspaceAccountRead]:
     if db.get(Workspace, workspace_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
@@ -423,7 +431,7 @@ def select_workspace_account(
     exchange_code: str,
     payload: WorkspaceAccountSelectionUpdate,
     db: DatabaseSession,
-    _owner: Owner,
+    _operator: Operator,
 ) -> WorkspaceAccountSelection:
     row = db.execute(
         select(ExternalAccount, ExchangeConnection, Exchange)
@@ -533,10 +541,10 @@ def _validate_connection_credentials(exchange_code: str, credentials: dict[str, 
 
 
 @router.get("/exchanges", response_model=list[ExchangeRead], tags=["catalog"])
-def list_exchanges(db: DatabaseSession) -> list[Exchange]:
+def list_exchanges(db: DatabaseSession, _current_user: AnyAuthenticatedUser) -> list[Exchange]:
     return list(db.scalars(select(Exchange).order_by(Exchange.code)).all())
 
 
 @router.get("/markets", response_model=list[MarketRead], tags=["catalog"])
-def list_markets(db: DatabaseSession) -> list[Market]:
+def list_markets(db: DatabaseSession, _current_user: AnyAuthenticatedUser) -> list[Market]:
     return list(db.scalars(select(Market).order_by(Market.code)).all())

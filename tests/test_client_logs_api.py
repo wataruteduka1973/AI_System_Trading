@@ -1,14 +1,21 @@
+from uuid import uuid4
+
 from app.core.config import Settings
 from app.core.logging import configure_logging, configure_named_log_file
 from app.main import app
-from app.security.auth import require_owner
+from app.models.workspace import AppUser
+from app.security.rbac import require_authenticated_user
 from fastapi.testclient import TestClient
 
 client = TestClient(app)
 
+_TEST_USER = AppUser(
+    id=uuid4(), email="test@example.com", display_name="Test User", status="active"
+)
+
 
 def override_owner() -> None:
-    app.dependency_overrides[require_owner] = lambda: "test-owner"
+    app.dependency_overrides[require_authenticated_user] = lambda: _TEST_USER
 
 
 def configure_test_logging(tmp_path) -> None:
@@ -87,7 +94,7 @@ def test_oversized_message_is_rejected(tmp_path) -> None:
     assert response.status_code == 422
 
 
-def test_requires_owner_token() -> None:
+def test_requires_authentication() -> None:
     app.dependency_overrides.clear()
     response = client.post(
         "/api/v1/client-logs",

@@ -4,6 +4,23 @@
 
 ## 0. この計画の位置づけと参照元
 
+### 0.0 改訂履歴(2026-09-21、批判的レビューへの対応)
+
+初版(2026-09-20)に対し、利用者から批判的レビュー(10項目)を受けた。対応方針は次の通り。詳細な修正内容は各Unitの該当箇所に「(2026-09-21改訂 #n)」の形で記載する。
+
+| # | 指摘 | 対応方針 |
+|---|---|---|
+| 1 | セッションJWTを失効できない(APIキー漏えい疑い等に即応できない) | **修正**: Unit 3に`session_revocation`テーブルと強制失効機構を追加(3.9) |
+| 2 | `trading_halt`の`emergency_stopped`解除・RBAC対象の停止管理APIが存在しない | **修正**: Unit 4に停止管理API(`/workspaces/{workspace_id}/trading-halts`)を追加(4.4) |
+| 3 | ライセンス鍵が単一障害点で、発行済みライセンスを個別に失効できない | **一部修正+許容**: `scripts/issue_license.py`の`--expires-at`/`--perpetual`を必須択一にし漏えい時の露出期間を制限する（Unit 6「新規作成ファイル」5.、「想定リスク」）。単一鍵構成自体は「常時稼働アクティベーションサーバーを持たない」というADR 0005の前提と表裏一体のため、残存リスクとして明記し受容する |
+| 4 | ADR 0005の法務未確認のまま商用ライセンス機構(Unit 6)を実装する順序になっている | **修正**: Unit 6着手前に法務確認状況の再確認を必須のゲートとして追加(0.2b) |
+| 5 | Unit 8(通知/Outbox)はスケルトンで、ロードマップの完了条件を実際には満たさない | **修正**: Unit 8完了時点では当該完了条件を満たさない旨を明記し、DoD(第5節)にも反映 |
+| 6 | 通知配信のサンプルコードが`SMTPException`系を捕捉できない | **修正**: 例外捕捉を修正 |
+| 7 | Unit 5(サービスアカウント基盤)は呼び出し元が存在しない先行実装 | **修正**: Unit 5を本計画のスコープから外し、実際の消費者が生じた時点の別タスクへ先送りする |
+| 8 | 他ワークスペースへのアクセス時に403/404のどちらを返すかがテスト方針レベルで未決定 | **修正**: 404(存在を秘匿)で統一すると決定 |
+| 9 | ライセンス必須化がローカル単独利用の開発ワークフローを壊す | **修正**: `local`環境ではライセンスチェックを免除する分岐を追加（Unit 6「新規作成ファイル」6.`require_valid_license`） |
+| 10 | 性質の異なる10 Unitの承認が「一括Yes/No」に束ねられている | **修正**: 承認を5グループに分割し、グループ単位で個別に承認を得られる構成にする(0.2a) |
+
 ### 0.1 要件定義の情報源
 
 このリポジトリには `CONTEXT.md` に相当する独立ファイルも、Horizon 5専用のGitHub Issueも存在しない（2026-09-20時点、`gh issue list --state all` は0件）。実際に存在し、本計画が要件定義として採用したドキュメントは次の3点のみである。
@@ -18,10 +35,52 @@
 
 `docs/plans/horizon5-distribution-and-auth.md` は「本格着手はHorizon4-lite（Backtest）完了後に、利用者へ改めて承認を得てから行う。本ドキュメント単体を実装着手の許可として扱わない」と明記している。本計画も同じ制約を引き継ぐ。**実装エージェントは、着手前に次の2点を利用者に確認すること。**
 
-1. Horizon4-lite（`docs/plans/horizon4-lite-backtest.md`）が完了しているか（2026-09-20時点で本計画作成者が確認した範囲では、直近コミット `33de62d`（Unit6: walk-forward分割）が最後のHorizon4-lite関連コミットであり、同計画書内に明示的な完了宣言（`状態: [x] 実装済み`のような記載）は見当たらなかった）。
+1. Horizon4-lite（`docs/plans/horizon4-lite-backtest.md`）が完了しているか。
 2. Horizon5本体（本計画のUnit 1以降）に着手してよいか。
 
 この確認を経るまで、Unit 1以降のコード変更を開始しない。
+
+**2026-09-21確認・完了(利用者確認済み)**: 上記1点目について、Horizon4-liteの完了を確認した。
+
+- 根拠1: `docs/plans/horizon4-lite-backtest.md`が定義するUnit 1〜6が全てコミット済み。
+  `fae90a0`(ADR 0003・計画書追加)に始まり、`37572ad`(Unit1)、`88c2b91`(Unit2)、
+  `1b61851`(Unit3)、`9f0cdcf`(Unit4)、`1147c25`(Unit5)、`33de62d`(Unit6、
+  walk-forward分割)で完結し、全てPR(#44〜#47)としてmainへマージ済み。
+- 根拠2: 各Unitのpytest/ruff/mypyが全てグリーンであることをUnit完了ごとに確認済み
+  （各コミットの完了報告を参照）。`run_and_persist_backtest()`/
+  `run_and_persist_walk_forward()`が実際にcandle列からbacktestを実行し
+  `BacktestRun`/`BacktestTrade`として永続化・baseline比較・walk-forward評価まで
+  行える状態であることを、Unit 5・Unit 6のテストで確認済み。
+- なお`docs/plans/horizon4-lite-backtest.md`自体には`状態: [x] 実装済み`という
+  形式の完了宣言は追記していない（同計画書は各Unit節の記述を更新する運用を
+  採っていなかったため）。完了の記録は本節と、上記コミット履歴・マージ済みPRを
+  正とする。
+
+これにより、着手条件2点目（Horizon5本体への着手可否）の確認へ進む。
+
+#### 0.2a 承認は5グループに分割する(2026-09-21改訂 #10)
+
+初版は10 Unitを「一括Yes/No」で承認する構成だったが、性質とリスクが異なる意思決定を1つの承認に束ねるのは利用者の選択の幅を不必要に狭める。実装エージェントは以下のグループ単位で個別に着手承認を得ること。あるグループが未承認でも、他の承認済みグループには影響しない（依存関係がある場合は各グループの説明に明記する）。
+
+| グループ | 含むUnit | 内容 | 他グループへの依存 |
+|---|---|---|---|
+| A. 認証・RBAC基盤 | Unit 1, 3, 4 | OIDC認証・セッション管理・全APIへのRBAC適用 | なし |
+| B. Secret管理のプラガブル化 | Unit 2, 7 | Protocol抽出 + AWS Secrets Manager/KMS実装(新規クラウド依存の追加) | なし |
+| C. ライセンス・商用配布 | Unit 6, 10 | オフライン検証ライセンス機構、顧客向け運用ドキュメント | **0.2bの法務確認ゲートを満たすまで着手しない**。加えてUnit 10「初回セットアップ」節はOIDC設定手順を記載するため、実質的にグループA完了後でないと手順の実機検証ができない（ラウンド3セルフレビューで発見。Unit 6単体はグループAと独立） |
+| D. 通知基盤 | Unit 8 | Outbox/Notification ORM + 汎用SMTPアダプタ(スケルトン、0.0節#5参照) | なし |
+| E. リリースゲート強化 | Unit 9 | SBOM生成・依存関係脆弱性スキャン | なし |
+
+Unit 5(System Workerサービスアカウント基盤)は本計画から除外した。理由は0.0節#7、詳細は「Unit 5(見送り)」節を参照。
+
+#### 0.2b グループC着手前の法務確認ゲート(2026-09-21改訂 #4)
+
+ADR 0005の「残存リスク」節は、セルフホスト型への転換が各取引所ToSに抵触しないという判断が「調査担当エージェントによる確認済みの事実ではなく、記録者(Claude)による推論である」とし、「公開ベータ・有償販売の開始前に、この推論が正しいかどうかの最終確認（弁護士相談、または少なくともOANDA/Binanceへの書面照会）を改めて行うことを強く推奨する」と明記している。
+
+この確認が済んでいない状態でライセンス販売機構(グループC)を実装すると、「売ってよいか分からないまま、売る仕組みを先に作る」順序になる。そのため:
+
+- **グループC(Unit 6, 10)に着手する前に、上記の最終確認が完了しているか、または利用者が未完了のまま着手するリスクを明示的に受容するかを確認すること。**
+- グループA・B・D・Eはこの法務論点と無関係(顧客の取引所アクセスを仲介しない)であり、このゲートの対象外。
+- Unit 6のうち、署名・検証ロジック(`app/licensing/verification.py`等)の実装自体は可逆的でリスクが低いため、ゲートの対象を「実際に顧客へライセンスを発行する運用開始(`scripts/issue_license.py`の実運用)」に絞ってもよい。ただしこの絞り込みを行う場合も、その判断を利用者に確認すること。
 
 ### 0.3 スコープ外(本計画では扱わない)
 
@@ -32,6 +91,8 @@
 - 自己完結型内蔵IdP（外部IdP接続のみを実装し、内蔵IdPは将来の別タスクとする。理由はUnit 3参照）
 - GCP Secret Manager / HashiCorp Vaultバックエンドの実装（Protocolと最初の実装例としてAWS Secrets Manager/KMSのみ実装し、他バックエンドは同じProtocolに従う後続タスクとする）
 - E2E（Playwright）試験の追加（`docs/plans/ci-quality-gate-hardening.md` で既に「先送り」と決定済み。本計画もそれに従う）
+- System Workerサービスアカウント基盤（2026-09-21改訂 #7、初版のUnit 5。呼び出し元が存在しないため見送り。「Unit 5(見送り)」節参照）
+- 個々のセッション(デバイス)単位での失効、ライセンスのオンライン個別失効（いずれも2026-09-21改訂で検討したが、実装コストに見合わないため見送った既知の制約。3.9節・Unit 6「想定リスク」参照）
 
 ---
 
@@ -42,12 +103,12 @@
 1. **`user_membership` テーブルは既存**。`database/postgresql_schema_v0.1.sql` 46-52行目に定義済みで、`alembic/versions/20260816_0001_initial_schema.py` がこのSQLファイルをそのまま実行する形で初回migrationとして適用済み。カラムは `workspace_id, user_id, role (CHECK IN owner/operator/viewer), created_at`、主キーは `(workspace_id, user_id)`。**ORMモデルは未実装**（`app/models/workspace.py` には `Workspace` と `AppUser` のみ）。新規migrationは不要、ORM追加のみでよい。
 2. **`app_user.status` は `invited` / `active` / `disabled` のCHECK制約を持つ**（同SQL 33-44行目）。`oidc_subject` カラムも既存（unique）。
 3. **`notification` テーブルと `outbox_event` テーブルも既存**（同SQL 603-616行目、821-834行目）。`notification` は `event_id` で `system_event` (同552行目、`app/models/audit.py` に `SystemEvent` として実装済み) を参照する。**これらもORMモデルは未実装**。新規migrationは不要、ORM追加のみでよい。これはドラフト計画が「新規作成対象」として想定していた範囲より作業量が少ないことを意味する。
-4. **`service_account`（またはAPIキー）に相当するテーブルは存在しない**。`system_worker` ロールは `user_membership` のCHECK制約に含まれておらず（owner/operator/viewerのみ）、人間のワークスペースメンバーシップとは性質が異なるサービスアイデンティティである。**新規migrationが必要**（Unit 5）。
+4. **`service_account`（またはAPIキー）に相当するテーブルは存在しない**。`system_worker` ロールは `user_membership` のCHECK制約に含まれておらず（owner/operator/viewerのみ）、人間のワークスペースメンバーシップとは性質が異なるサービスアイデンティティである。新規migrationが必要だが、**呼び出し元が存在しないため2026-09-21改訂で本計画のスコープから外した**（Unit 5(見送り)節参照）。
 5. **ライセンスキーに相当するテーブル・機構は存在しない**。完全にオフライン検証（署名済みファイル）で実装し、DBテーブルは不要（Unit 6）。
 6. **現在の認証は `app/security/auth.py` の `require_owner` のみ**。固定トークン（環境変数 `DEV_OWNER_TOKEN`）を `x-owner-token` ヘッダと `secrets.compare_digest` で比較するだけで、ユーザーもワークスペースメンバーシップも一切見ない。認証済みAPIルートは6ファイル・22エンドポイント（詳細はUnit 4参照）。
 7. **`app/services/secrets.py` の `LocalEncryptedSecretStore` は具象クラスのみでインターフェースが無い**。Fernet（`cryptography.fernet`）で暗号化。`put/get/delete/encrypt_text/decrypt_text` の5メソッド。
 8. **`.github/workflows/release.yml` はタグpush起点でPythonパッケージをビルドしGitHub Releasesへ公開済み**。SBOM生成・依存関係脆弱性スキャンは未追加。`.github/workflows/ci.yml` にはsecret scan（gitleaks、Docker実行）が既にPR単位で存在する。依存関係脆弱性スキャン（pip-audit相当）はCI・releaseどちらにも存在しない。
-9. **短命JWT署名の先例が既にある**: `app/market_data/infrastructure/stream_tickets.py` が `PyJWT`（HS256、`app.core.config.settings` 由来の秘密鍵）で短命ワンタイムチケットを発行・検証している。本計画のセッションJWT（Unit 3）・サービスアカウントAPIキー（Unit 5、ただしJWTではなくハッシュ照合）はこのモジュールの設計を踏襲する。
+9. **短命JWT署名の先例が既にある**: `app/market_data/infrastructure/stream_tickets.py` が `PyJWT`（HS256、`app.core.config.settings` 由来の秘密鍵）で短命ワンタイムチケットを発行・検証している。本計画のセッションJWT（Unit 3）はこのモジュールの設計を踏襲する。
 10. **インストール済みライブラリのバージョン**（`pyproject.toml` / `pip show`、2026-09-20時点）:
     - `fastapi>=0.139,<0.142`（実体0.141.1）
     - `SQLAlchemy>=2.0.51,<2.1`（実体2.0.52）
@@ -138,7 +199,7 @@ python -m build
 - 命名: `test_<対象>.py`。既存ファイルと衝突しない名前を選ぶこと（Unit毎に案を示す）。
 - 観点: 各Unitの「テスト方針」に記載する個別観点に加え、共通で次を必ず確認する。
   - 正常系（許可されるロール/資格情報で成功する）
-  - 認可の境界（不足ロール・他ワークスペースからのアクセスが403/404で拒否される）
+  - 認可の境界（メンバーだがロール不足は403、非メンバーからの他ワークスペースへのアクセスは404で拒否される。使い分けは4.1節「404, not 403」参照、2026-09-21改訂 #8）
   - 既存の `require_owner` を前提にしていたテスト（`tests/test_*_api.py` 群の `override_database` 関数）は、認可方式の変更に追随して更新し、**全て成功すること**を regression として確認する。
 - 秘密情報（トークン、秘密鍵、APIキー）をテストのアサーションやログ出力に平文で残さない（`app/core/logging.py` の redaction方針に合わせる）。
 
@@ -146,7 +207,7 @@ python -m build
 
 ## 3. 実装順序と各Unit
 
-実装単位は既存ドラフトの10 Unitを踏襲しつつ、コードレベルまで具体化した。**Unit番号順に実装し、各Unit完了時に第2.3節の品質管理手順を実行してから次のUnitへ進む。**
+実装単位は既存ドラフトの10 Unitを踏襲しつつ、コードレベルまで具体化した。**承認は0.2aの5グループ単位で得るが、承認されたグループ内では引き続きUnit番号順に実装し、各Unit完了時に第2.3節の品質管理手順を実行してから次のUnitへ進む**（例: グループA(Unit 1, 3, 4)のみ承認された場合、Unit 1→3→4の順で実装し、Unit 2・6〜10には着手しない。Unit 3内の3.1〜3.9、Unit 4内の4.1〜4.4も同様に番号順）。Unit 5は0.2a・0.3節の通り見送りであり、どのグループにも属さない。
 
 ### Unit 1: `UserMembership` ORM + `Workspace`/`AppUser` との relationship 配線
 
@@ -191,7 +252,7 @@ class UserMembership(Base):
 なし。
 
 #### テスト方針
-- `tests/test_user_membership_model.py`（新規）: `Workspace` / `AppUser` / `UserMembership` を作成し、relationship経由で辿れることを確認する単体テスト（MagicMockではなく、Unit 5と同様に専用PostgreSQLを使う統合テストとして書く。`tests/test_worker_leases_postgres.py` の `WORKER_TEST_DATABASE_URL` 参照パターンを流用する）。
+- `tests/test_user_membership_model.py`（新規）: `Workspace` / `AppUser` / `UserMembership` を作成し、relationship経由で辿れることを確認する単体テスト（MagicMockではなく、専用PostgreSQLを使う統合テストとして書く。`tests/test_worker_leases_postgres.py` の `WORKER_TEST_DATABASE_URL` 参照パターンを流用する）。
 - CHECK制約違反（`role='system_worker'` 等の不正値）を挿入しようとするとDBがエラーを返すことを確認するテストを1本含める。
 
 #### 想定リスク
@@ -375,7 +436,9 @@ def verify_id_token(
 ##### 3.5 `AppUser` 解決
 
 ```python
-def resolve_or_create_app_user(db: Session, *, oidc_subject: str, email: str, display_name: str) -> AppUser:
+def resolve_or_create_app_user(
+    db: Session, *, oidc_subject: str, email: str, display_name: str
+) -> AppUser:
     user = db.scalar(select(AppUser).where(AppUser.oidc_subject == oidc_subject))
     if user is not None:
         return user
@@ -384,7 +447,9 @@ def resolve_or_create_app_user(db: Session, *, oidc_subject: str, email: str, di
         user.oidc_subject = oidc_subject  # invited via email, first login links the subject
         user.status = "active"
         return user
-    user = AppUser(email=email, display_name=display_name, oidc_subject=oidc_subject, status="active")
+    user = AppUser(
+        email=email, display_name=display_name, oidc_subject=oidc_subject, status="active"
+    )
     db.add(user)
     db.flush()
     return user
@@ -417,7 +482,9 @@ def require_authenticated_user(
             session, secret=settings.session_signing_secret.get_secret_value()
         )
     except SessionTokenError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated") from exc
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
+        ) from exc
     user = db.get(AppUser, claims.app_user_id)
     if user is None or user.status != "active":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
@@ -426,14 +493,79 @@ def require_authenticated_user(
 
 （`db` をデフォルト値のない`session`より前に置いているのは、Python関数定義でデフォルト値を持つ引数は持たない引数より後ろに置く必要があるため。`verify_session_token` が `SessionTokenError`（`app/security/session.py` で `StreamTicketError` と同じ形で定義する例外）を送出する設計は `stream_tickets.py` の `verify_and_consume_ticket` に揃える。)
 
+##### 3.9 セッションの強制失効(2026-09-21改訂 #1、新設)
+
+初版はセッションJWTのサーバー側強制失効ができない制約を「本Unitのスコープ外」としていたが、これは`docs/architecture-alignment-and-long-term-roadmap.md`のHorizon5完了条件「権限境界、CSRF/CORS、session、secret rotation、監査ログのsecurity testが通る」と直接矛盾する。特にtrading_haltの停止原因「APIキー漏えい疑い」（`docs/concept/FXtrading_rebuild/05_アーキテクチャと移行計画.md`取引停止マトリクス）は、認証情報の漏えいに即応する手段を要求しており、有効期限(`session_ttl_seconds`、既定8時間)が切れるまで何もできないのは看過できない。
+
+**設計**: `jti`単位の失効リストではなく、ユーザー単位の「このタイムスタンプより前に発行されたセッションは全て無効」というカットオフ方式にする（個々のセッションを特定するjti追跡・保存が不要で、実装・検証コストが小さい。1台のデバイスだけを失効させる用途には使えないが、「このユーザーの全セッションを今すぐ無効化する」という粒度で十分という判断）。
+
+1. **`alembic/versions/<実装日>_0008_session_revocation.py`**（`down_revision = "20260920_0007"`。Unit 5(見送り)が使う予定だった`_0008`番はUnit 5撤回により空いたため、本migrationがこれを引き継ぐ。実装時点で他に新規migrationが割り込んでいないか`alembic/versions/`を確認すること）
+
+```python
+"""Create fx.session_revocation: per-user cutoff timestamp for forced
+session invalidation (Unit 3.9, added in response to critical review #1 --
+without this, a suspected leaked session/credential has no faster remedy
+than waiting out session_ttl_seconds, which conflicts with the roadmap's
+own Horizon5 completion condition for session security tests)."""
+
+from alembic import op
+
+revision = "<実装日>_0008"
+down_revision = "20260920_0007"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.execute("SET LOCAL lock_timeout = '5s'")
+    op.execute(
+        """
+        CREATE TABLE fx.session_revocation (
+          user_id uuid PRIMARY KEY REFERENCES fx.app_user(id) ON DELETE CASCADE,
+          revoked_sessions_before timestamptz NOT NULL,
+          revoked_by uuid REFERENCES fx.app_user(id) ON DELETE SET NULL,
+          revoked_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+
+
+def downgrade() -> None:
+    op.execute("SET LOCAL lock_timeout = '5s'")
+    op.execute("DROP TABLE fx.session_revocation;")
+```
+
+2. **`app/models/workspace.py`への追記** — `SessionRevocation` ORM（上記DDLへの1:1対応）。
+
+3. **`app/security/session.py`のペイロード拡張** — `verify_session_token`の戻り値（`SessionClaims`）に`issued_at: datetime`を追加する（JWTの`iat`クレームをそのまま可視化するだけで、署名対象自体は変更しない）。
+
+4. **`require_authenticated_user`の拡張**（3.8のコードに追記、`app/security/rbac.py`）:
+
+```python
+    user = db.get(AppUser, claims.app_user_id)
+    if user is None or user.status != "active":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    revocation = db.get(SessionRevocation, user.id)
+    if revocation is not None and claims.issued_at < revocation.revoked_sessions_before:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session revoked")
+    return user
+```
+
+5. **`POST /auth/sessions/revoke`**（`app/api/routes/auth.py`、本人のみ、`require_authenticated_user`のみで完結し他Unitへの依存がない）: 呼び出したユーザー自身の`session_revocation`行を`now()`でupsertし、`session` Cookieも削除する。「このセッションが漏れたかもしれない」と思った利用者が、他Unit(管理者による強制失効)を待たずに自分の全セッションを即時無効化できる自己防衛手段として、Unit 3完了時点で機能する。
+
+管理者(Owner)が**他ユーザー**のセッションを強制失効する機能は、`require_any_workspace_owner`依存がまだ定義されていないため本Unitでは実装しない。Unit 4.4で追加する。
+
+**実装上の注意（ラウンド2セルフレビューで発見、タイムスタンプ精度の境界レース）**: `revoked_sessions_before`はPostgreSQLの`timestamptz`（マイクロ秒精度）で記録される一方、JWTの`iat`クレーム（`issued_at`）は仕様上秒精度（NumericDate、[RFC 7519 §2](https://www.rfc-editor.org/rfc/rfc7519#section-2)）である。`revoke`実行の直後（同じ秒内）に利用者が再ログインすると、新しいセッションの`iat`が秒未満切り捨てにより「失効時刻より前」と誤判定され、発行直後の正当な新セッションが即座に無効になりうる（実害はユーザーへ再ログインを一度余計に強いる程度で、セキュリティ上のリスクではない）。`revoked_sessions_before`を秒精度に切り捨てて保存する（`date_trunc('second', now())`、またはPython側で`datetime.now(UTC).replace(microsecond=0)`）ことで、`iat`と精度を揃え、この境界を解消する。
+
 #### テスト方針
 - `tests/test_oidc_client.py`: `respx`（既存devの依存、`httpx` のモック用）を使い、discovery/token交換のHTTPリクエストをモックした結合テスト。PKCEの `code_verifier`/`code_challenge` 対応が正しいこと、`state` 不一致時に拒否されること、を確認する。
 - `tests/test_session_token.py`: セッションJWTの発行・検証・期限切れ・改竄検出（`stream_tickets.py` の既存テストと同型）。
 - `tests/test_auth_api.py`: `/auth/login` が正しい認可URLへリダイレクトすること、`/auth/callback` の正常系・異常系（`state`不一致、IdPエラー、無効なIDトークン、`disabled`ユーザー）、`/auth/me` の認証要否。
+- `tests/test_session_revocation.py`（新規、2026-09-21改訂 #1）: `POST /auth/sessions/revoke`実行後、失効前に発行されたセッションCookieでのリクエストが401になること、失効**後**に新規発行されたセッションは引き続き有効であること（`revoked_sessions_before`と`issued_at`の比較が正しい向きであることの確認）。
 
 #### 想定リスク
 - 中。外部IdPとの実結合試験はCIでは行えない（モックのみ）。実IdP（顧客が用意するもの）との結合確認は導入手順書（Unit 10）でのマニュアル確認手順として案内する。
-- セッションJWTのサーバー側強制失効ができない制約（2.1節）は、`docs/architecture-alignment-and-long-term-roadmap.md` の完了条件「権限境界、CSRF/CORS、session、secret rotation、監査ログのsecurity testが通る」との整合を実装者が意識すること。将来的に即時失効が要件化した場合は、`jti` をDBに記録し失効リストと突き合わせる方式への変更が必要（本Unitのスコープ外）。
+- （2026-09-21改訂 #1により解消）セッションJWTのサーバー側強制失効ができない制約は、3.9の`session_revocation`機構で解消した。ただし個々のデバイス単位ではなくユーザー単位の全失効である点は残存する制約として明記する（1台のデバイスの紛失だけで他の正当なデバイスまで再ログインが必要になる）。
 
 ---
 
@@ -466,7 +598,12 @@ def require_workspace_role(minimum_role: str) -> Callable[..., AppUser]:
                 UserMembership.user_id == current_user.id,
             )
         )
-        if membership is None or _ROLE_SEVERITY[membership.role] < _ROLE_SEVERITY[minimum_role]:
+        if membership is None:
+            # 404, not 403 (2026-09-21改訂 #8): 非メンバーにワークスペースの
+            # 存在自体を確認させない。既にメンバー(role不足)の場合は下で403を
+            # 返す -- その利用者には既にこのワークスペースの存在が見えている。
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+        if _ROLE_SEVERITY[membership.role] < _ROLE_SEVERITY[minimum_role]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient workspace role"
             )
@@ -479,10 +616,13 @@ def require_any_workspace_owner(
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[AppUser, Depends(require_authenticated_user)],
 ) -> AppUser:
-    """Unit 5 (`/service-accounts`)向け。特定のworkspace_idを持たないグローバル
-    リソースのため`require_workspace_role`は使えない。いずれか1つ以上の
-    workspaceでownerであれば許可する（`user_membership`に'owner'の行が
-    1件でも存在するか、を見るだけの軽量チェック）。"""
+    """特定のworkspace_idを持たないグローバル操作向け（`require_workspace_role`は
+    使えない）。いずれか1つ以上のworkspaceでownerであれば許可する
+    （`user_membership`に'owner'の行が1件でも存在するか、を見るだけの軽量
+    チェック）。2026-09-21改訂時点の利用元: 4.4節「他ユーザーのセッション強制
+    失効」「trading_halt管理API」。(初版はUnit 5の`/service-accounts`向けとして
+    導入したが、Unit 5は本計画のスコープから除外した -- 「Unit 5(見送り)」節参照。この依存自体は
+    他の利用元が生じたため残す。)"""
     has_ownership = db.scalar(
         select(UserMembership.workspace_id)
         .where(UserMembership.user_id == current_user.id, UserMembership.role == "owner")
@@ -532,6 +672,10 @@ AnyAuthenticatedUser = Annotated[AppUser, Depends(require_authenticated_user)]
 | market_data.py | `GET /workspaces/{workspace_id}/market-data-subscriptions` | `Viewer` | |
 | market_data.py | `POST /workspaces/{workspace_id}/market-stream-tickets` | `Viewer` | 閲覧目的のリアルタイム購読のため |
 | client_logs.py | `POST /client-logs` | `AnyAuthenticatedUser` | `workspace_id`を取らないため、ロールチェック対象外 |
+| trading_halts.py(新規、4.4) | `GET /workspaces/{workspace_id}/trading-halts` | `Viewer` | |
+| trading_halts.py(新規、4.4) | `POST /workspaces/{workspace_id}/trading-halts/{id}/release` | `Owner` | 段階的デエスカレーション1段。`trading_halt.deescalate_one_step`を呼ぶ |
+| trading_halts.py(新規、4.4) | `POST /workspaces/{workspace_id}/trading-halts/{id}/emergency-release` | `Owner` | `emergency_stopped`のみ対象。`trading_halt.release_emergency_stop`を呼ぶ |
+| auth.py(4.4で追記) | `POST /auth/users/{user_id}/revoke-sessions` | `AnyWorkspaceOwner` | 他ユーザーのセッションを強制失効(3.9の自己失効とは別) |
 
 #### 4.2 ワークスペース作成時の所有者登録
 
@@ -557,118 +701,43 @@ def list_workspaces(db: DatabaseSession, current_user: AnyAuthenticatedUser) -> 
     return list(db.scalars(statement).all())
 ```
 
+#### 4.4 trading_halt管理APIと他ユーザーのセッション強制失効(2026-09-21改訂 #2、新設)
+
+初版には、このセッション(`docs/plans/trading-halt-mvp.md`、ADR 0004)で実装済みの`trading_halt.py`が発動させる停止状態を、**人間が解除するためのAPIが一つも含まれていなかった**。`release_emergency_stop`（Owner専用、`docs/decisions/0004-trading-halt-mvp-scope.md`が要求する「解除はOwnerのみ」を満たす実装は既にDB層に存在する）を含め、呼び出し元がコード上に存在しない状態だった。RBAC基盤ができた本Unitで、この欠落を埋める。
+
+1. **`app/api/routes/trading_halts.py`**（新規）
+
+   **実装上の注意（ラウンド2セルフレビューで発見）**: `trading_halt.deescalate_one_step(db, scope: HaltScope, *, reason_code, now)`は`TradingHalt.id`を引数に取らず、`(workspace_id, scope_type, scope_id, reason_code)`から対象行を検索する設計（`docs/plans/trading-halt-mvp.md`参照）。`{id}`パスパラメータをそのまま渡せないため、エンドポイント側で一度`TradingHalt`を`id`で取得し、そこから`HaltScope(workspace_id=halt.workspace_id, scope_type=halt.scope_type, scope_id=halt.scope_id)`を組み立ててから`deescalate_one_step`を呼ぶ。`release_emergency_stop(db, halt: TradingHalt, ...)`は`TradingHalt`インスタンスを直接取るため、この変換は不要。
+
+   - `GET /workspaces/{workspace_id}/trading-halts`: `status="active"`の`TradingHalt`一覧を返す（`Viewer`）。
+   - `POST /workspaces/{workspace_id}/trading-halts/{id}/release`: `id`で`TradingHalt`を取得し、`workspace_id`が一致しない場合は404。上記の変換を経て`trading_halt.deescalate_one_step`を呼ぶ（`Owner`）。対象が`emergency_stopped`の場合は`422`で拒否し、下記のemergency-releaseを使うよう案内する（`trading_halt.py`自身が`emergency_stopped`を`deescalate_one_step`では変更しない設計のため、APIレベルでも早期に区別する）。
+   - `POST /workspaces/{workspace_id}/trading-halts/{id}/emergency-release`: `id`で取得した`TradingHalt`をそのまま`trading_halt.release_emergency_stop`へ渡す（`Owner`。`released_by`に`current_user.id`を渡す）。対象が`emergency_stopped`でない場合は`trading_halt.TradingHaltError("not_emergency_stopped", ...)`をそのまま403相当のエラーへ変換する。
+
+2. **`app/api/routes/auth.py`への追記**（`POST /auth/users/{user_id}/revoke-sessions`）: `require_any_workspace_owner`を依存に使い、3.9で追加した`session_revocation`テーブルへ対象`user_id`の行をupsertする。3.9の自己失効と同じ関数（`revoke_sessions(db, user_id, revoked_by=current_user.id)`のような共通ヘルパーとして`app/security/session.py`に切り出す）を再利用し、コードの重複を避ける。
+
 #### テスト方針
 - 既存の `tests/test_workspaces_api.py`, `test_connections_api.py`, `test_instrument_api.py`, `test_market_data_api.py`, `test_client_logs_api.py` の `override_database` ヘルパー（`app.dependency_overrides[require_owner] = ...`）を、`require_authenticated_user` と `require_workspace_role` のオーバーライドに書き換える。
-- 新規 `tests/test_rbac.py`: ロール別のマトリクステスト。`viewer`が書き込み系エンドポイントで403になること、`operator`が`owner`専用エンドポイント（`DELETE .../connections/{id}`）で403になること、他ワークスペースの`owner`が別ワークスペースへアクセスすると403（または404、対象存在確認の順序次第）になることを、エンドポイントごとに網羅する。
+- 新規 `tests/test_rbac.py`: ロール別のマトリクステスト。`viewer`が書き込み系エンドポイントで403になること、`operator`が`owner`専用エンドポイント（`DELETE .../connections/{id}`）で403になること、非メンバーが他ワークスペースへアクセスすると**404**になること（2026-09-21改訂 #8で403から変更・確定）、を、エンドポイントごとに網羅する。
 - `tests/test_workspaces_api.py` に、ワークスペース作成時に `user_membership` へ `owner` 行が作られることを確認するテストを追加する。
+- 新規 `tests/test_trading_halts_api.py`（2026-09-21改訂 #2）: `Owner`による通常releaseとemergency-releaseの正常系、`emergency_stopped`に対して通常releaseを呼ぶと拒否されること、`Owner`以外からの403。
+- 新規 `tests/test_session_revocation.py`への追加ケース（2026-09-21改訂 #1・#2）: `AnyWorkspaceOwner`が他ユーザーのセッションを強制失効できること、ownershipを持たないユーザーからは403になること。
 
 #### 想定リスク
-- 高。22エンドポイント全てに影響する変更で、既存テストの大半が書き換えを必要とする。1ファイルずつ（workspaces.py → connections.py → instruments.py → market_data.py → client_logs.py の順を推奨、依存が少ない順）移行し、都度 `python -m pytest` を実行してから次へ進むこと。
+- 高。22エンドポイント+4.4で追加した4エンドポイントに影響する変更で、既存テストの大半が書き換えを必要とする。1ファイルずつ（workspaces.py → connections.py → instruments.py → market_data.py → client_logs.py → trading_halts.py の順を推奨、依存が少ない順）移行し、都度 `python -m pytest` を実行してから次へ進むこと。
 - `GET /workspaces` の挙動変更はfrontendに影響する可能性がある（2.2節参照）。
+- （2026-09-21改訂 #8）404への変更により、既存フロントエンドが403を前提にエラー表示を出し分けている場合は影響する。`frontend/src/features/`配下の該当箇所を確認すること。
 
 ---
 
-### Unit 5: System Worker サービスアカウント機構
+### Unit 5(見送り): System Worker サービスアカウント機構(2026-09-21改訂 #7)
 
-#### 目的
-バックグラウンドワーカー（Market Data Worker、Unit 8で追加するNotification Worker）がAPIではなく直接DBへ接続する現行方式を変えない前提で、**将来ワーカーがAPI経由で操作する必要が生じた場合**に備えたサービスアカウント認証の基盤を用意する。`user_membership`のCHECK制約（owner/operator/viewerのみ）を変更せず、別テーブルとして新設する。
+**本Unitは本計画のスコープから除外した。** 初版のUnit 5はSystem Workerロール用のサービスアカウント基盤（新規テーブル・キー発行/失効API）を実装するものだったが、以下の理由により、実際の消費者が生じるまで着手しない。
 
-#### 新規作成ファイル
+- 初版のUnit 5自身が「本Unitは基盤整備であり、Market Data Worker自体をこの認証方式に移行するわけではない」「Notification Worker（Unit 8）も同様にDB直結とし、本Unitのサービスアカウントは使わない」と明記しており、**着手時点で呼び出し元が一つも存在しない**ことを自認していた。
+- AGENTS.md §5(Architecture Rules)は「要件に存在しない将来予測による過剰設計」を避けるべき項目として挙げている。呼び出し元のないキー発行・ハッシュ照合ロジック・管理APIを先に実装することは、新たな攻撃対象面（キー漏えい、ハッシュ照合のタイミング攻撃対策漏れ等）を実利用なしに追加することになる。
+- ロードマップ原文の「Owner/Operator/Viewer/System WorkerのRBACを全APIへ適用する」という記述はHorizon5の「実装・整備」項目であり、「完了条件」（本計画0.1節参照）には含まれていない。System Workerロールが未実装のままでも、Horizon5の完了条件には抵触しない。
 
-1. **`alembic/versions/<実装日>_0008_service_account.py`**（`down_revision = "20260920_0007"`。実装日時点のYYYYMMDD、リビジョン番号は0008から連番で採番すること）
-
-```python
-"""Create fx.service_account: API-key-based identity for background workers
-(distinct from user_membership's owner/operator/viewer -- a service account
-is not a human workspace member, and user_membership's CHECK constraint does
-not include a 'system_worker' value; see
-docs/plans/horizon5-implementation-plan.md Unit 5).
-
-The raw API key is never stored -- only a SHA-256 hash, mirroring how
-app/security/auth.py's require_owner already compares tokens with
-secrets.compare_digest rather than storing them reversibly. A short
-key_prefix (first 8 chars of the raw key) is stored in the clear so lookup
-does not require hashing every row on each request.
-"""
-
-from alembic import op
-
-revision = "<実装日>_0008"
-down_revision = "20260920_0007"
-branch_labels = None
-depends_on = None
-
-
-def upgrade() -> None:
-    op.execute("SET LOCAL lock_timeout = '5s'")
-    op.execute(
-        """
-        CREATE TABLE fx.service_account (
-          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-          name text NOT NULL,
-          key_prefix text NOT NULL,
-          key_hash text NOT NULL,
-          status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked')),
-          created_by uuid REFERENCES fx.app_user(id) ON DELETE SET NULL,
-          created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          revoked_at timestamptz,
-          CONSTRAINT uq_service_account_key_prefix UNIQUE (key_prefix),
-          CONSTRAINT ck_service_account_revoked CHECK (
-            (status <> 'revoked' AND revoked_at IS NULL)
-            OR (status = 'revoked' AND revoked_at IS NOT NULL)
-          )
-        );
-        """
-    )
-
-
-def downgrade() -> None:
-    op.execute("SET LOCAL lock_timeout = '5s'")
-    op.execute("DROP TABLE fx.service_account;")
-```
-
-2. **`app/models/service_account.py`** — `ServiceAccount` ORM（上記DDLに対応する `Mapped` 定義。既存モデルの書き方に合わせる）。
-3. **`app/security/service_account.py`** — キー生成・ハッシュ照合。
-
-```python
-import hashlib
-import secrets
-
-_KEY_PREFIX_LENGTH = 8
-
-
-def generate_service_account_key() -> tuple[str, str, str]:
-    """Returns (raw_key, key_prefix, key_hash). raw_key is shown to the
-    operator exactly once and never persisted; only key_prefix/key_hash are
-    stored (see migration docstring)."""
-    raw_key = secrets.token_urlsafe(32)
-    key_prefix = raw_key[:_KEY_PREFIX_LENGTH]
-    key_hash = hashlib.sha256(raw_key.encode("ascii")).hexdigest()
-    return raw_key, key_prefix, key_hash
-
-
-def verify_service_account_key(raw_key: str, *, expected_hash: str) -> bool:
-    candidate_hash = hashlib.sha256(raw_key.encode("ascii")).hexdigest()
-    return secrets.compare_digest(candidate_hash, expected_hash)
-```
-
-SHA-256を選ぶ理由（bcrypt/argon2のような低速ハッシュを使わない理由）: `raw_key` は `secrets.token_urlsafe(32)` による256ビットの高エントロピーランダム値であり、人間が選ぶ低エントロピーなパスワードとは異なりオフライン総当たりの実用的なリスクがないため、低速化は不要（`app/security/auth.py` の既存トークン比較方針と同じ考え方）。
-
-4. **`app/api/routes/service_accounts.py`** — `Owner`ロールのみが叩ける管理エンドポイント。
-   - `POST /service-accounts`: 発行。レスポンスで `raw_key` を一度だけ返す（DBには保存しない）。`service_account` テーブルはワークスペース非依存（システム全体のワーカー用）のため、パスに `workspace_id` を含めない。依存関数はUnit 4で `app/security/rbac.py` に追加した `require_any_workspace_owner`（4.1節末尾のコード）を使う。
-   - `POST /service-accounts/{id}/revoke`: 失効。
-   - `GET /service-accounts`: 一覧（`raw_key`/`key_hash`は返さない）。
-
-#### 変更対象ファイル
-- `app/api/router.py`: `service_accounts.router` を登録。
-
-#### テスト方針
-- `tests/test_service_account_model.py`（専用PostgreSQL使用、Unit 1と同じ方式）: CHECK制約、`uq_service_account_key_prefix`の一意性。
-- `tests/test_service_account_auth.py`: `generate_service_account_key`/`verify_service_account_key`の往復、改竄されたキーの拒否。
-- `tests/test_service_accounts_api.py`: 発行・失効・一覧のAPIレベルテスト、`Owner`以外からのアクセス拒否。
-
-#### 想定リスク
-中。本Unitは「将来ワーカーがAPI経由で操作する必要が生じた場合」の基盤整備であり、Market Data Worker自体（`app/market_data/worker/`）を本Unitでこの認証方式に移行するわけではない（現行のDB直結方式のまま据え置く）。この点を実装エージェントは混同しないこと。Notification Worker（Unit 8）も同様にDB直結とし、本Unitのサービスアカウントは使わない（過剰実装を避けるため）。
+**再開条件**: Market Data WorkerまたはNotification Workerが、DB直結ではなくAPI経由での操作を実際に必要とする具体的なタスクが生じた時点で、そのタスクの一部として（あるいはその前提として）サービスアカウント基盤を設計する。初版のUnit 5本文（DDL・ORM・キー生成コード）は設計の出発点として参考になるため、本ドキュメントの改訂履歴（0.0節）とこのメモに残す。
 
 ---
 
@@ -691,7 +760,12 @@ app/licensing/public_key.py."""
 import base64
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, PublicFormat
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PrivateFormat,
+    PublicFormat,
+)
 
 private_key = Ed25519PrivateKey.generate()
 public_key = private_key.public_key()
@@ -791,7 +865,11 @@ def verify_license_document(document: dict[str, object], *, public_key_b64: str)
 Usage: LICENSE_SIGNING_PRIVATE_KEY_B64=<base64> python scripts/issue_license.py \
     --license-id <uuid> --customer "Acme Inc" --expires-at 2027-09-20T00:00:00+00:00 \
     --feature core --output license.json
-Omit --expires-at for a perpetual (non-expiring) license.
+Pass --perpetual instead of --expires-at only when a non-expiring license is
+genuinely intended (see the SPOF risk note in this Unit's 想定リスク -- a
+perpetual license, once issued, can never be individually revoked short of
+rotating the operator's one global signing key, which would also break every
+other customer's already-issued license).
 """
 
 import argparse
@@ -803,6 +881,11 @@ from datetime import UTC, datetime
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+_DEFAULT_LICENSE_LIFETIME_DAYS = 365
+"""2026-09-21改訂 #3: デフォルトで有効期限を設けることで、鍵/ライセンス漏えい時の
+露出期間を1年に制限する。個別失効機構(オンラインでの取消リスト等)を持たない
+設計を採用した代わりの、最小限の緩和策。"""
+
 
 def _canonical_payload_bytes(payload: dict[str, object]) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -812,10 +895,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--license-id", required=True)
     parser.add_argument("--customer", required=True)
-    parser.add_argument("--expires-at", default=None, help="ISO 8601, omit for perpetual")
+    expiry_group = parser.add_mutually_exclusive_group(required=True)
+    expiry_group.add_argument("--expires-at", default=None, help="ISO 8601 expiry timestamp")
+    expiry_group.add_argument(
+        "--perpetual",
+        action="store_true",
+        help="issue a non-expiring license (see the module docstring's SPOF warning)",
+    )
     parser.add_argument("--feature", action="append", default=[], dest="features")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
+    # --expires-at/--perpetual is a mutually exclusive *required* group, so
+    # this is not a silent default: the operator must say which one they mean.
 
     raw_private_key = os.environ.get("LICENSE_SIGNING_PRIVATE_KEY_B64")
     if not raw_private_key:
@@ -843,7 +934,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-`Ed25519PrivateKey.from_private_bytes()` は生成スクリプト（上記4.）が出力したraw 32バイト鍵をbase64デコードしたものを受け取る（[cryptography公式: Ed25519 — from_private_bytes()](https://cryptography.io/en/latest/hazmat/primitives/asymmetric/ed25519/)）。
+`Ed25519PrivateKey.from_private_bytes()` は生成スクリプト（上記4.）が出力したraw 32バイト鍵をbase64デコードしたものを受け取る（[cryptography公式: Ed25519 — from_private_bytes()](https://cryptography.io/en/latest/hazmat/primitives/asymmetric/ed25519/)）。`--expires-at`と`--perpetual`を`add_mutually_exclusive_group(required=True)`にしたのは意図的（2026-09-21改訂 #3）: 初版は`--expires-at`省略時に暗黙で永久ライセンスになっており、運営者が期限の要否を意識せず永久ライセンスを発行しうる作りだった。どちらかを明示的に選ばせることで、その選択自体に気づかせる。
 
 6. **`app/licensing/dependency.py`** — 起動時1回検証 + リクエスト毎の期限チェック。
 
@@ -882,30 +973,41 @@ def _load_license() -> LicenseClaims | None:
 
 
 def require_valid_license() -> None:
+    if settings.app_env == "local":
+        # 2026-09-21改訂 #9: ローカル単独開発では顧客向けライセンス機構そのものが
+        # 意味を持たない。この分岐がないと、このリポジトリでの以後の機能開発
+        # (今回のtrading_halt/backtest実装を含む)がUnit 6完了後にライセンス
+        # ファイルの発行(scripts/issue_license.py)を都度要求するようになり、
+        # 「ローカル単独利用のまま」という利用者の方針と衝突する。
+        return
     claims = _load_license()
     if claims is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="License is missing or invalid"
         )
     if claims.is_expired(now=datetime.now(UTC)):
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="License has expired")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="License has expired"
+        )
 ```
 
 `verify_license_document`の`payload`引数は`document["payload"]`（`dict[str, object]`からの取り出しのため静的には`object`型）をそのまま渡している。`python -m mypy`を通すため、実装時は`isinstance(payload, dict)`のガード、またはpydanticモデル（`app/schemas/`の既存`OrmModel`と同様のBaseModel）でのパースに置き換え、`payload["license_id"]`等の添字アクセスがmypyにとって安全な型から行われるようにすること。
 
 #### 変更対象ファイル
-- `app/core/config.py`: `license_file_path: Path = Path("license.json")` を追加。
+- `app/core/config.py`: `license_file_path: Path = Path("license.json")` を追加。`app_env`は既存設定（`3.6節`のセッションCookie `Secure`分岐で既に参照している）をそのまま使う、新規追加ではない。
 - `app/main.py`: `app.include_router(api_router, prefix=settings.api_v1_prefix, dependencies=[Depends(require_valid_license)])` のように、`api_router` を含める箇所へ `dependencies=[Depends(require_valid_license)]` を追加する（`/health`, `/health/db` はこの対象外のまま — 死活監視のためライセンス無効時でも200を返せる必要がある）。`app.include_router(market_stream_ws.router)`（WebSocket）は`api_router`とは別に登録されているため、このライセンスチェックの対象外になる。ただしWebSocket接続には`api_router`経由（ライセンスチェック対象）の`/market-stream-tickets`エンドポイントで発行された短命チケットが必須のため、ライセンス無効時でも新規チケットは発行されず、実質的に新規接続はできない。実装エージェントはこの間接的な防御で十分かを判断し、不十分と判断する場合のみ`market_stream_ws.router`側にも同等のチェックを追加すること。
 - `.env.example`: `LICENSE_FILE_PATH=license.json` の説明を追加。
 - `.gitignore`: `license.json` を追加（顧客固有の実ファイルを誤ってコミットしないため）。
 
 #### テスト方針
 - `tests/test_license_verification.py`: 正常署名/改竄されたペイロード/改竄された署名/期限切れ/期限なし(perpetual)/不正な公開鍵の各ケース。テスト用に都度Ed25519鍵ペアを生成し、本番の `LICENSE_PUBLIC_KEY_B64` には依存しない形で書く。
-- `tests/test_license_dependency.py`: `require_valid_license` が有効なライセンスで通過し、無効で503を返すこと。`app.dependency_overrides` でファイルシステム読み込みを避ける（`_load_license` 自体をオーバーライド対象にできるよう、`lru_cache` されたモジュールレベル関数ではなく、テストでは `app/licensing/dependency.py` の `_load_license.cache_clear()` を呼んでから一時ファイルを指す `settings.license_file_path` を差し替える）。
+- `tests/test_license_dependency.py`: `require_valid_license` が有効なライセンスで通過し、無効で503を返すこと、`settings.app_env == "local"`では無条件に通過すること（2026-09-21改訂 #9）。`app.dependency_overrides` でファイルシステム読み込みを避ける（`_load_license` 自体をオーバーライド対象にできるよう、`lru_cache` されたモジュールレベル関数ではなく、テストでは `app/licensing/dependency.py` の `_load_license.cache_clear()` を呼んでから一時ファイルを指す `settings.license_file_path` を差し替える）。
+- `scripts/issue_license.py`のテスト(新規、2026-09-21改訂 #3): `--expires-at`/`--perpetual`のいずれも指定しない場合に`argparse`が終了コード2で失敗すること。
 
 #### 想定リスク
 - 秘密鍵の管理はUnit外（運営者の手順、Unit 10の運用ドキュメントに記載する）。本Unitのコードには秘密鍵を一切含めない。
 - `lru_cache` によるプロセス起動時1回検証のため、稼働中にライセンスファイルを更新しても再起動するまで反映されない。この制約はUnit 10の運用ドキュメントに明記すること。
+- **（2026-09-21改訂 #3、既知の制約として明示・許容）単一障害点**: 署名鍵は運営者につき1組のみで、個々のライセンスをオンラインで無効化する仕組みを持たない。鍵または`--perpetual`ライセンスファイルが流出した場合、正当な流出対象以外への影響を避けつつ止める手段は存在せず、全顧客共通の公開鍵をローテーションする（＝既存の正規顧客全員のライセンスも道連れで無効になる）以外に対処法がない。これは「運営者が常時稼働のアクティベーションサーバーを持たない」というADR 0005の前提と表裏一体のトレードオフであり、本計画では受容する。緩和策として、`scripts/issue_license.py`は`--expires-at`か`--perpetual`のいずれかを明示的に選ばせるようにし（上記コード参照）、有効期限を設ける運用をデフォルトの選択肢として案内する。将来、個別失効が必要になった場合はオンライン失効チェック（アプリ起動時またはポーリングでのlicense_idブロックリスト参照、ネットワーク不通時はオフライン検証のみにフォールバック）の追加を別タスクとして検討する。
 
 ---
 
@@ -946,7 +1048,9 @@ class AwsSecretsManagerStore:
     def put(self, values: dict[str, str]) -> str:
         secret_id = uuid4().hex
         name = f"{self._secret_name_prefix}{secret_id}"
-        self._secrets_client.create_secret(Name=name, SecretString=json.dumps(values, sort_keys=True))
+        self._secrets_client.create_secret(
+            Name=name, SecretString=json.dumps(values, sort_keys=True)
+        )
         return f"aws-secrets-manager://{name}"
 
     def get(self, secret_ref: str) -> dict[str, str]:
@@ -1028,7 +1132,9 @@ class OutboxEvent(Base):
     correlation_id: Mapped[UUID]
     status: Mapped[str] = mapped_column(Text, server_default="pending")
     attempts: Mapped[int] = mapped_column(server_default="0")
-    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 ```
@@ -1113,6 +1219,8 @@ class SmtpNotificationAdapter:
 6. **`app/notifications/application/deliver_notifications.py`** — Outboxポーリング + 配信。
 
 ```python
+import smtplib
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -1162,9 +1270,17 @@ def deliver_pending_notifications(
             )
             db.add(notification)
             try:
-                adapter.send(recipient=recipient_ref, subject=event.event_type, body=str(event.payload))
+                adapter.send(
+                    recipient=recipient_ref, subject=event.event_type, body=str(event.payload)
+                )
                 notification.status = "sent"
-            except OSError:
+            except (OSError, smtplib.SMTPException):
+                # 2026-09-21改訂 #6: OSErrorだけでは接続レベルの失敗(DNS不達、接続
+                # 拒否)しか捕捉できない。smtplib.SMTPException系(認証失敗、宛先
+                # 拒否等、実運用で最も起きやすいSMTPプロトコルレベルの失敗)は
+                # Exceptionを直接継承しOSErrorのサブクラスではないため、初版の
+                # `except OSError`では捕捉できず未処理のまま配信ループ全体を
+                # 落としていた。
                 notification.status = "failed"
                 notification.delivery_attempts += 1
         event.status = "published"
@@ -1190,6 +1306,8 @@ def deliver_pending_notifications(
 
 #### 想定リスク
 高。本Unitはスケルトン実装であり、`aggregate_type`/`aggregate_id`からの実際の宛先解決ロジックが未確定（ドメインイベントの発行元コード自体がまだ存在しないため）。実装エージェントは、着手前に「どのドメインイベントを最初に配線するか」（例: `connection.credentials_updated`の監査ログをトリガーに通知するのか、trading_haltの発動を通知するのか）を利用者に確認すること。本計画はUnit 8を「基盤（ORM・アダプタ・配信ループの骨格）を用意するところまで」と定義し、具体的なイベント種別ごとの配線は別タスクとする。
+
+**（2026-09-21改訂 #5、明示）Unit 8完了だけではロードマップの完了条件を満たさない**: `docs/architecture-alignment-and-long-term-roadmap.md`のHorizon5完了条件「通知の重複、欠落、再送をOutboxから追跡できる」は、実際にOutboxへイベントを書き込むドメインイベント発行元があって初めて検証できる。本Unitはその発行元を一つも用意しないため、Unit 8完了時点でこの完了条件は**満たされない**。少なくとも1種類のドメインイベント（trading_halt発動等）を実際に配線する別タスクの完了をもって、この完了条件の充足とする。実装エージェントはUnit 8完了報告時に、この完了条件が引き続き未達であることを明記すること（「基盤を整備した」を「完了条件を満たした」と読み替えない）。
 
 ---
 
@@ -1278,9 +1396,11 @@ dev = [
 1. `uvicorn app.main:app --reload` でAPIサーバーをローカル起動する（既存READMEの手順に従う）。
 2. `curl http://localhost:8000/api/v1/health` が `{"status": "ok", ...}` を返すこと（ライセンス依存を追加しても`/health`は影響を受けないことの確認、Unit 6完了後に必須）。
 3. Unit 3完了後: ブラウザで `http://localhost:8000/api/v1/auth/login` を開き、モックまたはテスト用の外部IdP（例: 無料枠のあるAuth0テナント等、実際に契約・設定が必要。実装エージェントが独自に用意できない場合は、この項目を`NOT VERIFIED`として報告し、利用者に実IdPでの確認を依頼する）へリダイレクトされることを確認する。
-4. Unit 4完了後: `curl -b cookies.txt -c cookies.txt http://localhost:8000/api/v1/workspaces` を、ログイン前(401)・ログイン後・別ユーザーでの所属ワークスペース差分、の3パターンで確認する。
-5. Unit 6完了後: `LICENSE_FILE_PATH` を存在しないパスに設定した状態で任意のAPIを呼び、503が返ることを確認する。次に `scripts/issue_license.py` で有効なライセンスファイルを発行して配置し、再起動後に成功することを確認する。
-6. Unit 9完了後: ブランチをpushし、GitHub Actions上で `ci.yml` の全ジョブ（`backend`, `worker-storage`, `secret-scan`, `frontend`)が成功することを確認する（Web UIまたは `gh run list`/`gh run view`で確認する）。
+4. Unit 3.9完了後（2026-09-21改訂 #1）: ログイン済みセッションで`POST /auth/sessions/revoke`を呼んだ後、同じセッションCookieでの`/auth/me`が401になることを確認する。
+5. Unit 4完了後: `curl -b cookies.txt -c cookies.txt http://localhost:8000/api/v1/workspaces` を、ログイン前(401)・ログイン後・別ユーザーでの所属ワークスペース差分、の3パターンで確認する。
+6. Unit 4.4完了後（2026-09-21改訂 #2）: `Owner`ロールで`GET /workspaces/{workspace_id}/trading-halts`が空配列を返すことを確認する（active haltが無い状態）。可能であれば`trading_halt.activate_or_escalate`をスクリプトから直接呼んで意図的にhaltを発生させ、`POST .../release`で解除できることを確認する。
+7. Unit 6完了後: `LICENSE_FILE_PATH` を存在しないパスに設定した状態で任意のAPIを呼び、503が返ることを確認する。次に `scripts/issue_license.py` で有効なライセンスファイルを発行して配置し、再起動後に成功することを確認する。`settings.app_env == "local"`の既定値では、ライセンスファイルが無くても200が返ることも確認する（2026-09-21改訂 #9）。
+8. Unit 9完了後: ブランチをpushし、GitHub Actions上で `ci.yml` の全ジョブ（`backend`, `worker-storage`, `secret-scan`, `frontend`)が成功することを確認する（Web UIまたは `gh run list`/`gh run view`で確認する）。
 
 各確認の結果(成功/失敗/NOT VERIFIED)を、AGENTS.md §15の完了報告フォーマット(Changes/Verification/Tests/Documentation/Remaining Issues)に従って報告すること。
 
@@ -1290,6 +1410,8 @@ dev = [
 
 `docs/quality/definition-of-done.md` の全項目に従う。特に本計画に関連して次を強調する。
 
-- Security節: Authentication(Unit 3), Authorization(Unit 4), Secret Management(Unit 2, 7), Injection(該当なし想定だが確認), Information Disclosure(セッションCookie・ライセンスファイル・サービスアカウントキーをログ・エラーメッセージへ出さないこと)。
-- Regression節: 「既存の`require_owner`を前提にしていたテストが置き換え後も全て成功する」(Unit 4)、「DB migrationの安全性(upgrade/downgrade往復)」(Unit 5, `docs/plans/ci-quality-gate-hardening.md`の既存チェックがそのまま対象に含める)。
+- Security節: Authentication(Unit 3、セッション強制失効を含む3.9)、Authorization(Unit 4、trading_halt管理APIを含む4.4)、Secret Management(Unit 2, 7)、Injection(該当なし想定だが確認)、Information Disclosure(セッションCookie・ライセンスファイルをログ・エラーメッセージへ出さないこと)。
+- Regression節: 「既存の`require_owner`を前提にしていたテストが置き換え後も全て成功する」(Unit 4)、「DB migrationの安全性(upgrade/downgrade往復)」(Unit 3.9の`session_revocation`、`docs/plans/ci-quality-gate-hardening.md`の既存チェックがそのまま対象に含める)。
 - 実行できなかった検証項目(外部IdPとの実結合、実AWS環境、実タグでのrelease.yml実行)は`NOT VERIFIED`として明示し、理由を書く。未実行項目を成功扱いにしない。
+- **（2026-09-21改訂 #5）Unit 8完了報告では、ロードマップの完了条件「通知の重複、欠落、再送をOutboxから追跡できる」を「未達（基盤のみ）」と明記すること。**「実装した」ことと「完了条件を満たした」ことを混同しない、というDoDの原則そのものの適用。
+- **（2026-09-21改訂 #4）グループC(Unit 6, 10)の完了報告では、0.2bの法務確認ゲートの充足状況（完了/未完了のまま利用者がリスクを受容して着手/該当なし）を明記すること。**

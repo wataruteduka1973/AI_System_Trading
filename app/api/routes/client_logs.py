@@ -13,17 +13,18 @@ from typing import Annotated
 import structlog
 from fastapi import APIRouter, Depends, status
 
+from app.models.workspace import AppUser
 from app.schemas.client_logs import ClientLogEntry
-from app.security.auth import require_owner
+from app.security.rbac import require_authenticated_user
 
 router = APIRouter()
-Owner = Annotated[str, Depends(require_owner)]
+AnyAuthenticatedUser = Annotated[AppUser, Depends(require_authenticated_user)]
 
 client_logger = structlog.get_logger("app.client")
 
 
 @router.post("/client-logs", status_code=status.HTTP_202_ACCEPTED, tags=["observability"])
-def report_client_log(entry: ClientLogEntry, _owner: Owner) -> dict[str, str]:
+def report_client_log(entry: ClientLogEntry, _current_user: AnyAuthenticatedUser) -> dict[str, str]:
     client_logger.error(
         "frontend_error",
         message=entry.message,

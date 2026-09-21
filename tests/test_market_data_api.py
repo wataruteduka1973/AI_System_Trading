@@ -9,9 +9,9 @@ from app.db.session import get_db
 from app.main import app
 from app.market_data.application import use_cases as market_data_application
 from app.models.market_data import BackfillJob, Candle, MarketDataSubscription
-from app.models.workspace import Workspace
+from app.models.workspace import AppUser, Workspace
 from app.schemas.market_data import MarketDataCollectionUpdate
-from app.security.auth import require_owner
+from app.security.rbac import require_operator_role, require_viewer_role
 from app.services.market_data import MarketDataAccessError
 from fastapi.testclient import TestClient
 from sqlalchemy.dialects import postgresql
@@ -183,9 +183,15 @@ def test_subscription_read_exposes_blocked_reason_and_retry_status() -> None:
     assert body["next_run_at"] == "2026-09-16T03:02:00Z"
 
 
+_TEST_USER = AppUser(
+    id=uuid4(), email="test@example.com", display_name="Test User", status="active"
+)
+
+
 def _override_database(session: MagicMock) -> None:
     app.dependency_overrides[get_db] = lambda: session
-    app.dependency_overrides[require_owner] = lambda: "test-owner"
+    app.dependency_overrides[require_viewer_role] = lambda: _TEST_USER
+    app.dependency_overrides[require_operator_role] = lambda: _TEST_USER
 
 
 def _candle(instrument_id, open_time: datetime, close: str) -> Candle:

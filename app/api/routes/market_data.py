@@ -15,6 +15,7 @@ from app.market_data.application import stream_tickets as stream_ticket_applicat
 from app.market_data.application import use_cases as market_data_application
 from app.market_data.infrastructure.page_access import PageAccess
 from app.models.market_data import BackfillJob, Candle, MarketDataSubscription
+from app.models.workspace import AppUser
 from app.schemas.market_data import (
     BackfillJobRead,
     CandleBackfillCreate,
@@ -27,13 +28,14 @@ from app.schemas.market_data import (
     MarketStreamTicketRead,
     Timeframe,
 )
-from app.security.auth import require_owner
+from app.security.rbac import require_operator_role, require_viewer_role
 from app.services.market_data import CandleIngestionService, MarketDataAccessError
 from app.services.secrets import get_secret_store
 
 router = APIRouter()
 DatabaseSession = Annotated[Session, Depends(get_db)]
-Owner = Annotated[str, Depends(require_owner)]
+Viewer = Annotated[AppUser, Depends(require_viewer_role)]
+Operator = Annotated[AppUser, Depends(require_operator_role)]
 
 
 def _validate_collection_configuration(
@@ -87,7 +89,7 @@ def create_candle_backfill(
     workspace_id: UUID,
     payload: CandleBackfillCreate,
     db: DatabaseSession,
-    _: Owner,
+    _: Operator,
 ) -> BackfillJob:
     with _application_errors():
         job = market_data_application.enqueue_backfill(
@@ -109,7 +111,7 @@ def create_candle_backfill(
 def list_candle_backfills(
     workspace_id: UUID,
     db: DatabaseSession,
-    _: Owner,
+    _: Viewer,
     instrument_id: UUID | None = None,
     timeframe: Timeframe | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
@@ -132,7 +134,7 @@ def list_candles(
     workspace_id: UUID,
     instrument_id: UUID,
     db: DatabaseSession,
-    _: Owner,
+    _: Viewer,
     timeframe: Timeframe = "1m",
     limit: Annotated[int, Query(ge=1, le=500)] = 500,
     before: datetime | None = None,
@@ -166,7 +168,7 @@ def get_candle_coverage(
     workspace_id: UUID,
     instrument_id: UUID,
     db: DatabaseSession,
-    _: Owner,
+    _: Viewer,
     timeframe: Timeframe = "1m",
     requested_from: datetime | None = None,
     requested_to: datetime | None = None,
@@ -187,7 +189,7 @@ def update_market_data_subscription(
     workspace_id: UUID,
     payload: MarketDataSubscriptionUpdate,
     db: DatabaseSession,
-    _: Owner,
+    _: Operator,
 ) -> MarketDataSubscription:
     with _application_errors():
         return market_data_application.update_subscriptions(
@@ -209,7 +211,7 @@ def update_all_market_data_subscriptions(
     workspace_id: UUID,
     payload: MarketDataCollectionUpdate,
     db: DatabaseSession,
-    _: Owner,
+    _: Operator,
 ) -> list[MarketDataSubscription]:
     with _application_errors():
         return market_data_application.update_subscriptions(
@@ -227,7 +229,7 @@ def update_all_market_data_subscriptions(
     tags=["market-data"],
 )
 def list_market_data_subscriptions(
-    workspace_id: UUID, db: DatabaseSession, _: Owner
+    workspace_id: UUID, db: DatabaseSession, _: Viewer
 ) -> list[MarketDataSubscription]:
     _require_workspace(db, workspace_id)
     return list(
@@ -259,7 +261,7 @@ def create_market_stream_ticket(
     workspace_id: UUID,
     payload: MarketStreamTicketCreate,
     db: DatabaseSession,
-    _: Owner,
+    _: Viewer,
 ) -> MarketStreamTicketRead:
     """Issue a short-lived, one-time ticket authorizing a single WebSocket
     market-stream connection. See docs/design/modules/realtime-market-data-
