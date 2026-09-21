@@ -88,7 +88,7 @@ from app.models.trading import (
     TradingAccount,
     TradingPosition,
 )
-from app.trading.application import trading_halt
+from app.trading.application import order_flow, trading_halt
 from app.trading.application.account_valuation import compute_equity
 
 CONSERVATIVE_V1_RULES: dict[str, object] = {
@@ -313,6 +313,13 @@ class RiskState:
     equity: Decimal
     existing_open_risk: Decimal
     has_open_position: bool
+    existing_position_quantity: Decimal
+    """0 unless there is an open position on this instrument (Binance-only in
+    practice -- see `evaluate_signal`'s Binance-only fetch below). /code-review
+    finding: the `binance_btc_holding_cap` check used to compare only the
+    *new* order's notional against the cap, so an existing 20%-of-equity BTC
+    position plus a fresh 10% buy (each individually within the 25% cap) could
+    push total holdings to 30% without either check ever seeing the other."""
     day_start_equity: Decimal | None
     week_start_equity: Decimal | None
     peak_equity: Decimal | None
@@ -526,9 +533,18 @@ def _evaluate_conservative_v1(state: RiskState) -> PureRiskResult:
         else:
             results["binance_no_short"] = {"passed": True}
         btc_cap = state.equity * _decimal(rules["binance"], "btc_holding_cap_pct_of_equity")
-        prospective_notional = quantity * state.market_price
+        # /code-review finding: combine with the position already held, not just
+        # this order's own quantity -- a buy grows the holding, a sell shrinks it.
+        if state.signal_action == "buy":
+            prospective_position_quantity = state.existing_position_quantity + quantity
+        else:
+            prospective_position_quantity = max(
+                Decimal(0), state.existing_position_quantity - quantity
+            )
+        prospective_notional = prospective_position_quantity * state.market_price
         results["binance_btc_holding_cap"] = {
             "passed": prospective_notional <= btc_cap,
+            "existing_position_quantity": str(state.existing_position_quantity),
             "prospective_notional": str(prospective_notional),
             "cap": str(btc_cap),
         }
@@ -592,12 +608,10 @@ def evaluate_signal(
 
     spread = _spread(db, exchange_code, instrument.id)
     stop_distance = _stop_distance(exchange_code, instrument, candles, spread, rules)
-    expected_slippage = spread * (
-        Decimal("0.5")
-        if exchange_code == "oanda"
-        else Decimal("1.0")
-        if exchange_code == "binance"
-        else Decimal(0)
+    # /code-review finding: use order_flow.py's shared coefficient table instead of
+    # a second hardcoded copy of the same two numbers (see its docstring).
+    expected_slippage = spread * order_flow.SLIPPAGE_COEFFICIENT_BY_EXCHANGE.get(
+        exchange_code, Decimal(0)
     )
     fee_buffer = _fee_buffer_per_unit(exchange_code, market_price, rules)
 
@@ -632,8 +646,14 @@ def evaluate_signal(
     # Matches the original code's query count exactly: `_open_position` was only
     # ever queried a second time (on top of `_existing_open_risk`'s own internal
     # call) for Binance's no-short re-check, so only fetch it here for Binance too.
-    has_open_position = (
-        _open_position(db, account, instrument) is not None if exchange_code == "binance" else False
+    # Also used for `existing_position_quantity` below (/code-review finding on
+    # the BTC holding cap) -- same row, no extra query for that.
+    binance_position = (
+        _open_position(db, account, instrument) if exchange_code == "binance" else None
+    )
+    has_open_position = binance_position is not None
+    existing_position_quantity = (
+        binance_position.quantity if binance_position is not None else Decimal(0)
     )
 
     state = RiskState(
@@ -651,6 +671,7 @@ def evaluate_signal(
         equity=equity,
         existing_open_risk=existing_open_risk,
         has_open_position=has_open_position,
+        existing_position_quantity=existing_position_quantity,
         day_start_equity=day_start_equity,
         week_start_equity=week_start_equity,
         peak_equity=peak_equity,

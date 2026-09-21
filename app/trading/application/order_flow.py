@@ -441,15 +441,22 @@ def _exchange_code_for_account(db: Session, account: TradingAccount) -> str:
     return exchange_code
 
 
-_SLIPPAGE_COEFFICIENT_BY_EXCHANGE = {"oanda": Decimal("0.5")}
-"""Draft, unapproved coefficient from 08_取引アルゴリズムとリスク初期値.md§5.1
-(2026-09-19). Binance is intentionally absent: no bid/ask source exists for it yet
-(TODO(binance-spread), see module docstring), so `_expected_slippage` always falls
-back to 0 for it."""
+SLIPPAGE_COEFFICIENT_BY_EXCHANGE = {"oanda": Decimal("0.5"), "binance": Decimal("1.0")}
+"""Draft, unapproved coefficients from 08_取引アルゴリズムとリスク初期値.md§5.1
+(2026-09-19). Public (not `_`-prefixed) and shared with `risk_gate.py` and
+`backtest_replay.py` -- /code-review finding: those two modules previously
+hardcoded their own copies of these same two numbers inline, and could silently
+drift out of sync with this module and each other. Binance's `1.0` entry does
+not currently change `_expected_slippage`'s behavior below: no bid/ask source
+exists for Binance yet (TODO(binance-spread), see module docstring), so it
+still degrades to 0 there regardless of this dict's value -- absence of spread
+*data*, not the coefficient, is what makes Binance 0 today. The moment a
+Binance spread source exists, this coefficient applies consistently everywhere
+without another find-and-replace across three files."""
 
 
 def _expected_slippage(db: Session, exchange_code: str, instrument_id: UUID) -> Decimal:
-    coefficient = _SLIPPAGE_COEFFICIENT_BY_EXCHANGE.get(exchange_code)
+    coefficient = SLIPPAGE_COEFFICIENT_BY_EXCHANGE.get(exchange_code)
     if coefficient is None:
         return Decimal(0)
     spread_row = db.get(InstrumentSpread, instrument_id)

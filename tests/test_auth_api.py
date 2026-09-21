@@ -70,6 +70,24 @@ def test_login_redirects_to_the_authorization_url_and_sets_the_state_cookie(
     assert "oidc_state" in response.cookies
 
 
+def test_login_returns_502_when_the_idp_is_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression test (/code-review finding): a raw httpx failure talking to
+    the IdP's discovery endpoint used to propagate uncaught out of `login()`,
+    surfacing as an unstructured 500 instead of a handled error."""
+    _configure_oidc(monkeypatch)
+
+    async def _unreachable(issuer: str) -> oidc.DiscoveryDocument:
+        raise oidc.OidcError(
+            "discovery_unavailable", "Could not reach the IdP's discovery endpoint"
+        )
+
+    monkeypatch.setattr(auth_routes.oidc, "fetch_discovery_document", _unreachable)
+
+    response = client.get("/api/v1/auth/login")
+
+    assert response.status_code == 502
+
+
 # ---- /auth/callback ----
 
 
@@ -125,6 +143,38 @@ def test_callback_returns_401_when_the_idp_rejects_token_exchange(
     )
 
     assert response.status_code == 401
+
+
+def test_callback_returns_502_when_the_token_endpoint_is_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression test (/code-review finding), distinct from the 401 case
+    above: a raw connection failure talking to the IdP is not the same thing
+    as the IdP responding and rejecting the code, so it gets a different
+    status (502, matching connections.py's own upstream-communication-failed
+    convention)."""
+    _configure_oidc(monkeypatch)
+    monkeypatch.setattr(
+        auth_routes.oidc,
+        "verify_pending_login",
+        lambda token, *, secret: oidc.PendingLogin(state="s", code_verifier="v", nonce="n"),
+    )
+    monkeypatch.setattr(auth_routes.oidc, "fetch_discovery_document", _fake_discovery)
+
+    async def _unreachable_exchange(*args: object, **kwargs: object) -> dict[str, str]:
+        raise oidc.OidcError(
+            "token_exchange_unavailable", "Could not reach the IdP's token endpoint"
+        )
+
+    monkeypatch.setattr(auth_routes.oidc, "exchange_code_for_tokens", _unreachable_exchange)
+
+    response = client.get(
+        "/api/v1/auth/callback",
+        params={"code": "auth-code", "state": "s"},
+        cookies={"oidc_state": "whatever"},
+    )
+
+    assert response.status_code == 502
 
 
 def test_callback_returns_401_for_an_invalid_id_token(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -190,6 +240,58 @@ def test_callback_returns_403_for_a_disabled_user(monkeypatch: pytest.MonkeyPatc
         app.dependency_overrides.clear()
 
     assert response.status_code == 403
+
+
+def test_callback_rejects_a_disabled_user_found_via_the_email_match_branch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression test (/code-review finding): `_resolve_or_create_app_user`'s
+    email-match branch (reached when the IdP's `sub` doesn't match any stored
+    `oidc_subject` -- e.g. it changed, or this is genuinely a different login
+    attempt for the same email) used to unconditionally overwrite
+    `status="active"`, silently reactivating a disabled account before the
+    caller's own disabled check ran. `db.scalar` is a two-call sequence here:
+    the oidc_subject lookup (miss) then the email lookup (hit, disabled)."""
+    _configure_oidc(monkeypatch)
+    monkeypatch.setattr(
+        auth_routes.oidc,
+        "verify_pending_login",
+        lambda token, *, secret: oidc.PendingLogin(state="s", code_verifier="v", nonce="n"),
+    )
+    monkeypatch.setattr(auth_routes.oidc, "fetch_discovery_document", _fake_discovery)
+
+    async def _exchange(*args: object, **kwargs: object) -> dict[str, str]:
+        return {"id_token": "opaque-token"}
+
+    monkeypatch.setattr(auth_routes.oidc, "exchange_code_for_tokens", _exchange)
+    monkeypatch.setattr(
+        auth_routes.oidc,
+        "verify_id_token",
+        lambda *a, **k: {"sub": "new-subject", "email": "disabled@example.com", "name": "D"},
+    )
+
+    disabled_user = AppUser(
+        id=uuid4(),
+        email="disabled@example.com",
+        display_name="Disabled",
+        status="disabled",
+        oidc_subject="old-subject",
+    )
+    session = MagicMock()
+    session.scalar.side_effect = [None, disabled_user]  # subject miss, then email hit
+    app.dependency_overrides[get_db] = lambda: session
+    try:
+        response = client.get(
+            "/api/v1/auth/callback",
+            params={"code": "auth-code", "state": "s"},
+            cookies={"oidc_state": "whatever"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 403
+    assert disabled_user.status == "disabled"  # not silently reactivated
+    assert disabled_user.oidc_subject == "old-subject"  # not relinked either
 
 
 def test_callback_succeeds_for_an_existing_user_and_sets_the_session_cookie(

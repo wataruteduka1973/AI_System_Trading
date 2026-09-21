@@ -34,15 +34,24 @@ export function useWorkspaces(
   }))
 
   useEffect(() => {
-    if (memberships.length === 0) return
     // Deferred by one tick (mirrors useMarketData.ts's own initial-load
     // effect): calling setState synchronously in an effect body triggers
-    // an avoidable extra render, so the auto-select decision and the
-    // setState calls it makes both happen inside this callback instead.
+    // an avoidable extra render, so every setState call below (including the
+    // empty/not-found error cases -- /code-review finding: these used to
+    // return before ever leaving the initial "Workspaceを読み込んでいます。"
+    // message, so a memberless user or an invalid deep link froze on a
+    // loading state forever with no error and no way out) happens inside
+    // this callback instead.
     const timer = window.setTimeout(() => {
+      if (memberships.length === 0) {
+        appliedRouteWorkspaceId.current = null
+        setSelectedWorkspaceId('')
+        setWorkspaceMessage('利用できるWorkspaceがありません。')
+        return
+      }
       if (routeWorkspaceId && routeWorkspaceId !== appliedRouteWorkspaceId.current) {
-        const routedMembership = memberships.some((m) => m.workspace_id === routeWorkspaceId)
         appliedRouteWorkspaceId.current = routeWorkspaceId
+        const routedMembership = memberships.some((m) => m.workspace_id === routeWorkspaceId)
         if (routedMembership) {
           setSelectedWorkspaceId(routeWorkspaceId)
           void onWorkspaceSelectedRef.current(routeWorkspaceId).then((message) => {
@@ -50,6 +59,9 @@ export function useWorkspaces(
           })
           return
         }
+        setSelectedWorkspaceId('')
+        setWorkspaceMessage('指定されたWorkspaceが見つからないか、アクセス権がありません。')
+        return
       }
       if (!routeWorkspaceId) {
         setWorkspaceMessage(`${memberships.length}件のWorkspaceを利用できます。`)

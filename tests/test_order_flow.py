@@ -325,7 +325,12 @@ def test_place_order_sell_closes_position_with_fee_and_realized_pnl() -> None:
         None,
         Decimal("0"),
     ]
-    db.get.return_value = instrument
+    # /code-review fix: binance now has a slippage coefficient too (see
+    # order_flow.SLIPPAGE_COEFFICIENT_BY_EXCHANGE), so _expected_slippage no
+    # longer short-circuits before its own db.get(InstrumentSpread, ...) call
+    # -- a blanket db.get.return_value = instrument would wrongly answer that
+    # lookup with an Instrument object instead of degrading to "no row".
+    db.get.side_effect = lambda model, _id: instrument if model is Instrument else None
     command = flow.PlaceOrderCommand(
         workspace_id=account.workspace_id,
         account_id=account.id,
@@ -359,7 +364,9 @@ def test_place_order_binance_sell_with_no_position_is_not_supported() -> None:
     candle = _candle(Decimal("120"), instrument_id=instrument.id)
     db.scalar.side_effect = [account, "binance", None, candle, None]
     db.scalars.return_value.all.return_value = []  # no active trading_halt
-    db.get.return_value = instrument
+    # See test_place_order_sell_closes_position_with_fee_and_realized_pnl's
+    # comment: binance now queries InstrumentSpread too (/code-review fix).
+    db.get.side_effect = lambda model, _id: instrument if model is Instrument else None
     command = flow.PlaceOrderCommand(
         workspace_id=account.workspace_id,
         account_id=account.id,
@@ -388,7 +395,9 @@ def test_place_order_binance_sell_exceeding_long_position_is_not_supported() -> 
         average_entry_price=Decimal("100"),
     )
     db.scalar.side_effect = [account, "binance", existing_long, candle, existing_long]
-    db.get.return_value = instrument
+    # See test_place_order_sell_closes_position_with_fee_and_realized_pnl's
+    # comment: binance now queries InstrumentSpread too (/code-review fix).
+    db.get.side_effect = lambda model, _id: instrument if model is Instrument else None
     command = flow.PlaceOrderCommand(
         workspace_id=account.workspace_id,
         account_id=account.id,
@@ -707,10 +716,31 @@ def test_expected_slippage_oanda_falls_back_to_zero_when_no_spread_row() -> None
     assert flow._expected_slippage(db, "oanda", uuid4()) == Decimal("0")
 
 
-def test_expected_slippage_binance_is_always_zero_without_a_db_lookup() -> None:
+def test_expected_slippage_binance_falls_back_to_zero_without_a_spread_row() -> None:
+    """/code-review fix: `SLIPPAGE_COEFFICIENT_BY_EXCHANGE` now has a binance
+    entry (unified with risk_gate.py/backtest_replay.py, which already
+    assumed 1.0), so this no longer short-circuits before any DB lookup the
+    way it used to -- it degrades to 0 for the same reason OANDA does when no
+    `InstrumentSpread` row exists, which is still true for Binance today (no
+    code streams one yet, see module docstring's TODO(binance-spread))."""
     db = MagicMock()
+    db.get.return_value = None
     assert flow._expected_slippage(db, "binance", uuid4()) == Decimal("0")
-    db.get.assert_not_called()
+
+
+def test_expected_slippage_binance_uses_persisted_spread_once_one_exists() -> None:
+    """Confirms the unified coefficient actually applies the moment a Binance
+    `InstrumentSpread` row exists -- forward-looking coverage for whenever
+    TODO(binance-spread) is implemented, and a direct check that this
+    module's own value now matches what risk_gate.py/backtest_replay.py
+    already assumed."""
+    db = MagicMock()
+    instrument_id = uuid4()
+    db.get.return_value = InstrumentSpread(
+        instrument_id=instrument_id, bid=Decimal("29999"), ask=Decimal("30001")
+    )
+    result = flow._expected_slippage(db, "binance", instrument_id)
+    assert result == Decimal("2")  # (30001 - 29999) * 1.0
 
 
 def test_place_order_buy_applies_oanda_spread_to_fill_price() -> None:

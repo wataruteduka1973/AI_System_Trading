@@ -191,6 +191,7 @@ def _state(**overrides: object) -> gate.RiskState:
         equity=Decimal("1000000"),
         existing_open_risk=Decimal(0),
         has_open_position=False,
+        existing_position_quantity=Decimal(0),
         day_start_equity=None,
         week_start_equity=None,
         peak_equity=None,
@@ -236,6 +237,37 @@ def test_evaluate_conservative_v1_allows_binance_sell_that_closes_a_position() -
         _state(exchange_code="binance", signal_action="sell", has_open_position=True)
     )
     assert result.rule_results["binance_no_short"]["passed"] is True
+
+
+def test_evaluate_conservative_v1_binance_btc_cap_includes_existing_position() -> None:
+    """Regression test (/code-review finding): the BTC holding cap check used to
+    compare only the *new* order's notional against the cap, ignoring any BTC
+    already held -- an existing position plus a within-limits new order could
+    together breach the cap without either individually tripping it (e.g. an
+    existing 20%-of-equity holding plus a fresh 10% buy, each fine alone, would
+    total 30% against a 25% cap). Here: equity=1,000,000, market_price=150 ->
+    the default state's own risk sizing approves a 500-unit (75,000 notional)
+    buy; adding an existing 1,400-unit (210,000 notional) position brings the
+    total to 285,000, over the 25% (250,000) cap."""
+    result = gate._evaluate_conservative_v1(
+        _state(exchange_code="binance", existing_position_quantity=Decimal("1400"))
+    )
+    assert result.outcome == "deny"
+    assert result.rule_results["binance_btc_holding_cap"]["passed"] is False
+
+
+def test_evaluate_conservative_v1_binance_btc_cap_lets_a_sell_reduce_holdings() -> None:
+    """A sell should never itself be blocked by the cap it is shrinking
+    exposure towards -- confirms the fix's buy/sell direction handling."""
+    result = gate._evaluate_conservative_v1(
+        _state(
+            exchange_code="binance",
+            signal_action="sell",
+            has_open_position=True,
+            existing_position_quantity=Decimal("1400"),
+        )
+    )
+    assert result.rule_results["binance_btc_holding_cap"]["passed"] is True
 
 
 def test_evaluate_conservative_v1_adjusts_quantity_down_to_broker_limit() -> None:
