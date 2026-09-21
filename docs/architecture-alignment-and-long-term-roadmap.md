@@ -330,6 +330,21 @@ Horizon 6着手前の縮小スコープ(Horizon4-lite)としての先行着手�
 
 ### Horizon 5: 認証・監査・配布運用の完成（並行着手、9〜13か月）
 
+状態: `[~]` グループA（Unit 1/3/4、認証基盤とRBAC）を実装済み。詳細仕様・実装順序は
+`plans/horizon5-implementation-plan.md`を正とする。グループB〜E（Event Log/Outbox、
+ライセンス機構、CI/CD release gate等）は未着手。
+
+2026-09-21: OIDC Authorization Code + PKCE（外部IdP接続のみ。自己完結型IdPは
+`plans/horizon5-implementation-plan.md` §0.3のスコープ外注記のとおり対象外）による
+ログイン、セッションJWT（`app/security/session.py`）、`user_membership`を用いた
+Owner/Operator/ViewerのRBACを全26APIエンドポイントへ適用した
+（System Workerロールは未実装。本節末尾の完了条件注記のとおりHorizon5の完了条件には
+含まれない）。`DEV_OWNER_TOKEN`固定トークン機構（`app/security/auth.py`）は削除し、
+完全にOIDCセッションへ置き換えた。既存frontend（`frontend/src/features/`配下）は
+旧`X-Owner-Token`ヘッダー方式のままで、この変更により実行時に認証が通らなくなる
+（TypeScriptビルド自体は成功するため`npm run build`では検出できない）。frontend側の
+OIDCログイン対応は本グループのUnitに含まれておらず、別タスクとして扱う必要がある。
+
 開始条件の充足状況、配布モデルの決定（セルフホスト型ソフトウェア販売への一本化、
 マルチテナントSaaS仲介モデルは取引所ToS上のリスクにより不採用）、および
 本節の実装・整備項目の再構成は`decisions/0005-horizon5-self-hosted-distribution.md`を、
@@ -349,9 +364,13 @@ Horizon4-lite完了後に本格着手）を参照。
 ADR 0005によりroadmap原文の前提（運営者が本番環境を運用する）が変わったため、
 以下は`plans/horizon5-distribution-and-auth.md`の内容で読み替える。
 
-- OIDC Authorization Code + PKCEへ移行する（自己完結型IdPと外部IdP接続の両対応）
-- Owner/Operator/Viewer/System WorkerのRBACを全APIへ適用する（`user_membership`は
+- `[~]` OIDC Authorization Code + PKCEへ移行する（自己完結型IdPと外部IdP接続の両対応）
+  （外部IdP接続のみ実装済み。自己完結型IdPは意図的にスコープ外、
+  `plans/horizon5-implementation-plan.md` §0.3参照）
+- `[~]` Owner/Operator/Viewer/System WorkerのRBACを全APIへ適用する（`user_membership`は
   DBスキーマに既存、ORM未実装。System Workerは別テーブルのサービスアカウントとして新設）
+  （Owner/Operator/Viewerは`app/security/rbac.py`で実装し全26エンドポイントへ適用済み。
+  `user_membership`のORM化も完了。System Workerロールは未実装のまま）
 - ~~本番・検証・開発環境を分離する~~ → 運営者自身のリリースエンジニアリング
   （ビルド・配布パイプライン）の話に限定。顧客の環境分離は顧客の運用判断とする
 - ~~配布環境ではSecret Manager/KMSを使用し、rotation/revocationを運用化する~~ →
