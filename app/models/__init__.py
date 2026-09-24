@@ -1,4 +1,4 @@
-from app.models.audit import AuditLog, SystemEvent
+from app.models.audit import AuditLog, OutboxEvent, SystemEvent
 from app.models.backtest import BacktestRun, BacktestTrade, DatasetSnapshot
 from app.models.connections import (
     AccountSelectionPolicy,
@@ -10,6 +10,7 @@ from app.models.connections import (
 )
 from app.models.instruments import Instrument
 from app.models.market_data import BackfillJob, Candle, MarketDataGap, MarketDataSubscription
+from app.models.notifications import Notification
 from app.models.strategy import (
     BotRun,
     RiskDecision,
@@ -52,7 +53,9 @@ __all__ = [
     "Market",
     "MarketDataGap",
     "MarketDataSubscription",
+    "Notification",
     "OrderIntent",
+    "OutboxEvent",
     "RiskDecision",
     "RiskProfile",
     "RiskProfileVersion",

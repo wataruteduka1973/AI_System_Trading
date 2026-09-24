@@ -69,3 +69,31 @@ class SystemEvent(Base):
     contains_sensitive_data: Mapped[bool] = mapped_column(Boolean, server_default="false")
 
     triggered_halts: Mapped[list["TradingHalt"]] = relationship(back_populates="trigger_event")
+
+
+class OutboxEvent(Base):
+    """Horizon5 Group D / Unit 8 (docs/plans/horizon5-implementation-plan.md).
+    Generic transactional-outbox row: a domain event awaiting publication, not
+    scoped to a workspace or any particular entity type itself -- `aggregate_type`/
+    `aggregate_id` are a polymorphic pointer to whatever the event concerns (a
+    `trading_bot.id`, `trading_account.id`, etc.), matching the DB's own lack of a
+    foreign key on them (same reasoning as `SystemEvent.source_id`/`target_id`
+    above). No domain event producer writes to this table yet -- see
+    `app/notifications/application/deliver_notifications.py`'s module docstring."""
+
+    __tablename__ = "outbox_event"
+    __table_args__ = {"schema": SCHEMA}
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, server_default=func.gen_random_uuid())
+    aggregate_type: Mapped[str] = mapped_column(Text)
+    aggregate_id: Mapped[UUID]
+    event_type: Mapped[str] = mapped_column(Text)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    correlation_id: Mapped[UUID]
+    status: Mapped[str] = mapped_column(Text, server_default="pending")
+    attempts: Mapped[int] = mapped_column(server_default="0")
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
