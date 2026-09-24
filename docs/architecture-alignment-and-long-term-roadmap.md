@@ -377,6 +377,14 @@ GHSA-537c-gmf6-5ccf。証明書チェーン検証・PKCS7復号・静的リン�
 のみで、検出された脆弱性は主にX.509証明書検証・PKCS7復号に関するものだが、修正には
 `>=48.0.1`への更新(現行ピン`>=46,<47`の範囲外)が必要）。
 
+2026-09-25: 上記`cryptography`の脆弱性に対応した。`pyproject.toml`/`requirements.txt`の
+ピンを`>=50.0.1,<51`へ更新した(4件のうちPYSEC-2026-3552の修正版が50.0.0のため、
+`>=48.0.1`ではなく`>=50.0.1`が必要な下限)。`PyJWT[crypto]`(`cryptography>=3.4.0`)・
+`psycopg`・`pwdlib[argon2]`はいずれも`cryptography`に独自の上限制約を持たないことを
+確認済み。`python -m pip_audit`で脆弱性が解消したことを確認し、`ruff`/`mypy`/`pytest`
+(479件)全て成功。Fernet(`app/services/secrets.py`)のみを使う狭い利用範囲のため、
+API互換性への影響は無かった。
+
 開始条件の充足状況、配布モデルの決定（セルフホスト型ソフトウェア販売への一本化、
 マルチテナントSaaS仲介モデルは取引所ToS上のリスクにより不採用）、および
 本節の実装・整備項目の再構成は`decisions/0005-horizon5-self-hosted-distribution.md`を、
@@ -415,8 +423,8 @@ ADR 0005によりroadmap原文の前提（運営者が本番環境を運用す�
   運営者によるSLO保証ではなく、顧客向けの手順書提供に変更する
 - `[x]` dependency、SBOM、secret scan、脆弱性対応をrelease gateへ組み込む
   （secret scanは既存のgitleaks(secret-scanジョブ)。`pip-audit`をbackendジョブへ、
-  SBOM生成(anchore/sbom-action)をrelease.ymlへ追加済み。「脆弱性対応」自体
-  ―既存依存の更新―は本Unitのスコープ外、検出された`cryptography`の件は上記参照）
+  SBOM生成(anchore/sbom-action)をrelease.ymlへ追加済み。導入時に検出された既存依存
+  `cryptography`の脆弱性4件は2026-09-25の別コミットで解消済み、上記参照）
 - （新規）ライセンスキー機構（オフライン検証、署名済みライセンスファイル）を実装する
 
 #### 完了条件

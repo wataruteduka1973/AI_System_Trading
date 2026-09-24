@@ -12,7 +12,7 @@ license = { text = "MIT" }
 authors = [{ name = "wataruteduka1973" }]
 dependencies = [
   "alembic>=1.16,<2",
-  "cryptography>=46,<47",
+  "cryptography>=50.0.1,<51",
   "fastapi>=0.139,<0.142",
   "httpx>=0.28,<1",
   "oandapyV20>=0.7.2,<1",
@@ -27,6 +27,13 @@ dependencies = [
 # httpx moved here from dev (Horizon5 Group A, docs/plans/horizon5-implementation-plan.md
 # Unit 3.3): app/security/oidc.py's discovery/token-exchange calls are now part of the
 # running application, not just test tooling.
+#
+# cryptography's floor is 50.0.1, not just "next available", because that's the lowest
+# version that actually fixes all 4 CVEs `pip-audit` found in 46.0.7 (PYSEC-2026-3552/
+# 3553/3554, GHSA-537c-gmf6-5ccf) -- one of them (PYSEC-2026-3552) is only fixed as of
+# 50.0.0. Verified via `python -m pip_audit` against 50.0.1 before pinning. This
+# project's only use of cryptography is Fernet symmetric encryption
+# (app/services/secrets.py) -- a narrow, stable API untouched by this jump.
 
 [project.optional-dependencies]
 dev = [
