@@ -70,7 +70,7 @@ def list_active_trading_halts(
 
 @router.post("/{halt_id}/release", response_model=TradingHaltRead)
 def release_trading_halt(
-    workspace_id: UUID, halt_id: UUID, db: DatabaseSession, _owner: Owner
+    workspace_id: UUID, halt_id: UUID, db: DatabaseSession, owner: Owner
 ) -> TradingHalt:
     halt = _get_halt(db, workspace_id, halt_id)
     if halt.level == "emergency_stopped":
@@ -93,7 +93,7 @@ def release_trading_halt(
         workspace_id=halt.workspace_id, scope_type=halt.scope_type, scope_id=halt.scope_id
     )
     updated = trading_halt_app.deescalate_one_step(
-        db, scope, reason_code=halt.reason_code, now=datetime.now(UTC)
+        db, scope, reason_code=halt.reason_code, now=datetime.now(UTC), released_by=owner.id
     )
     db.commit()
     assert updated is not None  # _get_halt already confirmed an active row exists

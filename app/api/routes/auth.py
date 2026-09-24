@@ -31,6 +31,20 @@ DatabaseSession = Annotated[Session, Depends(get_db)]
 
 _OIDC_STATE_COOKIE = "oidc_state"
 _SESSION_COOKIE = "session"
+_UPSTREAM_UNAVAILABLE_CODES = {"discovery_unavailable", "token_exchange_unavailable"}
+"""`oidc.OidcError.code` values that mean "could not reach the IdP" rather than
+"the IdP responded and rejected the request" -- these map to 502 (matching
+connections.py's `communication_failed` -> 502 convention) instead of the
+401/503 this module uses for the latter."""
+
+
+def _raise_for_oidc_error(exc: oidc.OidcError) -> HTTPException:
+    status_code = (
+        status.HTTP_502_BAD_GATEWAY
+        if exc.code in _UPSTREAM_UNAVAILABLE_CODES
+        else status.HTTP_401_UNAUTHORIZED
+    )
+    return HTTPException(status_code=status_code, detail=str(exc))
 
 
 @dataclass(frozen=True)
@@ -70,7 +84,10 @@ def _require_oidc_configured() -> _OidcConfig:
 @router.get("/login")
 async def login() -> RedirectResponse:
     config = _require_oidc_configured()
-    discovery = await oidc.fetch_discovery_document(config.issuer)
+    try:
+        discovery = await oidc.fetch_discovery_document(config.issuer)
+    except oidc.OidcError as exc:
+        raise _raise_for_oidc_error(exc) from exc
     pkce = oidc.generate_pkce_pair()
     state = oidc.generate_state()
     nonce = oidc.generate_state()
@@ -116,8 +133,8 @@ async def callback(
     if pending.state != state:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="State mismatch")
 
-    discovery = await oidc.fetch_discovery_document(config.issuer)
     try:
+        discovery = await oidc.fetch_discovery_document(config.issuer)
         tokens = await oidc.exchange_code_for_tokens(
             discovery.token_endpoint,
             code=code,
@@ -135,7 +152,7 @@ async def callback(
             nonce=pending.nonce,
         )
     except oidc.OidcError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+        raise _raise_for_oidc_error(exc) from exc
 
     try:
         oidc_subject = str(claims["sub"])
@@ -179,6 +196,14 @@ def _resolve_or_create_app_user(
         return user
     user = db.scalar(select(AppUser).where(AppUser.email == email))
     if user is not None:
+        # /code-review finding (correctness): this branch used to unconditionally
+        # set status="active", which silently reactivated a disabled account the
+        # moment its email matched an OIDC login (the caller's own disabled check
+        # runs *after* this function returns, so it always passed since status was
+        # already overwritten). A disabled user is left untouched here -- the
+        # caller's `user.status == "disabled"` check then correctly rejects them.
+        if user.status == "disabled":
+            return user
         # Invited via email (status="invited"); first successful login links
         # the OIDC subject and activates the account.
         user.oidc_subject = oidc_subject
@@ -245,10 +270,36 @@ def revoke_user_sessions(
     """Owner-initiated forced revocation of another user's sessions (e.g. a
     suspected credential leak -- see trading_halt's "APIキー漏えい疑い" cause,
     which this endpoint exists to give a human response to on the auth
-    side)."""
+    side).
+
+    `require_any_workspace_owner` only proves `current_user` owns *some*
+    workspace -- with self-service workspace creation (any authenticated user
+    can create one and becomes its Owner), that is trivially true for every
+    user, not just real administrators. Without the shared-workspace check
+    below this was an IDOR: anyone could create a throwaway workspace to
+    become an Owner of *something*, then force-revoke an unrelated user's
+    sessions (/code-review finding)."""
     target = db.get(AppUser, user_id)
     if target is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    shares_an_owned_workspace = db.scalar(
+        select(UserMembership.workspace_id)
+        .where(UserMembership.user_id == user_id)
+        .where(
+            UserMembership.workspace_id.in_(
+                select(UserMembership.workspace_id).where(
+                    UserMembership.user_id == current_user.id,
+                    UserMembership.role == "owner",
+                )
+            )
+        )
+        .limit(1)
+    )
+    if shares_an_owned_workspace is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Target user is not a member of a workspace you own",
+        )
     revoke_sessions(db, user_id=user_id, revoked_by=current_user.id)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

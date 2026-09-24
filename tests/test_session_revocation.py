@@ -65,6 +65,11 @@ def test_revoke_user_sessions_succeeds_for_an_owner() -> None:
     target_user = AppUser(id=uuid4(), email="b@example.com", display_name="B", status="active")
     session = MagicMock()
     session.get.return_value = target_user
+    # The shared-workspace-membership query (see the route's own IDOR-fix
+    # comment) -- an unconfigured MagicMock().scalar() would return a truthy
+    # MagicMock by default regardless of this check's real logic, so this must
+    # be set explicitly or the test passes for the wrong reason.
+    session.scalar.return_value = uuid4()  # a workspace_id both users share
     _override_database(session, as_owner=True)
     try:
         response = client.post(f"/api/v1/auth/users/{target_user.id}/revoke-sessions")
@@ -72,6 +77,24 @@ def test_revoke_user_sessions_succeeds_for_an_owner() -> None:
         app.dependency_overrides.clear()
 
     assert response.status_code == 204
+
+
+def test_revoke_user_sessions_rejects_an_unrelated_workspace_owner() -> None:
+    """Regression test (/code-review IDOR finding): being an Owner of *some*
+    workspace is not enough -- with self-service workspace creation, that is
+    trivially true of every user. The target must actually be a member of a
+    workspace the caller owns."""
+    target_user = AppUser(id=uuid4(), email="b@example.com", display_name="B", status="active")
+    session = MagicMock()
+    session.get.return_value = target_user
+    session.scalar.return_value = None  # no workspace shared with the target
+    _override_database(session, as_owner=True)
+    try:
+        response = client.post(f"/api/v1/auth/users/{target_user.id}/revoke-sessions")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 403
 
 
 def test_revoke_user_sessions_returns_404_for_an_unknown_user() -> None:

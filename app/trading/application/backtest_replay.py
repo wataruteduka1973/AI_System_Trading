@@ -80,10 +80,21 @@ from app.exchanges.types import TIMEFRAME_SECONDS
 from app.models.instruments import Instrument
 from app.models.market_data import Candle
 from app.trading.application import backtest_fill as fill_sim
-from app.trading.application import risk_gate
+from app.trading.application import order_flow, risk_gate
 from app.trading.application.dummy_signal import DummySignalAction, generate_dummy_signal
 
 BacktestSignalGenerator = Callable[[Sequence[Candle]], DummySignalAction]
+
+_HISTORY_WINDOW = risk_gate._ATR_HISTORY_CANDLES
+"""Bound on how much of `candles` `run_replay` hands a bar's `signal_generator`
+(and, downstream, the ATR calculation) -- /code-review finding: `history =
+candles[:i+1]` used to copy a growing, unbounded prefix on every one of an N-bar
+run's iterations (O(N^2) total). 100 matches `risk_gate._ATR_HISTORY_CANDLES`,
+the largest lookback any current consumer needs (`generate_dummy_signal`'s
+default `period` is 5). A custom `signal_generator` that needs a longer lookback
+than this is not supported by `run_replay` today -- raise this constant (not
+just the call-site slice) if one is added, since the ATR window below relies on
+the same bound."""
 
 
 @dataclass(frozen=True)
@@ -138,13 +149,12 @@ def _unrealized_pnl(position: fill_sim.BacktestPosition | None, price: Decimal) 
 
 
 def _expected_slippage(exchange_code: str, spread: Decimal) -> Decimal:
-    """Mirrors `risk_gate.evaluate_signal`'s inline formula -- see module
-    docstring's "Spread/slippage approximation" note."""
-    if exchange_code == "oanda":
-        return spread * Decimal("0.5")
-    if exchange_code == "binance":
-        return spread * Decimal("1.0")
-    return Decimal(0)
+    """Mirrors `risk_gate.evaluate_signal`'s formula -- see module docstring's
+    "Spread/slippage approximation" note. Both now read the same shared
+    `order_flow.SLIPPAGE_COEFFICIENT_BY_EXCHANGE` table (/code-review finding:
+    this function and risk_gate.py previously hardcoded their own copies of
+    these two numbers, which could silently drift apart)."""
+    return spread * order_flow.SLIPPAGE_COEFFICIENT_BY_EXCHANGE.get(exchange_code, Decimal(0))
 
 
 def _apply_and_record(
@@ -211,9 +221,11 @@ def run_replay(
 ) -> ReplayResult:
     """Replay `candles` (ascending by `open_time`, final bars only -- the caller is
     responsible for that, matching `_recent_final_candles`'s live-path filter) bar by
-    bar. At bar `i`, `signal_generator` only ever sees `candles[: i + 1]` -- this is
-    the look-ahead-bias guarantee: no code path in this function reads `candles[j]`
-    for `j > i` while evaluating bar `i`."""
+    bar. At bar `i`, `signal_generator` only ever sees a bounded window ending at
+    `candles[i]` (see `_HISTORY_WINDOW` below) -- no code path in this function reads
+    `candles[j]` for `j > i` while evaluating bar `i`, so the look-ahead-bias
+    guarantee still holds; it just no longer hands out the full, ever-growing prefix
+    to get there."""
     if not candles:
         return ReplayResult(
             trades=[], ending_equity=initial_equity, ending_position=None, equity_curve=[]
@@ -225,7 +237,7 @@ def run_replay(
 
     for i, candle in enumerate(candles):
         now = candle.close_time
-        history = candles[: i + 1]
+        history = candles[max(0, i + 1 - _HISTORY_WINDOW) : i + 1]
 
         mark_to_market_equity = state.cash_equity + _unrealized_pnl(state.position, candle.close)
         state.equity_curve.append((now, mark_to_market_equity))
@@ -294,6 +306,9 @@ def run_replay(
             equity=mark_to_market_equity,
             existing_open_risk=existing_open_risk,
             has_open_position=state.position is not None,
+            existing_position_quantity=(
+                state.position.quantity if state.position is not None else Decimal(0)
+            ),
             day_start_equity=state.day_start_equity,
             week_start_equity=state.week_start_equity,
             peak_equity=state.peak_equity,

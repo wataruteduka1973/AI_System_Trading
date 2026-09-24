@@ -63,6 +63,20 @@ async def test_fetch_discovery_document_rejects_a_malformed_response() -> None:
     assert exc.value.code == "discovery_malformed"
 
 
+@respx.mock
+@pytest.mark.anyio
+async def test_fetch_discovery_document_wraps_a_connection_failure() -> None:
+    """Regression test (/code-review finding): a raw httpx.ConnectError (or any
+    httpx.HTTPError -- network failure, timeout, non-2xx via raise_for_status)
+    used to propagate uncaught instead of becoming a structured OidcError."""
+    respx.get(f"{ISSUER}/.well-known/openid-configuration").mock(
+        side_effect=httpx.ConnectError("connection refused")
+    )
+    with pytest.raises(oidc.OidcError) as exc:
+        await oidc.fetch_discovery_document(ISSUER)
+    assert exc.value.code == "discovery_unavailable"
+
+
 def test_build_authorization_url_includes_pkce_and_state() -> None:
     discovery = oidc.DiscoveryDocument(
         authorization_endpoint=f"{ISSUER}/authorize",
@@ -126,6 +140,38 @@ async def test_exchange_code_for_tokens_raises_on_idp_rejection() -> None:
             client_secret="secret-1",
         )
     assert exc.value.code == "token_exchange_failed"
+
+
+@respx.mock
+@pytest.mark.anyio
+async def test_exchange_code_for_tokens_wraps_a_connection_failure() -> None:
+    """Regression test (/code-review finding), same as the discovery case above."""
+    respx.post(f"{ISSUER}/token").mock(side_effect=httpx.ConnectTimeout("timed out"))
+    with pytest.raises(oidc.OidcError) as exc:
+        await oidc.exchange_code_for_tokens(
+            f"{ISSUER}/token",
+            code="auth-code",
+            code_verifier="v",
+            redirect_uri="http://localhost/callback",
+            client_id="client-1",
+            client_secret="secret-1",
+        )
+    assert exc.value.code == "token_exchange_unavailable"
+
+
+# ---- verify_id_token's JWKS client cache ----
+
+
+def test_jwks_client_is_cached_per_jwks_uri() -> None:
+    """Regression test (/code-review finding): `verify_id_token` used to build
+    a fresh PyJWKClient on every call, so its own internal JWKS cache never
+    got reused -- every login re-fetched the IdP's full key set."""
+    oidc._jwks_client.cache_clear()
+    first = oidc._jwks_client(f"{ISSUER}/jwks")
+    second = oidc._jwks_client(f"{ISSUER}/jwks")
+    other = oidc._jwks_client("https://other-idp.example.com/jwks")
+    assert first is second
+    assert first is not other
 
 
 # ---- pending login (oidc_state) ----

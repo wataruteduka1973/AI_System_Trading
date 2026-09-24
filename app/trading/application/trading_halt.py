@@ -26,10 +26,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.strategy import TradingHalt
+
+logger = structlog.get_logger(__name__)
 
 _LEVEL_SEVERITY = {
     "warning": 1,
@@ -83,9 +86,33 @@ def activate_or_escalate(
     for `(scope, reason_code)` -- escalate it to `level` only if `level` is *more*
     severe than its current one (05番 決定2: rewrite the same row, never add a
     second one for the same cause). A `level` no more severe than the existing one
-    is a no-op; use `deescalate_one_step` to relax a halt, never this function."""
+    is a no-op; use `deescalate_one_step` to relax a halt, never this function.
+
+    `existing is None` is also, necessarily, the exact moment a *reactivation*
+    would happen: the only way `(scope, reason_code)` can have no active row is
+    that it never had one, or its last one was released. /code-review finding:
+    if that release was a manual `/release` call (`released_by is not None` --
+    see `deescalate_one_step`), creating a fresh halt here silently overrides an
+    Owner's judgment call on the very next signal, with no record of it having
+    happened. This does not suppress the reactivation (the breach is still real
+    and conservative-v1's numbers still apply) -- it logs it, so the override is
+    at least visible after the fact."""
     existing = _find_active_halt(db, scope, reason_code)
     if existing is None:
+        last_release = most_recently_released_halt(db, scope, reason_code)
+        if last_release is not None and last_release.released_by is not None:
+            logger.warning(
+                "trading_halt_reactivated_after_manual_release",
+                workspace_id=str(scope.workspace_id),
+                scope_type=scope.scope_type,
+                scope_id=str(scope.scope_id),
+                reason_code=reason_code,
+                level=level,
+                released_by=str(last_release.released_by),
+                released_at=(
+                    last_release.released_at.isoformat() if last_release.released_at else None
+                ),
+            )
         halt = TradingHalt(
             workspace_id=scope.workspace_id,
             scope_type=scope.scope_type,
@@ -108,7 +135,12 @@ def activate_or_escalate(
 
 
 def deescalate_one_step(
-    db: Session, scope: HaltScope, *, reason_code: str, now: datetime
+    db: Session,
+    scope: HaltScope,
+    *,
+    reason_code: str,
+    now: datetime,
+    released_by: UUID | None = None,
 ) -> TradingHalt | None:
     """Relax an active `(scope, reason_code)` halt by exactly one level (05番 決定
     3/4's two-step safety valve: `all_trading_halted` -> `entry_halted` ->
@@ -117,7 +149,14 @@ def deescalate_one_step(
     re-check any threshold itself -- see module docstring). A no-op (returns the
     untouched row) if the halt is `emergency_stopped`: that level is only ever
     released via `release_emergency_stop`, never stepped down here. Returns `None`
-    if there was no active halt for this `(scope, reason_code)` at all."""
+    if there was no active halt for this `(scope, reason_code)` at all.
+
+    `released_by` (/code-review finding): only relevant when this step happens to
+    be the last one (the halt becomes `released`). Pass the calling Owner's id from
+    `app/api/routes/trading_halts.py`'s manual `/release` endpoint; leave it `None`
+    for `risk_gate._sync_trading_halts`'s automatic recovery calls. This is what
+    lets `most_recently_released_halt` below tell a human override apart from an
+    automatic one."""
     existing = _find_active_halt(db, scope, reason_code)
     if existing is None:
         return None
@@ -128,11 +167,37 @@ def deescalate_one_step(
     if next_level is None:
         existing.status = "released"
         existing.released_at = now
+        existing.released_by = released_by
     else:
         existing.level = next_level
     db.flush()
     db.refresh(existing)
     return existing
+
+
+def most_recently_released_halt(
+    db: Session, scope: HaltScope, reason_code: str
+) -> TradingHalt | None:
+    """The most recent `released` row for `(scope, reason_code)`, if any (/code-review
+    finding: `_sync_trading_halts` used to re-activate a halt the moment its breach
+    condition was still true on the next signal, even seconds after an Owner had just
+    manually released it via `/release` -- silently undoing the override with no
+    record. Callers use this to at least log that a reactivation follows a manual
+    release; see `risk_gate._sync_trading_halts`). `released_by is not None` on the
+    result means that release was a manual `/release` call, not an automatic
+    `deescalate_one_step` recovery (which passes `released_by=None`)."""
+    return db.scalar(
+        select(TradingHalt)
+        .where(
+            TradingHalt.workspace_id == scope.workspace_id,
+            TradingHalt.scope_type == scope.scope_type,
+            TradingHalt.scope_id == scope.scope_id,
+            TradingHalt.reason_code == reason_code,
+            TradingHalt.status == "released",
+        )
+        .order_by(TradingHalt.released_at.desc())
+        .limit(1)
+    )
 
 
 def release_emergency_stop(

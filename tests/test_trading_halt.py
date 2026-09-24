@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
+import structlog.testing
 from app.models.strategy import TradingHalt
 from app.trading.application import trading_halt as halt
 
@@ -72,6 +73,90 @@ def test_activate_does_not_downgrade_a_more_severe_existing_row() -> None:
     assert existing.level == "all_trading_halted"  # unchanged
 
 
+def _released_halt(
+    scope: halt.HaltScope, *, level: str, reason_code: str, released_by: object
+) -> TradingHalt:
+    return TradingHalt(
+        id=uuid4(),
+        workspace_id=scope.workspace_id,
+        scope_type=scope.scope_type,
+        scope_id=scope.scope_id,
+        level=level,
+        reason_code=reason_code,
+        status="released",
+        auto_releasable=True,
+        released_at=datetime.now(UTC),
+        released_by=released_by,
+    )
+
+
+def test_activate_warns_when_reactivating_after_a_manual_release() -> None:
+    """Regression test (/code-review finding): the state machine did not
+    distinguish a fresh activation following a manual `/release` from any
+    other fresh activation -- an Owner's override could be silently undone on
+    the very next signal with no record of it. `db.scalar`'s two calls here
+    are `_find_active_halt` (none -- this is a genuinely new activation) then
+    `most_recently_released_halt` (the manually-released row)."""
+    scope = _scope()
+    released_by = uuid4()
+    released = _released_halt(
+        scope, level="warning", reason_code="data_delay", released_by=released_by
+    )
+    db = MagicMock()
+    db.scalar.side_effect = [None, released]
+
+    with structlog.testing.capture_logs() as logs:
+        halt.activate_or_escalate(db, scope, reason_code="data_delay", level="entry_halted")
+
+    warnings = [
+        log for log in logs if log.get("event") == "trading_halt_reactivated_after_manual_release"
+    ]
+    assert len(warnings) == 1
+    assert warnings[0]["released_by"] == str(released_by)
+
+
+def test_activate_does_not_warn_when_reactivating_after_an_automatic_release() -> None:
+    """The counterpart to the test above: `released_by=None` means the prior
+    release was `_sync_trading_halts`'s own automatic recovery, not a human
+    override -- routine re-breaching does not need a warning."""
+    scope = _scope()
+    released = _released_halt(scope, level="warning", reason_code="data_delay", released_by=None)
+    db = MagicMock()
+    db.scalar.side_effect = [None, released]
+
+    with structlog.testing.capture_logs() as logs:
+        halt.activate_or_escalate(db, scope, reason_code="data_delay", level="entry_halted")
+
+    warnings = [
+        log for log in logs if log.get("event") == "trading_halt_reactivated_after_manual_release"
+    ]
+    assert warnings == []
+
+
+def test_activate_does_not_warn_when_escalating_an_already_active_halt() -> None:
+    """No false positive: escalating a halt that never stopped being active
+    (the common case) must not consult `most_recently_released_halt` at all --
+    only `existing is None` (a genuinely fresh activation) does."""
+    db = MagicMock()
+    existing = _existing_halt(_scope(), level="warning", reason_code="data_delay")
+    db.scalar.return_value = existing  # _find_active_halt finds it immediately
+
+    with structlog.testing.capture_logs() as logs:
+        halt.activate_or_escalate(db, _scope(), reason_code="data_delay", level="entry_halted")
+
+    assert logs == []
+
+
+# ---- most_recently_released_halt ----
+
+
+def test_most_recently_released_halt_returns_none_when_none_exists() -> None:
+    db = MagicMock()
+    db.scalar.return_value = None
+    result = halt.most_recently_released_halt(db, _scope(), "data_delay")
+    assert result is None
+
+
 # ---- deescalate_one_step ----
 
 
@@ -116,6 +201,25 @@ def test_deescalate_releases_a_warning_level_halt() -> None:
     assert existing.status == "released"
     assert existing.released_at == now
     assert existing.level == "warning"  # level itself is not touched on release
+    assert existing.released_by is None  # no released_by passed -> automatic recovery
+
+
+def test_deescalate_records_released_by_when_provided() -> None:
+    """`app/api/routes/trading_halts.py`'s manual `/release` endpoint passes the
+    calling Owner's id here -- confirms it actually lands on the row, since
+    `most_recently_released_halt`'s manual-vs-automatic distinction depends on
+    it (/code-review finding)."""
+    db = MagicMock()
+    existing = _existing_halt(_scope(), level="warning", reason_code="data_delay")
+    db.scalar.return_value = existing
+    owner_id = uuid4()
+
+    result = halt.deescalate_one_step(
+        db, _scope(), reason_code="data_delay", now=datetime.now(UTC), released_by=owner_id
+    )
+
+    assert result is existing
+    assert existing.released_by == owner_id
 
 
 def test_deescalate_does_not_touch_emergency_stopped() -> None:

@@ -14,6 +14,7 @@ import hashlib
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 from urllib.parse import urlencode
 
 import httpx
@@ -57,10 +58,21 @@ class DiscoveryDocument:
 
 
 async def fetch_discovery_document(issuer: str) -> DiscoveryDocument:
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.get(f"{issuer.rstrip('/')}/.well-known/openid-configuration")
-        response.raise_for_status()
-        data = response.json()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(f"{issuer.rstrip('/')}/.well-known/openid-configuration")
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPError as exc:
+        # /code-review finding: connection failures, timeouts, and non-2xx
+        # responses (httpx.HTTPError covers both httpx.RequestError and
+        # httpx.HTTPStatusError) previously propagated raw out of this
+        # function -- callers only caught OidcError, so this surfaced as an
+        # unstructured 500 instead of the same handled error shape as every
+        # other IdP-communication failure.
+        raise OidcError(
+            "discovery_unavailable", "Could not reach the IdP's discovery endpoint"
+        ) from exc
     try:
         return DiscoveryDocument(
             authorization_endpoint=data["authorization_endpoint"],
@@ -106,21 +118,38 @@ async def exchange_code_for_tokens(
     client_id: str,
     client_secret: str,
 ) -> dict[str, str]:
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.post(
-            token_endpoint,
-            data={
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": redirect_uri,
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "code_verifier": code_verifier,
-            },
-        )
-        if response.status_code >= 400:
-            raise OidcError("token_exchange_failed", "IdP rejected the authorization code exchange")
-        return response.json()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                token_endpoint,
+                data={
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "redirect_uri": redirect_uri,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "code_verifier": code_verifier,
+                },
+            )
+    except httpx.HTTPError as exc:
+        # /code-review finding, same as fetch_discovery_document above: a raw
+        # connection failure or timeout here used to propagate uncaught.
+        raise OidcError(
+            "token_exchange_unavailable", "Could not reach the IdP's token endpoint"
+        ) from exc
+    if response.status_code >= 400:
+        raise OidcError("token_exchange_failed", "IdP rejected the authorization code exchange")
+    return response.json()
+
+
+@lru_cache(maxsize=8)
+def _jwks_client(jwks_uri: str) -> PyJWKClient:
+    """Cached per `jwks_uri` (/code-review finding): `verify_id_token` used to
+    construct a fresh `PyJWKClient` on every call, so its own internal JWKS
+    cache never had a chance to be reused -- every login re-fetched the IdP's
+    full key set. A self-hosted deployment configures exactly one IdP (one
+    `jwks_uri`), so `maxsize=8` is generous headroom, not a real bound."""
+    return PyJWKClient(jwks_uri)
 
 
 def verify_id_token(
@@ -131,7 +160,7 @@ def verify_id_token(
     and carried through the `oidc_state` cookie. Raises OidcError on any
     failure -- never returns a partially trusted payload."""
     try:
-        jwks_client = PyJWKClient(jwks_uri)
+        jwks_client = _jwks_client(jwks_uri)
         signing_key = jwks_client.get_signing_key_from_jwt(id_token)
         claims = jwt.decode(
             id_token,
