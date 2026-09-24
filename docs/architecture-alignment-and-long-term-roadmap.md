@@ -330,9 +330,9 @@ Horizon 6着手前の縮小スコープ(Horizon4-lite)としての先行着手�
 
 ### Horizon 5: 認証・監査・配布運用の完成（並行着手、9〜13か月）
 
-状態: `[~]` グループA（Unit 1/3/4、認証基盤とRBAC）を実装済み。詳細仕様・実装順序は
-`plans/horizon5-implementation-plan.md`を正とする。グループB〜E（Event Log/Outbox、
-ライセンス機構、CI/CD release gate等）は未着手。
+状態: `[~]` グループA（Unit 1/3/4、認証基盤とRBAC）・グループD（Unit 8、Outbox/Notification
+基盤、スケルトン）を実装済み。詳細仕様・実装順序は`plans/horizon5-implementation-plan.md`を
+正とする。グループB・C・Eは未着手。
 
 2026-09-21: OIDC Authorization Code + PKCE（外部IdP接続のみ。自己完結型IdPは
 `plans/horizon5-implementation-plan.md` §0.3のスコープ外注記のとおり対象外）による
@@ -344,6 +344,23 @@ Owner/Operator/ViewerのRBACを全26APIエンドポイントへ適用した
 旧`X-Owner-Token`ヘッダー方式のままで、この変更により実行時に認証が通らなくなる
 （TypeScriptビルド自体は成功するため`npm run build`では検出できない）。frontend側の
 OIDCログイン対応は本グループのUnitに含まれておらず、別タスクとして扱う必要がある。
+
+2026-09-24: グループD（Unit 8、Outbox/Notification基盤）を実装した。
+`OutboxEvent`/`Notification` ORM（`app/models/audit.py`/`app/models/notifications.py`、
+既存DBスキーマへのマッピングのみで新規マイグレーション不要）、汎用SMTPアダプタ
+（`app/notifications/adapters/smtp.py`、標準ライブラリのみ）、Outbox配信ループ
+（`app/notifications/application/deliver_notifications.py`、`FOR UPDATE SKIP LOCKED`で
+複数Worker安全）、単純ポーリング方式のNotification Worker
+（`app/notifications/worker/`、`python -m app.notifications.worker`で起動、市場データ
+Workerのlease機構は意図的に不使用）を実装した。計画の例示コードにあった不整合
+（`Notification.event_id`に`outbox_event.id`を設定していたが実際は`system_event.id`への
+外部キーで、両テーブル間に関係が無く外部キー違反になる設計上の誤り）は、両テーブル共通の
+`correlation_id`で`SystemEvent`を解決する方式に変更して修正した。**本Unitはスケルトンで
+あり、ドメインイベント発行元は1つも配線していない**（計画書Unit 8「想定リスク」節どおり）
+ため、ロードマップの完了条件「通知の重複、欠落、再送をOutboxから追跡できる」は
+引き続き**未達**。`scripts/start_local.py`へのWorker自動起動追加は見送った（SMTP未設定が
+既定のため、追加すると通常のローカル起動のたびに`[WARN] Workerプロセスが終了しました`が
+出て紛らわしくなるため）。
 
 開始条件の充足状況、配布モデルの決定（セルフホスト型ソフトウェア販売への一本化、
 マルチテナントSaaS仲介モデルは取引所ToS上のリスクにより不採用）、および
@@ -375,8 +392,10 @@ ADR 0005によりroadmap原文の前提（運営者が本番環境を運用す�
   （ビルド・配布パイプライン）の話に限定。顧客の環境分離は顧客の運用判断とする
 - ~~配布環境ではSecret Manager/KMSを使用し、rotation/revocationを運用化する~~ →
   Secret管理をプラガブル設計にし、顧客が自分の環境のSecret Manager/KMSを選べるようにする
-- Event Log、Outbox、Notification Worker、通知設定を実装する（通知は汎用SMTPを
+- `[~]` Event Log、Outbox、Notification Worker、通知設定を実装する（通知は汎用SMTPを
   デフォルトとし、Gmail API等は任意アダプタとして後続タスクに回す）
+  （Outbox/Notification ORM・汎用SMTPアダプタ・配信ループ・Workerのスケルトンは実装済み。
+  ドメインイベント発行元(Event Log相当)は未配線で、完了条件は未達のまま）
 - ~~backup/restore、migration rollback方針、障害対応手順、SLOを整備する~~ →
   運営者によるSLO保証ではなく、顧客向けの手順書提供に変更する
 - dependency、SBOM、secret scan、脆弱性対応をrelease gateへ組み込む
