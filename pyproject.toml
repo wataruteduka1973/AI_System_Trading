@@ -38,6 +38,7 @@ dev = [
   "ruff==0.16.8",
   "mypy>=2.3,<3",
   "types-requests>=2.32,<3",
+  "pip-audit>=2.10,<3",
 ]
 
 [tool.hatch.build.targets.wheel]

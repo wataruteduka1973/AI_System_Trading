@@ -331,8 +331,8 @@ Horizon 6着手前の縮小スコープ(Horizon4-lite)としての先行着手�
 ### Horizon 5: 認証・監査・配布運用の完成（並行着手、9〜13か月）
 
 状態: `[~]` グループA（Unit 1/3/4、認証基盤とRBAC）・グループD（Unit 8、Outbox/Notification
-基盤、スケルトン）を実装済み。詳細仕様・実装順序は`plans/horizon5-implementation-plan.md`を
-正とする。グループB・C・Eは未着手。
+基盤、スケルトン）・グループE（Unit 9、リリースゲート強化）を実装済み。詳細仕様・実装順序は
+`plans/horizon5-implementation-plan.md`を正とする。グループB・Cは未着手。
 
 2026-09-21: OIDC Authorization Code + PKCE（外部IdP接続のみ。自己完結型IdPは
 `plans/horizon5-implementation-plan.md` §0.3のスコープ外注記のとおり対象外）による
@@ -361,6 +361,21 @@ Workerのlease機構は意図的に不使用）を実装した。計画の例示
 引き続き**未達**。`scripts/start_local.py`へのWorker自動起動追加は見送った（SMTP未設定が
 既定のため、追加すると通常のローカル起動のたびに`[WARN] Workerプロセスが終了しました`が
 出て紛らわしくなるため）。
+
+2026-09-24: グループE（Unit 9、リリースゲート強化）を実装した。`ci.yml`の`backend`
+ジョブへ`pip-audit`（依存関係の既知脆弱性スキャン、PRごとに実行）、`release.yml`へ
+`anchore/sbom-action`によるSPDX形式SBOM生成とGitHub Releaseへの添付を追加した。
+計画の例示コードは`anchore/sbom-action@v0`（移動タグ）を使っていたが、実際にGitHub API
+で確認したところ`v0`タグは2026年3月時点のコミットを指しており、直近の安定版
+`v0.24.2`（2026年8月）から約5か月遅れていた。計画自身が「導入前に最新の固定タグを
+確認すること」と明記していたため、`v0.24.2`へ明示的にピン留めした。**`pip-audit`導入時点で
+既存依存`cryptography==46.0.7`に既知の脆弱性4件(PYSEC-2026-3552/3553/3554,
+GHSA-537c-gmf6-5ccf。証明書チェーン検証・PKCS7復号・静的リンクOpenSSLに関するもの)が
+検出され、CIの`backend`ジョブが失敗するようになった。これは計画書Unit 9「想定リスク」節が
+明示的に許容している意図した挙動であり、本Unit自体のスコープには含めず、別タスクとしての
+依存関係更新が必要**（本コードベースでの`cryptography`利用はSecret Store(Fernet対称暗号)
+のみで、検出された脆弱性は主にX.509証明書検証・PKCS7復号に関するものだが、修正には
+`>=48.0.1`への更新(現行ピン`>=46,<47`の範囲外)が必要）。
 
 開始条件の充足状況、配布モデルの決定（セルフホスト型ソフトウェア販売への一本化、
 マルチテナントSaaS仲介モデルは取引所ToS上のリスクにより不採用）、および
@@ -398,7 +413,10 @@ ADR 0005によりroadmap原文の前提（運営者が本番環境を運用す�
   ドメインイベント発行元(Event Log相当)は未配線で、完了条件は未達のまま）
 - ~~backup/restore、migration rollback方針、障害対応手順、SLOを整備する~~ →
   運営者によるSLO保証ではなく、顧客向けの手順書提供に変更する
-- dependency、SBOM、secret scan、脆弱性対応をrelease gateへ組み込む
+- `[x]` dependency、SBOM、secret scan、脆弱性対応をrelease gateへ組み込む
+  （secret scanは既存のgitleaks(secret-scanジョブ)。`pip-audit`をbackendジョブへ、
+  SBOM生成(anchore/sbom-action)をrelease.ymlへ追加済み。「脆弱性対応」自体
+  ―既存依存の更新―は本Unitのスコープ外、検出された`cryptography`の件は上記参照）
 - （新規）ライセンスキー機構（オフライン検証、署名済みライセンスファイル）を実装する
 
 #### 完了条件
