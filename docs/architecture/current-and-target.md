@@ -6,6 +6,15 @@ This document is the architecture source of truth for the current modular-monoli
 It distinguishes implemented runtime behavior from the intended target structure. Feature plans in
 `docs/plans/` describe delivery sequencing but do not override the boundaries defined here.
 
+**Not fully current (last substantially updated 2026-09-16).** Horizon4-lite backtest
+(`app/trading/application/{risk_gate,order_flow,trading_halt,backtest_replay}.py`, ADR 0003) and
+Horizon5 groups A/D/E (OIDC login + RBAC in `app/security/`, Outbox/Notification skeleton in
+`app/notifications/`, CI dependency/SBOM scanning) have since landed and are not reflected in the
+module layout or migration sequence below. `docs/plans/horizon5-implementation-plan.md` and
+`docs/architecture-alignment-and-long-term-roadmap.md`'s Horizon 4/5 sections are the current source
+of truth for that work until this document is refreshed. The one specific claim below that is now
+wrong, not just incomplete, is called out inline rather than silently left standing.
+
 The system remains development-only and permits OANDA Practice and Binance Spot Testnet access.
 Live trading and real-money order submission are outside the approved boundary.
 
@@ -27,7 +36,10 @@ FastAPI routes                    app/market_data/worker (separate process)
 
 Implemented safety boundaries:
 
-- Workspace resources are protected by the development owner token.
+- Workspace resources are protected by OIDC-authenticated sessions and per-workspace
+  Owner/Operator/Viewer roles (`app/security/`), not the development owner token this document
+  originally described -- that token-based `require_owner` mechanism was removed entirely in
+  Horizon5 Group A. See `docs/plans/horizon5-implementation-plan.md` Units 1/3/4.
 - Exchange credentials are encrypted outside the database; the database stores only `secret_ref`.
 - External account references are encrypted, hashed, and masked before being exposed.
 - Authentication and communication failures have distinct persisted outcomes.

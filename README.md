@@ -102,18 +102,27 @@ DBが必須のAlembicリビジョン（`20260831_0005`）に達していない�
 
 ### 初期API
 
-- `GET /api/v1/workspaces` — workspace一覧
-- `POST /api/v1/workspaces` — workspace作成
+主なエンドポイントです。全エンドポイントの一覧・スキーマは起動後に`/docs`(Swagger UI)を参照してください。
+
+- `GET /api/v1/auth/login` — OIDCログイン開始(外部IdPへリダイレクト)
+- `GET /api/v1/auth/callback` — OIDCコールバック(セッションCookie発行)
+- `POST /api/v1/auth/logout` — ログアウト
+- `GET /api/v1/auth/me` — 現在のユーザー情報と所属workspace一覧
+- `POST /api/v1/auth/sessions/revoke` — 自分の全セッションを即時失効
+- `GET /api/v1/workspaces` — 自分が所属するworkspace一覧
+- `POST /api/v1/workspaces` — workspace作成(作成者がOwnerになる)
 - `GET /api/v1/workspaces/{workspace_id}` — workspace詳細
 - `GET /api/v1/workspaces/{workspace_id}/connections` — 接続一覧（秘密参照は返さない）
 - `POST /api/v1/workspaces/{workspace_id}/connections` — 暗号化した認証情報で接続登録
 - `POST /api/v1/workspaces/{workspace_id}/connections/{connection_id}/disable` — 接続無効化
 - `POST /api/v1/workspaces/{workspace_id}/connections/{connection_id}/verify` — OANDA practice / Binance Spot Testnet 資格情報検証・口座同期
 - `PUT /api/v1/workspaces/{workspace_id}/connections/{connection_id}/credentials` — 暗号化資格情報を置換して即時再検証
+- `GET /api/v1/workspaces/{workspace_id}/trading-halts` — 発動中のtrading halt一覧
+- `POST /api/v1/workspaces/{workspace_id}/trading-halts/{halt_id}/release` — halt解除(Ownerのみ)
 - `GET /api/v1/exchanges` — 対応取引所一覧
 - `GET /api/v1/markets` — 対応市場一覧
 
-Workspaceと接続APIでは`X-Owner-Token`ヘッダーが必要です。これはローカル開発専用の認証であり、第三者配布前にOIDC認証へ置き換えます。取引所認証情報は`.secrets/`へFernet暗号化して保存し、DBには`local-encrypted://...`形式の参照だけを保存します。
+全APIエンドポイントは、`GET /api/v1/auth/login`からのOIDCログインで発行される`session` Cookie(HttpOnly、`SameSite=Strict`)による認証と、workspaceごとのOwner/Operator/Viewerロール(`user_membership`テーブル)による認可を要求します。フロントエンドはログイン後、自分が所属するworkspaceのみ一覧・操作できます。取引所認証情報は`.secrets/`へFernet暗号化して保存し、DBには`local-encrypted://...`形式の参照だけを保存します。
 
 OANDA検証は公式practice APIの口座一覧、口座summary、USD/JPY instrumentを読取専用で取得します。口座IDは暗号化・ハッシュ・マスクして保存し、画面とAPIにはマスク値だけを返します。外部注文endpointは呼び出しません。
 
@@ -140,8 +149,8 @@ python -m pytest
 ```
 
 整形エラーは `ruff format .` で修正してから、上記チェックを再実行してください。
-Ruffは検証済みの0.16.3に固定し、ローカルとCIで整形結果がずれないようにしています。
-型検査は `pyproject.toml` で `app`・`src`・`scripts` を対象にしています。
+Ruffは検証済みの0.16.8に固定し、ローカルとCIで整形結果がずれないようにしています。
+型検査は `pyproject.toml` で `app`・`scripts` を対象にしています。
 型定義のないBinance/OANDA SDK以外のエラーは無効化しません。
 Windows用分岐も確認する場合は `python -m mypy --platform win32` を実行します。
 テストやmigration自身の厳格な型付けは対象外ですが、整形・lint・実行テストは継続します。
@@ -155,17 +164,34 @@ Windows用分岐も確認する場合は `python -m mypy --platform win32` を�
 未適用のDBに対してWorkerは候補処理を開始せず、安全なエラーを出して終了します。
 
 試験は **空の専用PostgreSQLデータベース**（名前は `worker_test_` で始める）で実行します。
-運用の `DATABASE_URL` は使わず、`WORKER_TEST_DATABASE_URL` に専用DBの接続先を設定して
-`python -m pytest tests/test_worker_leases_postgres.py tests/test_worker_lease_contracts.py tests/test_worker_pages.py tests/test_worker_runner_postgres.py` を実行します。
+運用の `DATABASE_URL` は使わず、`WORKER_TEST_DATABASE_URL` に専用DBの接続先を設定して、
+`ci.yml`の`worker-storage`ジョブと同じ順序で次を実行します（`test_migrations_roundtrip.py`が
+最初に空のDBを受け取り空のDBへ戻す前提のため、この順序が必要です）。
+
+```powershell
+python -m pytest tests/test_migrations_roundtrip.py tests/test_notification_models.py tests/test_deliver_notifications.py tests/test_worker_leases_postgres.py tests/test_worker_lease_contracts.py tests/test_worker_pages.py tests/test_worker_runner_postgres.py
+```
+
 `test_worker_runner_postgres.py` は指定したDBの名前に `_runner_<乱数>` を付けた
 使い捨てDBを自動作成・削除するため、指定するDB自体は空である必要はありますが、
-テスト終了後に自動で片付きます。他のファイルはDDL作成と0005のdowngrade/upgradeを行い、
+テスト終了後に自動で片付きます。他のファイルはDDL作成とmigrationのdowngrade/upgradeを行い、
 既存テーブルがあるDBを拒否します。再実行には新しい空の専用DBを用意してください
 （このファイルはDBを自動削除しません）。
 環境変数がない場合、PostgreSQL統合試験はskipされます（合格を意味しません）。
 Worker本体の単体試験（signal処理、リビジョン確認、公平な巡回ロジック）は
 `tests/test_worker_main.py` / `tests/test_worker_runner.py` にあり、DB不要で通常の
 `python -m pytest` に含まれます。
+
+### Notification Worker（開発者向け、Horizon5 Unit 8）
+
+`app/notifications/worker/`（`python -m app.notifications.worker`で起動）は、`outbox_event`
+テーブルをポーリングし汎用SMTPで通知を配信する単純なポーリングループです。市場データWorkerの
+lease機構は使いません（通知送信は1回で完結する短い処理のため）。起動には`.env`の
+`SMTP_HOST`/`SMTP_SENDER_ADDRESS`が必須で、未設定の場合はエラーメッセージを表示して
+即座に終了します（`.env.example`参照）。現時点では`outbox_event`へ書き込むドメインイベント
+発行元（trading_halt発動時の通知など）が実装されていないため、起動してもキューは常に空です
+（基盤のみ実装済み、詳細は`docs/plans/horizon5-implementation-plan.md` Unit 8を参照）。
+`scripts/start_local.py`には含めていないため、試す場合は別ターミナルで手動起動してください。
 
 ## ディレクトリ構成
 
@@ -175,7 +201,10 @@ app/                         # FastAPIバックエンドの実行コード（唯
   connections/application/   # 接続管理ユースケース
   exchanges/                 # OANDA Practice / Binance Testnetクライアント
   market_data/               # Durable Worker（application/infrastructure/worker）
+  notifications/             # Outbox配信・汎用SMTPアダプタ・Notification Worker（スケルトン）
+  security/                  # OIDCログイン・セッション・RBAC
   services/                  # 未分割のアプリケーションサービス
+  trading/application/       # 注文実行・リスク判定・trading halt・backtest replay
 frontend/                    # Reactフロントエンド
 tests/                       # 自動テスト
 ```
@@ -185,9 +214,17 @@ tests/                       # 自動テスト
 
 ## CI/CD
 
-- Pull Requestと`main`へのPushで、Ruff・mypy・pytestを実行します。
-- DependabotがGitHub ActionsとPython依存関係の更新を週次で確認します。
-- `v1.0.0`のようなタグをPushすると、PythonパッケージをビルドしてGitHub Releaseを作成します。
+Pull Requestと`main`へのPushで、`.github/workflows/ci.yml`が次の4ジョブを実行します。
+
+- **backend**: 依存関係の既知脆弱性スキャン（`pip-audit`）、Ruff lint/format、mypy（既定 + Windows用分岐）、pytest（DB不要分）
+- **worker-storage**: 使い捨てPostgreSQL上でmigration往復試験とWorker/Outbox関連の統合試験
+- **secret-scan**: gitleaksによるsecretの混入検出
+- **frontend**: ESLint、Vitest、本番ビルド
+
+DependabotがGitHub ActionsとPython依存関係の更新を週次で確認します。
+
+`v1.0.0`のようなタグをPushすると、`release.yml`がPythonパッケージのビルド、
+SPDX形式SBOM生成（`anchore/sbom-action`）、GitHub Release作成（パッケージ + SBOM添付）を行います。
 
 ```powershell
 git tag v0.1.0
