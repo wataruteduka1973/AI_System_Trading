@@ -53,6 +53,16 @@ class Settings(BaseSettings):
     oidc_scopes: str = "openid email profile"
     session_signing_secret: SecretStr | None = None
     session_ttl_seconds: int = 8 * 60 * 60
+    # Horizon5 Group D (docs/plans/horizon5-implementation-plan.md Unit 8): generic
+    # SMTP notification delivery. Unconfigured by default -- the Notification
+    # Worker refuses to start until smtp_host/smtp_sender_address are set.
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: SecretStr | None = None
+    smtp_use_tls: bool = True
+    smtp_sender_address: str | None = None
+    notification_poll_interval_seconds: float = 5.0
 
     @field_validator("cors_origins", mode="before")
     @classmethod
