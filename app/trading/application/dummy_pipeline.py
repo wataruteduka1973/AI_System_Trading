@@ -6,13 +6,18 @@ predictive model is on hold, not a strategy implementation.
 
 `ensure_dummy_bot` creates the minimum fixture rows the schema's foreign keys require
 to record a Signal at all (`Strategy`/`StrategyVersion`, `RiskProfile`/
-`RiskProfileVersion`, `TradingBot`). Since `bot_lifecycle.py` now exists, it creates
-the `TradingBot` in `stopped` state and calls `bot_lifecycle.start_bot` to bring it
-up (creating the first `BotRun` through the real lifecycle path, including startup
-validation -- see that module) rather than writing `running`/`BotRun` fields directly
-as an earlier version of this function did; a bot found already `running`/`paused`
-just has its current `BotRun` looked up instead. Still idempotent (safe to call
-repeatedly).
+`RiskProfileVersion`, `TradingBot`). Idempotent (safe to call repeatedly; reuses
+existing rows by `(workspace_id, name)`).
+
+**Provisioning vs. starting are two separate steps** (changed from this function's
+original shape, which used to also call `bot_lifecycle.start_bot` itself): a newly
+created bot is left in the DB-default `stopped` state. This module had zero callers
+and zero test coverage before the Bot management API (`app/api/routes/trading.py`)
+was added -- splitting these lets `POST .../bots` create a bot without immediately
+running it, and `POST .../bots/{id}/start` start it as its own explicit action,
+matching how `bot_lifecycle.py`'s four commands are already independent of each
+other. Callers that want the old "create and start in one call" behavior should call
+`ensure_dummy_bot` then `bot_lifecycle.start_bot` themselves.
 
 **`run_dummy_pipeline_once`'s gating on `bot.actual_state`** (2026-09-20, added for
 the Bot lifecycle task): `stopped` skips everything, including signal generation
@@ -75,7 +80,6 @@ from app.models.strategy import (
 )
 from app.models.trading import TradingAccount, TradingPosition
 from app.trading.application import order_flow
-from app.trading.application.bot_lifecycle import start_bot
 from app.trading.application.dummy_signal import generate_dummy_signal
 from app.trading.application.risk_gate import CONSERVATIVE_V1_RULES, evaluate_signal
 
@@ -90,13 +94,17 @@ def ensure_dummy_bot(
     account: TradingAccount,
     instrument: Instrument,
     *,
+    bot_name: str,
     timeframe: str = "1m",
     strategy_name: str = "dummy-sma-pipeline-skeleton",
     risk_profile_name: str = "conservative-v1-dummy",
-    bot_name: str = "dummy-sma-bot",
-) -> tuple[TradingBot, BotRun]:
+) -> TradingBot:
     """Idempotent: reuses existing rows by (workspace_id, name) if this has already
-    been called for this workspace."""
+    been called for this workspace. `strategy_name`/`risk_profile_name` default to
+    the one dummy strategy/risk-profile every bot in a workspace currently shares
+    (there is only one real strategy implementation, `dummy_signal.py`) --
+    `bot_name` has no such shared default since it must be unique per bot
+    (`uq_trading_bot_name`) and the caller always has a real one to give it."""
     strategy = db.scalar(
         select(Strategy).where(
             Strategy.workspace_id == workspace_id, Strategy.name == strategy_name
@@ -173,28 +181,14 @@ def ensure_dummy_bot(
             timeframe=timeframe,
             strategy_version_id=strategy_version.id,
             risk_profile_version_id=risk_profile_version.id,
-            # DB defaults (stopped/stopped): start_bot below brings it up through
-            # the real lifecycle path instead of setting running fields directly.
+            # DB defaults apply: stopped/stopped. Starting the bot is a separate,
+            # explicit action (bot_lifecycle.start_bot) -- not this function's job.
         )
         db.add(bot)
-        db.flush()
-    else:
-        db.commit()  # persist any strategy/risk_profile rows created above
 
-    bot_run: BotRun
-    if bot.desired_state == "stopped":
-        bot_run = start_bot(db, bot)
-    else:
-        found = db.scalar(
-            select(BotRun).where(BotRun.bot_id == bot.id, BotRun.status.in_(("running", "paused")))
-        )
-        if found is None:
-            raise ValueError(f"bot desired_state={bot.desired_state!r} but has no active BotRun")
-        bot_run = found
-
+    db.commit()
     db.refresh(bot)
-    db.refresh(bot_run)
-    return bot, bot_run
+    return bot
 
 
 def _exchange_code_for_connection(db: Session, connection_id: UUID) -> str:

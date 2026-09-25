@@ -1,0 +1,86 @@
+"""Request/response schemas for the Bot management API
+(`app/api/routes/trading.py`, Horizon5 "trade bot core functionality" phase).
+
+Paper-only for now, matching every trading application module in this
+codebase (`bot_lifecycle.validate_bot_startup` hard-fails any
+`execution_mode != 'paper'` -- live is not implemented anywhere): request
+schemas below have no `mode`/`execution_mode` field to set, since the route
+handlers always create `mode='paper'` accounts and `execution_mode='paper'`
+bots.
+"""
+
+from datetime import datetime
+from decimal import Decimal
+from uuid import UUID
+
+from pydantic import BaseModel, Field
+
+from app.schemas.base import OrmModel
+
+
+class TradingAccountCreate(BaseModel):
+    connection_id: UUID
+    base_currency: str = Field(min_length=1, max_length=16)
+
+
+class TradingAccountRead(OrmModel):
+    id: UUID
+    workspace_id: UUID
+    connection_id: UUID | None
+    mode: str
+    base_currency: str
+    status: str
+    created_at: datetime
+
+
+class TradingAccountDepositCreate(BaseModel):
+    """`amount`/`asset` are required, not defaulted -- matches
+    `account_funding.seed_paper_deposit`'s own documented principle that
+    there is no product decision yet on what a paper account should start
+    with, so this endpoint does not invent one either."""
+
+    amount: Decimal = Field(gt=0)
+    asset: str = Field(min_length=1, max_length=32)
+    note: str | None = None
+
+
+class TradingAccountDepositRead(OrmModel):
+    id: UUID
+    account_id: UUID
+    reference_type: str
+    description: str
+    occurred_at: datetime
+
+
+class TradingBotCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    account_id: UUID
+    instrument_id: UUID
+    timeframe: str = "1m"
+
+
+class TradingBotRead(OrmModel):
+    id: UUID
+    workspace_id: UUID
+    name: str
+    execution_mode: str
+    strategy_mode: str
+    account_id: UUID
+    instrument_id: UUID
+    timeframe: str
+    desired_state: str
+    actual_state: str
+    live_trading_enabled: bool
+    version: int
+    created_at: datetime
+
+
+class BotRunRead(OrmModel):
+    id: UUID
+    bot_id: UUID
+    status: str
+    code_version: str
+    started_at: datetime
+    stopped_at: datetime | None
+    stop_reason: str | None
+    heartbeat_at: datetime | None

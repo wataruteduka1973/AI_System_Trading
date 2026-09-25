@@ -278,6 +278,31 @@ Application抽出を先行する。OANDA確認やHorizon 1全体を完了扱い�
 
 ### Horizon 3: Paper Tradingコア（5〜8か月）
 
+状態: `[~]` 実装・整備の主要項目（PaperAccount等のORM、注文受付/risk check/約定/取消の
+Application Use Case、StrategyVersion/RiskProfileVersion/Signal/RiskDecisionの監査可能な
+保存、Botのstart/pause/resume/stop、halt理由）はコードとして既に実装済み
+（`app/trading/application/order_flow.py`・`risk_gate.py`・`trading_halt.py`・
+`bot_lifecycle.py`等）だが、本節にはこれまで状態行が無かった（本ロードマップ更新漏れ）。
+HTTPからの呼び出し経路（Bot管理API）は2026-09-25まで存在せず、これらのUse Caseは
+Pythonから直接呼ぶ以外に到達手段が無かった。
+
+2026-09-25: 上記の既存Application層を呼び出すBot管理API
+（`app/api/routes/trading.py`、`app/schemas/trading.py`）を追加した。
+`POST /workspaces/{id}/trading-accounts`（paper口座作成）・
+`POST .../trading-accounts/{id}/deposits`（`account_funding.seed_paper_deposit`の呼び出し）・
+`POST /workspaces/{id}/bots`（Bot作成、`start`しない）・
+`POST .../bots/{id}/{start,pause,resume,stop}`（`bot_lifecycle.py`の4コマンドをそのまま
+公開）を実装した。`app/trading/application/dummy_pipeline.py`の`ensure_dummy_bot`は
+従来`bot_lifecycle.start_bot`まで内部で呼んでいた（呼び出し元ゼロ・試験ゼロの
+フィクスチャヘルパーだったため気づかれていなかった）が、これをHTTPの`POST .../bots`
+から直接呼ぶにあたり「作成」と「起動」を分離し、`bot_lifecycle.py`の4コマンドが
+既に独立している設計と揃えた。`docs/concept/FXtrading_rebuild/04_API再設計.md`は
+`POST /bots/{id}/commands`という単一エンドポイント案を示しているが、同ドキュメントは
+`AGENTS.md`のディレクトリ規約上「現在のスコープではない」候補設計であるため、本APIは
+代わりにこのコードベースの既存規約（`trading_halts.py`の動詞ごとの個別エンドポイント）に
+揃えた。まだ未実装: 実行ループ/Worker（`run_dummy_pipeline_once`を定期実行する経路が無い）、
+最低限のUI。次のUnitで着手予定（利用者指示「Bot管理API→実行ループ→最低限のUI」の順）。
+
 #### 開始条件
 
 - 観測基盤が安定し、履歴とリアルタイムの整合性が確認済み
