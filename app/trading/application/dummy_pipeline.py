@@ -216,12 +216,23 @@ def _open_position(
 
 def run_dummy_pipeline_once(db: Session, bot: TradingBot, bot_run: BotRun) -> dict:
     """Runs one evaluation cycle for `bot`. Returns a small dict describing what
-    happened (`action`: "hold" | "close_only" | "denied" | "opened", plus the row ids
-    involved) -- meant for tests/scripts to assert against, not a public API.
+    happened (`action`: "hold" | "already_processed" | "close_only" | "denied" |
+    "opened", plus the row ids involved) -- meant for tests/scripts to assert
+    against, not a public API.
 
     Gated on `bot.actual_state` -- see module docstring for the stopped-vs-paused
     distinction (stopped skips everything below before even generating a signal;
-    paused still generates one and still allows a close-only, just not a new entry)."""
+    paused still generates one and still allows a close-only, just not a new entry).
+
+    **Idempotent per (bot_run_id, candle_id)** (2026-09-25, added for the execution
+    loop/Worker task): the Worker calling this repeatedly on a poll interval will
+    often see the same still-latest final candle more than once before a new one
+    closes. Without a guard, a second call for the same candle would call
+    `generate_dummy_signal` again (deterministic, same result) and then fail on
+    `db.commit()` below with an uncaught `IntegrityError` against
+    `uq_signal_idempotency` -- this function had no callers before the Worker, so
+    that path was never exercised. Returning "already_processed" early makes
+    repeated polling safe without the Worker needing to track per-bot state itself."""
     if bot.actual_state not in ("running", "paused"):
         return {"action": "hold", "reason": "bot_not_active", "actual_state": bot.actual_state}
 
@@ -247,6 +258,12 @@ def run_dummy_pipeline_once(db: Session, bot: TradingBot, bot_run: BotRun) -> di
     if not candles:
         return {"action": "hold", "reason": "no_candles"}
     latest_candle = candles[-1]
+
+    already_processed = db.scalar(
+        select(Signal).where(Signal.bot_run_id == bot_run.id, Signal.candle_id == latest_candle.id)
+    )
+    if already_processed is not None:
+        return {"action": "already_processed", "signal_id": already_processed.id}
 
     signal_action = generate_dummy_signal(candles)
     input_checksum = _checksum(

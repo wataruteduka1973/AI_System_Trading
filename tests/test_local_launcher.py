@@ -47,14 +47,15 @@ def test_commands_use_project_python_fixed_ports_and_no_reload(tmp_path, monkeyp
     vite.parent.mkdir(parents=True)
     vite.touch()
     monkeypatch.setattr(launcher.shutil, "which", lambda _: "node.exe")
-    backend, frontend, worker = launcher.commands(tmp_path)
+    backend, frontend, market_data_worker, trading_worker = launcher.commands(tmp_path)
     assert backend[:4] == [sys.executable, "-m", "uvicorn", "app.main:app"]
     assert "--reload" not in backend
     assert frontend[1] == str(vite)
     assert "--strictPort" in frontend
     assert backend[backend.index("--host") + 1] == "127.0.0.1"
     assert frontend[frontend.index("--host") + 1] == "127.0.0.1"
-    assert worker == [sys.executable, "-m", "app.market_data.worker"]
+    assert market_data_worker == [sys.executable, "-m", "app.market_data.worker"]
+    assert trading_worker == [sys.executable, "-m", "app.trading.worker"]
 
 
 def test_missing_env_is_actionable(tmp_path) -> None:

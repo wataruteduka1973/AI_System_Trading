@@ -303,6 +303,28 @@ Pythonから直接呼ぶ以外に到達手段が無かった。
 揃えた。まだ未実装: 実行ループ/Worker（`run_dummy_pipeline_once`を定期実行する経路が無い）、
 最低限のUI。次のUnitで着手予定（利用者指示「Bot管理API→実行ループ→最低限のUI」の順）。
 
+2026-09-25: 上記の実行ループ/Workerを実装した。`app/trading/worker/`
+（`python -m app.trading.worker`で起動）は、`actual_state`が`running`/`paused`の
+全Botを一定間隔（既定5秒、`BOT_EXECUTION_POLL_INTERVAL_SECONDS`）でポーリングし、
+`app/trading/application/bot_execution_loop.py`の`run_active_bots_once`経由で
+`dummy_pipeline.run_dummy_pipeline_once`を呼び出す。Notification Worker
+（Horizon5 Group D）と同じ単純ポーリング形状を採用し、市場データWorkerのlease/
+heartbeat機構は使っていない（1回の評価が短いDBアクセスのみで外部ネットワークI/Oを
+伴わないため、長時間実行ジョブ向けのstale-recoveryが不要という理由も同じ）。
+
+実装前の調査で、`run_dummy_pipeline_once`自体に潜在バグを発見し修正した:
+この関数は呼び出し元ゼロ・試験ゼロのまま実装されており、同じ最新確定バーに対して
+2回呼ばれると2回目の`db.commit()`が`uq_signal_idempotency`制約違反の未捕捉
+`IntegrityError`で失敗する状態だった。Workerはポーリング間隔と実際の新規バー到着
+間隔が一致する保証が無いため、この経路は確実に踏まれる。`(bot_run_id, candle_id)`
+単位で既存Signalを確認し、有れば`{"action": "already_processed"}`を返して早期
+returnする冪等性ガードを追加して解消した（Worker側で per-bot 状態を追跡する必要が
+無くなる、より単純な設計）。
+
+Bot管理API（`POST .../bots/{id}/start`等）と合わせて、Botをstartすると実際に
+シグナル評価・注文が進行する状態になった。次のUnit: 最低限のUI（利用者指示の順序
+どおり）。
+
 #### 開始条件
 
 - 観測基盤が安定し、履歴とリアルタイムの整合性が確認済み

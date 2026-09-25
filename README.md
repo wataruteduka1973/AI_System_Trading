@@ -193,6 +193,17 @@ lease機構は使いません（通知送信は1回で完結する短い処理�
 （基盤のみ実装済み、詳細は`docs/plans/horizon5-implementation-plan.md` Unit 8を参照）。
 `scripts/start_local.py`には含めていないため、試す場合は別ターミナルで手動起動してください。
 
+### Bot execution Worker（Horizon 3、実行ループ）
+
+`app/trading/worker/`（`python -m app.trading.worker`で起動）は、`actual_state`が
+`running`/`paused`の全Botを一定間隔（`.env`の`BOT_EXECUTION_POLL_INTERVAL_SECONDS`、
+既定5秒）でポーリングし、`app/trading/application/dummy_pipeline.py`の
+`run_dummy_pipeline_once`を呼び出す単純なポーリングループです。Notification Worker
+同様、市場データWorkerのlease機構は使いません（1回の評価が短いDBアクセスのみで完結し、
+外部ネットワークI/Oを伴わないため）。同じ最新確定バーに対して複数回呼ばれても
+`run_dummy_pipeline_once`自身が`(bot_run_id, candle_id)`単位で冪等なため安全です。
+外部設定の前提条件（SMTPのような）が無いため、`scripts/start_local.py`に含めています。
+
 ## ディレクトリ構成
 
 ```text
@@ -205,6 +216,7 @@ app/                         # FastAPIバックエンドの実行コード（唯
   security/                  # OIDCログイン・セッション・RBAC
   services/                  # 未分割のアプリケーションサービス
   trading/application/       # 注文実行・リスク判定・trading halt・backtest replay
+  trading/worker/            # Bot execution Worker（実行ループ）
 frontend/                    # Reactフロントエンド
 tests/                       # 自動テスト
 ```
