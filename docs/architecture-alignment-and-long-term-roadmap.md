@@ -343,10 +343,25 @@ start/pause/resume/stop、状態バッジと直近シグナル表示を5秒間�
 `vitest`（33件）/本番buildは全て成功。バックエンドとフロントエンドを実際に起動し、
 新規10エンドポイントが`/openapi.json`に登録されていること、`/health/db`が
 `postgresql`で成功すること、フロントエンドが未認証画面までコンソールエラー無く
-到達することを確認した。**実際のログイン後の画面操作は未検証**: `.env`に
-OIDC provider設定が無く、このリポジトリで既に繰り返し記録されている環境上の
-制約（実際のIdPによるE2Eログイン未検証）と同じ理由で、認証後のBot管理画面の
-実クリック操作による確認はできなかった。
+到達することを確認した。
+
+2026-09-26: 上記で未検証のまま残した「実際のログイン後の画面操作」を、利用者の
+依頼を受けて追加検証した。`scripts/mock_oidc_server.py`（新規、Authorization
+Code + PKCE + Discoveryを実装するローカル専用の簡易OIDCプロバイダ、外部IdP
+アカウント不要）を作成し、`.env`にOIDC/セッション署名設定を追加、ローカルDBが
+未適用だったmigration`20260921_0008`（`fx.session_revocation`追加、追加のみで
+データ損失なし）を適用した上で、実際にバックエンド・フロントエンドを起動して
+ブラウザから確認した。ログイン→Workspace作成→取引所接続登録→取引口座作成→
+入金→Bot作成→start/pause/resume/stop（4遷移すべて）→
+`run_active_bots_once`を1回手動実行してSignal生成→5秒ポーリングで
+「直近シグナル: hold (時刻)」が画面に反映されるまでを一通り確認した。
+未検証のまま接続を検証しようとした際の422エラー（`Exchange connection is
+missing...`）がエラーメッセージ欄に正しく表示されることも確認した。コンソール
+エラーは意図した4xx/一部無関係なmarket-data機能の409のみで、JS例外・React
+crashは無し。今回作成したWorkspace「Local Test Workspace」・Bot・Paper口座・
+接続・USD_JPY銘柄等のテストデータは、継続検証に使えるよう利用者判断でDBに
+残している。`scripts/mock_oidc_server.py`も同様に利用者判断でリポジトリに残し、
+README「ローカルでの確認」節に開発者向け手順として追記した。
 
 #### 開始条件
 

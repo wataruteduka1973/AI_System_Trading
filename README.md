@@ -209,6 +209,37 @@ lease機構は使いません（通知送信は1回で完結する短い処理�
 `run_dummy_pipeline_once`自身が`(bot_run_id, candle_id)`単位で冪等なため安全です。
 外部設定の前提条件（SMTPのような）が無いため、`scripts/start_local.py`に含めています。
 
+### ログイン後のUIをローカルで手動確認する（開発者向け）
+
+OIDCログインは外部IdPを前提としており、`.env`にIdPを設定しない限り「ログインが
+必要です」より先の画面（Workspace選択・Bot管理等）は確認できません。外部IdP
+アカウントを用意せずに一通り確認したい場合、`scripts/mock_oidc_server.py`
+（Authorization Code + PKCE + Discoveryを実装したローカル専用の簡易OIDC
+プロバイダ、固定の1テストユーザーを自動承認するだけでログイン画面は無い）を
+使えます。**本番や共有環境では絶対に使わないでください**（誰でもセッションを
+取得できます）。
+
+```powershell
+python scripts/mock_oidc_server.py
+```
+
+別ターミナルで`.env`に追記してバックエンドを起動します。
+
+```text
+OIDC_ISSUER=http://127.0.0.1:9000
+OIDC_CLIENT_ID=local-test-client
+OIDC_CLIENT_SECRET=local-test-secret
+SESSION_SIGNING_SECRET=<python -c "import secrets; print(secrets.token_urlsafe(32))" の出力>
+```
+
+ログイン後は所属Workspaceが無い状態で始まるため、`POST /api/v1/workspaces`を
+自分で叩くか、フロントエンドに将来Workspace作成UIが追加されるまでは
+ブラウザの開発者ツール等から`fetch`で作成してください（作成者が自動的に
+Ownerになります）。取引口座・Bot管理画面を試すには、取引所接続
+（`POST /workspaces/{id}/connections`）と、必要なら`Instrument`/
+`WorkspaceAccountSelection`行も用意する必要があります（`GET
+/workspaces/{id}/instruments`は選択済み口座がある取引所の銘柄のみを返すため）。
+
 ## ディレクトリ構成
 
 ```text
