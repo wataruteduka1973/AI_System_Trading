@@ -2,7 +2,8 @@
 
 - 根拠: `docs/decisions/0006-license-checkin-and-customer-management-service.md`(ADR 0006)
 - 前提: `docs/plans/horizon5-implementation-plan.md` Unit 6(オフライン検証ライセンスキー機構)
-- 状態: ドラフト(未着手)
+- 状態: ドラフト(未着手、2026-09-25保留 — トレードボットとしてのコア機能(Horizon 3/4)が
+  完成し運用できる状態になってから再開する、との利用者判断)
 
 ## 0. スコープと分離
 
