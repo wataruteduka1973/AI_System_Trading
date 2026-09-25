@@ -278,6 +278,31 @@ Application抽出を先行する。OANDA確認やHorizon 1全体を完了扱い�
 
 ### Horizon 3: Paper Tradingコア（5〜8か月）
 
+状態: `[~]` 実装・整備の主要項目（PaperAccount等のORM、注文受付/risk check/約定/取消の
+Application Use Case、StrategyVersion/RiskProfileVersion/Signal/RiskDecisionの監査可能な
+保存、Botのstart/pause/resume/stop、halt理由）はコードとして既に実装済み
+（`app/trading/application/order_flow.py`・`risk_gate.py`・`trading_halt.py`・
+`bot_lifecycle.py`等）だが、本節にはこれまで状態行が無かった（本ロードマップ更新漏れ）。
+HTTPからの呼び出し経路（Bot管理API）は2026-09-25まで存在せず、これらのUse Caseは
+Pythonから直接呼ぶ以外に到達手段が無かった。
+
+2026-09-25: 上記の既存Application層を呼び出すBot管理API
+（`app/api/routes/trading.py`、`app/schemas/trading.py`）を追加した。
+`POST /workspaces/{id}/trading-accounts`（paper口座作成）・
+`POST .../trading-accounts/{id}/deposits`（`account_funding.seed_paper_deposit`の呼び出し）・
+`POST /workspaces/{id}/bots`（Bot作成、`start`しない）・
+`POST .../bots/{id}/{start,pause,resume,stop}`（`bot_lifecycle.py`の4コマンドをそのまま
+公開）を実装した。`app/trading/application/dummy_pipeline.py`の`ensure_dummy_bot`は
+従来`bot_lifecycle.start_bot`まで内部で呼んでいた（呼び出し元ゼロ・試験ゼロの
+フィクスチャヘルパーだったため気づかれていなかった）が、これをHTTPの`POST .../bots`
+から直接呼ぶにあたり「作成」と「起動」を分離し、`bot_lifecycle.py`の4コマンドが
+既に独立している設計と揃えた。`docs/concept/FXtrading_rebuild/04_API再設計.md`は
+`POST /bots/{id}/commands`という単一エンドポイント案を示しているが、同ドキュメントは
+`AGENTS.md`のディレクトリ規約上「現在のスコープではない」候補設計であるため、本APIは
+代わりにこのコードベースの既存規約（`trading_halts.py`の動詞ごとの個別エンドポイント）に
+揃えた。まだ未実装: 実行ループ/Worker（`run_dummy_pipeline_once`を定期実行する経路が無い）、
+最低限のUI。次のUnitで着手予定（利用者指示「Bot管理API→実行ループ→最低限のUI」の順）。
+
 #### 開始条件
 
 - 観測基盤が安定し、履歴とリアルタイムの整合性が確認済み
@@ -377,6 +402,14 @@ GHSA-537c-gmf6-5ccf。証明書チェーン検証・PKCS7復号・静的リン�
 のみで、検出された脆弱性は主にX.509証明書検証・PKCS7復号に関するものだが、修正には
 `>=48.0.1`への更新(現行ピン`>=46,<47`の範囲外)が必要）。
 
+2026-09-25: 上記`cryptography`の脆弱性に対応した。`pyproject.toml`/`requirements.txt`の
+ピンを`>=50.0.1,<51`へ更新した(4件のうちPYSEC-2026-3552の修正版が50.0.0のため、
+`>=48.0.1`ではなく`>=50.0.1`が必要な下限)。`PyJWT[crypto]`(`cryptography>=3.4.0`)・
+`psycopg`・`pwdlib[argon2]`はいずれも`cryptography`に独自の上限制約を持たないことを
+確認済み。`python -m pip_audit`で脆弱性が解消したことを確認し、`ruff`/`mypy`/`pytest`
+(479件)全て成功。Fernet(`app/services/secrets.py`)のみを使う狭い利用範囲のため、
+API互換性への影響は無かった。
+
 開始条件の充足状況、配布モデルの決定（セルフホスト型ソフトウェア販売への一本化、
 マルチテナントSaaS仲介モデルは取引所ToS上のリスクにより不採用）、および
 本節の実装・整備項目の再構成は`decisions/0005-horizon5-self-hosted-distribution.md`を、
@@ -415,8 +448,8 @@ ADR 0005によりroadmap原文の前提（運営者が本番環境を運用す�
   運営者によるSLO保証ではなく、顧客向けの手順書提供に変更する
 - `[x]` dependency、SBOM、secret scan、脆弱性対応をrelease gateへ組み込む
   （secret scanは既存のgitleaks(secret-scanジョブ)。`pip-audit`をbackendジョブへ、
-  SBOM生成(anchore/sbom-action)をrelease.ymlへ追加済み。「脆弱性対応」自体
-  ―既存依存の更新―は本Unitのスコープ外、検出された`cryptography`の件は上記参照）
+  SBOM生成(anchore/sbom-action)をrelease.ymlへ追加済み。導入時に検出された既存依存
+  `cryptography`の脆弱性4件は2026-09-25の別コミットで解消済み、上記参照）
 - （新規）ライセンスキー機構（オフライン検証、署名済みライセンスファイル）を実装する
 
 #### 完了条件

@@ -6,6 +6,7 @@ from app.api.routes import (
     connections,
     instruments,
     market_data,
+    trading,
     trading_halts,
     workspaces,
 )
@@ -16,5 +17,6 @@ api_router.include_router(workspaces.router)
 api_router.include_router(connections.router)
 api_router.include_router(instruments.router)
 api_router.include_router(market_data.router)
+api_router.include_router(trading.router)
 api_router.include_router(trading_halts.router)
 api_router.include_router(client_logs.router)
