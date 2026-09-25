@@ -119,6 +119,11 @@ DBが必須のAlembicリビジョン（`20260831_0005`）に達していない�
 - `PUT /api/v1/workspaces/{workspace_id}/connections/{connection_id}/credentials` — 暗号化資格情報を置換して即時再検証
 - `GET /api/v1/workspaces/{workspace_id}/trading-halts` — 発動中のtrading halt一覧
 - `POST /api/v1/workspaces/{workspace_id}/trading-halts/{halt_id}/release` — halt解除(Ownerのみ)
+- `POST /api/v1/workspaces/{workspace_id}/trading-accounts` — paper口座作成
+- `GET /api/v1/workspaces/{workspace_id}/bots` — Bot一覧
+- `POST /api/v1/workspaces/{workspace_id}/bots` — Bot作成(作成のみ、開始しない)
+- `POST /api/v1/workspaces/{workspace_id}/bots/{bot_id}/{start,pause,resume,stop}` — Bot操作
+- `GET /api/v1/workspaces/{workspace_id}/bots/{bot_id}/latest-run` — 直近のBotRunと直近シグナル
 - `GET /api/v1/exchanges` — 対応取引所一覧
 - `GET /api/v1/markets` — 対応市場一覧
 

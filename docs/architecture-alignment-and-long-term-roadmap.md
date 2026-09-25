@@ -325,6 +325,29 @@ Bot管理API（`POST .../bots/{id}/start`等）と合わせて、Botをstartす�
 シグナル評価・注文が進行する状態になった。次のUnit: 最低限のUI（利用者指示の順序
 どおり）。
 
+2026-09-26: 上記の最低限のUIを実装した。着手前に利用者とデザインを協議し
+（更新方式は自動ポーリング、実行状況はdesired/actual stateに加え直近のBotRun/
+シグナル情報も表示、との決定）、決定に沿ってバックエンドへ
+`GET .../bots/{id}/latest-run`（直近BotRunと直近Signalを1回の呼び出しで返す、
+`app/schemas/trading.py`の`BotRunSummaryRead`）を追加してから着手した。
+フロントエンドは既存の`features/connections/`と同じ構成規約
+（`useXxx`フック + Panelコンポーネント + Pageラッパー、App.tsxへ集約配線する
+既存の(やや集中的な)構造）に揃え、`features/trading/`（`useTrading.ts`、
+`TradingPanel.tsx`）・`pages/TradingPage.tsx`・ルート`/workspaces/:id/trading`・
+AppShellへの「Bot管理」ナビリンクを追加した。取引口座の作成・入金、Botの作成・
+start/pause/resume/stop、状態バッジと直近シグナル表示を5秒間隔でポーリングする
+（`useMarketData.ts`と同じ形状）。ロール別のボタン出し分けは既存UIが一切行って
+いない規約に合わせて実装せず、APIの403に委ねている。
+
+検証: `ruff`/`mypy`/`pytest`（510件）、フロントエンド`eslint`/`tsc --noEmit`/
+`vitest`（33件）/本番buildは全て成功。バックエンドとフロントエンドを実際に起動し、
+新規10エンドポイントが`/openapi.json`に登録されていること、`/health/db`が
+`postgresql`で成功すること、フロントエンドが未認証画面までコンソールエラー無く
+到達することを確認した。**実際のログイン後の画面操作は未検証**: `.env`に
+OIDC provider設定が無く、このリポジトリで既に繰り返し記録されている環境上の
+制約（実際のIdPによるE2Eログイン未検証）と同じ理由で、認証後のBot管理画面の
+実クリック操作による確認はできなかった。
+
 #### 開始条件
 
 - 観測基盤が安定し、履歴とリアルタイムの整合性が確認済み

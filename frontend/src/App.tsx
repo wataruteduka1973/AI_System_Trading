@@ -6,6 +6,7 @@ import ConnectionManagementPage from './pages/ConnectionManagementPage'
 import ExchangeMarketPage from './pages/ExchangeMarketPage'
 import HomePage from './pages/HomePage'
 import NotFoundPage from './pages/NotFoundPage'
+import TradingPage from './pages/TradingPage'
 import { useHealth } from './features/health/useHealth'
 import HealthPanel from './features/health/HealthPanel'
 import { useAuth } from './features/auth/useAuth'
@@ -18,6 +19,8 @@ import ConnectionsPanel, { ConnectionRegistrationForms } from './features/connec
 import { useMarketData } from './features/market-data/useMarketData'
 import { useMarketStream } from './features/market-data/useMarketStream'
 import MarketDataPanel from './features/market-data/MarketDataPanel'
+import { useTrading } from './features/trading/useTrading'
+import TradingPanel, { TradingForms } from './features/trading/TradingPanel'
 import { apiBaseUrl } from './lib/api'
 import './App.css'
 
@@ -84,6 +87,8 @@ function App() {
     marketData.reloadMarketData,
   )
 
+  const trading = useTrading(selectedWorkspaceId)
+
   if (auth.status === 'loading') {
     return (
       <main className="dashboard-shell">
@@ -130,6 +135,10 @@ function App() {
           path="/workspaces/:workspaceId/markets/binance"
           element={<ExchangeMarketPage exchange="binance">{null}</ExchangeMarketPage>}
         />
+        <Route
+          path="/workspaces/:workspaceId/trading"
+          element={<TradingPage>{null}</TradingPage>}
+        />
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
 
@@ -153,6 +162,13 @@ function App() {
           onDisable={(connection) => void connections.manageConnection(connection, 'disable')}
           onDelete={(connection) => void connections.manageConnection(connection, 'delete')}
           onSelectAccount={(account) => void connections.selectAccount(account)}
+        />
+        <TradingPanel
+          visible={route.kind === 'trading'}
+          tradingAccounts={trading.tradingAccounts}
+          bots={trading.bots}
+          latestRuns={trading.latestRuns}
+          onCommand={(bot, command) => void trading.runBotCommand(bot, command)}
         />
       </section>
       )}
@@ -220,6 +236,35 @@ function App() {
         selectedBinanceConnectionId={connections.selectedBinanceConnectionId}
         onSelectedBinanceConnectionIdChange={connections.setSelectedBinanceConnectionId}
         onRegisterBinance={() => void connections.registerAndVerifyBinance()}
+      />
+
+      <TradingForms
+        visible={route.kind === 'trading' && Boolean(selectedWorkspaceId)}
+        connections={connections.connections}
+        workspaceInstruments={workspaceInstruments}
+        tradingAccounts={trading.tradingAccounts}
+        tradingMessage={trading.tradingMessage}
+        accountConnectionId={trading.accountConnectionId}
+        onAccountConnectionIdChange={trading.setAccountConnectionId}
+        accountBaseCurrency={trading.accountBaseCurrency}
+        onAccountBaseCurrencyChange={trading.setAccountBaseCurrency}
+        onCreateTradingAccount={() => void trading.createTradingAccount()}
+        depositAccountId={trading.depositAccountId}
+        onDepositAccountIdChange={trading.setDepositAccountId}
+        depositAmount={trading.depositAmount}
+        onDepositAmountChange={trading.setDepositAmount}
+        depositAsset={trading.depositAsset}
+        onDepositAssetChange={trading.setDepositAsset}
+        onCreateDeposit={() => void trading.createDeposit()}
+        botName={trading.botName}
+        onBotNameChange={trading.setBotName}
+        botAccountId={trading.botAccountId}
+        onBotAccountIdChange={trading.setBotAccountId}
+        botInstrumentId={trading.botInstrumentId}
+        onBotInstrumentIdChange={trading.setBotInstrumentId}
+        botTimeframe={trading.botTimeframe}
+        onBotTimeframeChange={trading.setBotTimeframe}
+        onCreateBot={() => void trading.createBot()}
       />
 
       {route.kind === 'home' && <button type="button" onClick={refreshHealth}>

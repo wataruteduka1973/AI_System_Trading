@@ -84,3 +84,29 @@ class BotRunRead(OrmModel):
     stopped_at: datetime | None
     stop_reason: str | None
     heartbeat_at: datetime | None
+
+
+class LatestSignalRead(OrmModel):
+    id: UUID
+    action: str
+    created_at: datetime
+
+
+class BotRunSummaryRead(OrmModel):
+    """Response for `GET .../bots/{id}/latest-run` (minimal UI task,
+    2026-09-25): the most recent `BotRun` regardless of status, plus the most
+    recent `Signal` recorded against it, if any. Distinct from `BotRunRead`
+    (used only by the start/pause/resume/stop action responses) -- this is
+    always hand-assembled in the route (two queries joined in Python, not one
+    ORM relationship), so keeping it a separate schema avoids coupling that
+    assembly to the simpler lifecycle-action response shape."""
+
+    id: UUID
+    bot_id: UUID
+    status: str
+    code_version: str
+    started_at: datetime
+    stopped_at: datetime | None
+    stop_reason: str | None
+    heartbeat_at: datetime | None
+    latest_signal: LatestSignalRead | None
