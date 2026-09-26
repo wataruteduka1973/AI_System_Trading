@@ -660,6 +660,42 @@ ADR 0005によりroadmap原文の前提（運営者が本番環境を運用す�
 
 Paper Tradingの詳細設計は3・4と並行して作成できるが、実装開始はHorizon 2完了後とする。
 
+### 2026-09-26改訂: 現在の優先順位（利用者判断）
+
+上記1〜5(Horizon 0〜2)は完了済み。Horizon 3(Paper Tradingコア)はBot管理API・
+実行ループ/Worker・最低限のUIまで、Horizon 4はBacktest API・最低限のUIまで
+実装済み(各節の状態行を参照)。この時点で、利用者は開発計画を見直し、
+**サーバーへのデプロイ・課金・Horizon 5残タスク(ライセンス・顧客管理機構、
+ADR 0006参照)を、実際に機能し利益を生むトレードロジックが検証できるまで
+後回しにする**方針を示した。
+
+理由: 調査の結果、現在全Botの売買判断ロジックは`app/trading/application
+/dummy_signal.py`の`generate_dummy_signal`のみであることが判明した。中身は
+「直近5本の終値のSMAと比較して上なら買い・下なら売り」という固定ルールで、
+モジュール自身のdocstringに「do not tune this to chase performance --
+意図的に単純な説明用ルールであり、開発中の戦略ではない」と明記されている。
+つまりこれまで一度も「儲かるように作る/検証する」対象にされたことがない。
+デプロイ・課金基盤がどれだけ整っていても、この核心部分が機能しなければ
+無意味、との判断である。
+
+次の推奨単位:
+
+1. **技術指標ベースの手作り戦略を開発し、Backtest APIで検証する**
+   (2026-09-26決定: AI/MLモデル(Chronos、Horizon 6)導入より先に着手する。
+   Horizon 6は「non-AI baselineが既にある」ことを開始条件の一つとしており、
+   現状の`dummy_signal.py`は収益性検証済みのbaselineとは言えないため、この
+   単位はHorizon 6着手の前提を実質的に整備する意味も持つが、目的はあくまで
+   実際に機能する戦略を作ることであり、Horizon 6着手そのものではない)。
+   `dummy_signal.py`を置き換える/追加する形でRSI・MACD・ボリンジャーバンド等を
+   組み合わせた具体的な戦略候補を実装し、`POST /workspaces/{id}/backtests`
+   (Horizon4、2026-09-26実装)で過去データに対する収益性(net_pnl、
+   Profit Factor、勝率、最大DD)をwalk-forward評価で確認する。既存の
+   Strategy/StrategyVersionモデル・Backtest基盤をそのまま利用できる。
+2. 検証結果が有望であれば、paper運用(既存のBot管理API・実行ループ)で
+   実データに対する追加検証を行う。
+3. デプロイ・課金・Horizon 5残タスクの再開は、利用者からの明示的な意思表示を
+   待つ。
+
 ## 11. 文書運用
 
 - 初期設計 `docs/concept/FXtrading_rebuild/` は製品構想と候補設計の記録として保持する。
