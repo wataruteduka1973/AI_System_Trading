@@ -124,6 +124,9 @@ DBが必須のAlembicリビジョン（`20260831_0005`）に達していない�
 - `POST /api/v1/workspaces/{workspace_id}/bots` — Bot作成(作成のみ、開始しない)
 - `POST /api/v1/workspaces/{workspace_id}/bots/{bot_id}/{start,pause,resume,stop}` — Bot操作
 - `GET /api/v1/workspaces/{workspace_id}/bots/{bot_id}/latest-run` — 直近のBotRunと直近シグナル
+- `POST /api/v1/workspaces/{workspace_id}/backtests` — バックテスト実行(同期。walk-forward可)
+- `GET /api/v1/workspaces/{workspace_id}/backtests` — バックテスト実行履歴
+- `GET /api/v1/workspaces/{workspace_id}/backtests/{backtest_run_id}/trades` — 実行内の取引一覧
 - `GET /api/v1/exchanges` — 対応取引所一覧
 - `GET /api/v1/markets` — 対応市場一覧
 

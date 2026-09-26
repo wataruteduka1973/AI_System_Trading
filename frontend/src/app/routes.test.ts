@@ -1,17 +1,20 @@
 import { describe, expect, it } from 'vitest'
-import { connectionPath, marketPath, resolveAppRoute, tradingPath } from './routes'
+import { backtestPath, connectionPath, marketPath, resolveAppRoute, tradingPath } from './routes'
 
 describe('application routes', () => {
   it('resolves the home page', () => {
     expect(resolveAppRoute('/')).toEqual({ kind: 'home', workspaceId: null, exchange: null })
   })
 
-  it('resolves workspace connection, trading, and market routes', () => {
+  it('resolves workspace connection, trading, backtests, and market routes', () => {
     expect(resolveAppRoute('/workspaces/workspace-1/connections')).toEqual({
       kind: 'connections', workspaceId: 'workspace-1', exchange: null,
     })
     expect(resolveAppRoute('/workspaces/workspace-1/trading')).toEqual({
       kind: 'trading', workspaceId: 'workspace-1', exchange: null,
+    })
+    expect(resolveAppRoute('/workspaces/workspace-1/backtests')).toEqual({
+      kind: 'backtests', workspaceId: 'workspace-1', exchange: null,
     })
     expect(resolveAppRoute('/workspaces/workspace-1/markets/binance')).toEqual({
       kind: 'market', workspaceId: 'workspace-1', exchange: 'binance',
@@ -23,5 +26,6 @@ describe('application routes', () => {
     expect(connectionPath('workspace / one')).toBe('/workspaces/workspace%20%2F%20one/connections')
     expect(marketPath('workspace-1', 'oanda')).toBe('/workspaces/workspace-1/markets/oanda')
     expect(tradingPath('workspace / one')).toBe('/workspaces/workspace%20%2F%20one/trading')
+    expect(backtestPath('workspace / one')).toBe('/workspaces/workspace%20%2F%20one/backtests')
   })
 })

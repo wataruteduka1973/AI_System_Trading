@@ -7,6 +7,7 @@ import ExchangeMarketPage from './pages/ExchangeMarketPage'
 import HomePage from './pages/HomePage'
 import NotFoundPage from './pages/NotFoundPage'
 import TradingPage from './pages/TradingPage'
+import BacktestPage from './pages/BacktestPage'
 import { useHealth } from './features/health/useHealth'
 import HealthPanel from './features/health/HealthPanel'
 import { useAuth } from './features/auth/useAuth'
@@ -21,6 +22,8 @@ import { useMarketStream } from './features/market-data/useMarketStream'
 import MarketDataPanel from './features/market-data/MarketDataPanel'
 import { useTrading } from './features/trading/useTrading'
 import TradingPanel, { TradingForms } from './features/trading/TradingPanel'
+import { useBacktests } from './features/backtests/useBacktests'
+import BacktestPanel, { BacktestForm } from './features/backtests/BacktestPanel'
 import { apiBaseUrl } from './lib/api'
 import './App.css'
 
@@ -88,6 +91,7 @@ function App() {
   )
 
   const trading = useTrading(selectedWorkspaceId)
+  const backtests = useBacktests(selectedWorkspaceId)
 
   if (auth.status === 'loading') {
     return (
@@ -139,6 +143,10 @@ function App() {
           path="/workspaces/:workspaceId/trading"
           element={<TradingPage>{null}</TradingPage>}
         />
+        <Route
+          path="/workspaces/:workspaceId/backtests"
+          element={<BacktestPage>{null}</BacktestPage>}
+        />
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
 
@@ -169,6 +177,12 @@ function App() {
           bots={trading.bots}
           latestRuns={trading.latestRuns}
           onCommand={(bot, command) => void trading.runBotCommand(bot, command)}
+        />
+        <BacktestPanel
+          visible={route.kind === 'backtests'}
+          backtests={backtests.backtests}
+          selectedRunTrades={backtests.selectedRunTrades}
+          onViewTrades={(run) => void backtests.loadTrades(run)}
         />
       </section>
       )}
@@ -265,6 +279,29 @@ function App() {
         botTimeframe={trading.botTimeframe}
         onBotTimeframeChange={trading.setBotTimeframe}
         onCreateBot={() => void trading.createBot()}
+      />
+
+      <BacktestForm
+        visible={route.kind === 'backtests' && Boolean(selectedWorkspaceId)}
+        workspaceInstruments={workspaceInstruments}
+        backtestMessage={backtests.backtestMessage}
+        instrumentId={backtests.instrumentId}
+        onInstrumentIdChange={backtests.setInstrumentId}
+        timeframe={backtests.timeframe}
+        onTimeframeChange={backtests.setTimeframe}
+        fromTime={backtests.fromTime}
+        onFromTimeChange={backtests.setFromTime}
+        toTime={backtests.toTime}
+        onToTimeChange={backtests.setToTime}
+        initialEquity={backtests.initialEquity}
+        onInitialEquityChange={backtests.setInitialEquity}
+        spread={backtests.spread}
+        onSpreadChange={backtests.setSpread}
+        walkForward={backtests.walkForward}
+        onWalkForwardChange={backtests.setWalkForward}
+        trainRatio={backtests.trainRatio}
+        onTrainRatioChange={backtests.setTrainRatio}
+        onCreateBacktest={() => void backtests.createBacktest()}
       />
 
       {route.kind === 'home' && <button type="button" onClick={refreshHealth}>

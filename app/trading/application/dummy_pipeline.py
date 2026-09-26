@@ -88,23 +88,19 @@ def _checksum(payload: object) -> str:
     return hashlib.sha256(repr(payload).encode()).hexdigest()
 
 
-def ensure_dummy_bot(
+def ensure_dummy_strategy_and_risk_profile(
     db: Session,
     workspace_id: UUID,
-    account: TradingAccount,
-    instrument: Instrument,
     *,
-    bot_name: str,
-    timeframe: str = "1m",
     strategy_name: str = "dummy-sma-pipeline-skeleton",
     risk_profile_name: str = "conservative-v1-dummy",
-) -> TradingBot:
+) -> tuple[StrategyVersion, RiskProfileVersion]:
     """Idempotent: reuses existing rows by (workspace_id, name) if this has already
-    been called for this workspace. `strategy_name`/`risk_profile_name` default to
-    the one dummy strategy/risk-profile every bot in a workspace currently shares
-    (there is only one real strategy implementation, `dummy_signal.py`) --
-    `bot_name` has no such shared default since it must be unique per bot
-    (`uq_trading_bot_name`) and the caller always has a real one to give it."""
+    been called for this workspace. Extracted from `ensure_dummy_bot` (2026-09-26,
+    Horizon 4 backtest API task) so the backtest provisioning flow -- which needs a
+    `StrategyVersion`/`RiskProfileVersion` but not a `TradingBot`/`TradingAccount` --
+    can reuse the same one dummy strategy/risk-profile every bot in a workspace
+    already shares, instead of duplicating this block. Caller commits."""
     strategy = db.scalar(
         select(Strategy).where(
             Strategy.workspace_id == workspace_id, Strategy.name == strategy_name
@@ -161,6 +157,30 @@ def ensure_dummy_bot(
         )
         db.add(risk_profile_version)
         db.flush()
+
+    return strategy_version, risk_profile_version
+
+
+def ensure_dummy_bot(
+    db: Session,
+    workspace_id: UUID,
+    account: TradingAccount,
+    instrument: Instrument,
+    *,
+    bot_name: str,
+    timeframe: str = "1m",
+    strategy_name: str = "dummy-sma-pipeline-skeleton",
+    risk_profile_name: str = "conservative-v1-dummy",
+) -> TradingBot:
+    """Idempotent: reuses existing rows by (workspace_id, name) if this has already
+    been called for this workspace. `strategy_name`/`risk_profile_name` default to
+    the one dummy strategy/risk-profile every bot in a workspace currently shares
+    (there is only one real strategy implementation, `dummy_signal.py`) --
+    `bot_name` has no such shared default since it must be unique per bot
+    (`uq_trading_bot_name`) and the caller always has a real one to give it."""
+    strategy_version, risk_profile_version = ensure_dummy_strategy_and_risk_profile(
+        db, workspace_id, strategy_name=strategy_name, risk_profile_name=risk_profile_name
+    )
 
     bot = db.scalar(
         select(TradingBot).where(

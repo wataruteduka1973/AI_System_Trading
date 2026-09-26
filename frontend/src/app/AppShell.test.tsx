@@ -24,6 +24,9 @@ describe('AppShell', () => {
     expect(screen.getByRole('link', { name: 'Bot管理' })).toHaveAttribute(
       'href', '/workspaces/workspace-1/trading',
     )
+    expect(screen.getByRole('link', { name: 'バックテスト' })).toHaveAttribute(
+      'href', '/workspaces/workspace-1/backtests',
+    )
   })
 
   it('does not invent workspace navigation before selection', () => {

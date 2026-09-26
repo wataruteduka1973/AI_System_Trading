@@ -392,6 +392,37 @@ README「ローカルでの確認」節に開発者向け手順として追記�
 Horizon 6着手前の縮小スコープ(Horizon4-lite)としての先行着手方針は
 `decisions/0003-horizon4-lite-backtest-before-chronos.md`を参照。
 
+状態: `[~]` `docs/plans/horizon4-lite-backtest.md`のUnit 1〜6(DatasetSnapshot/
+BacktestRun/BacktestTradeのORM、リプレイハーネス、約定シミュレーション、評価指標、
+walk-forward分割、look-ahead bias検知テスト)はコードとして実装・試験済みだったが、
+本節にはこれまで状態行が無かった(Horizon 3と同じ、本ロードマップ更新漏れ)。HTTPから
+到達する経路も無く、Pythonから直接呼ぶ以外に利用できなかった。
+
+2026-09-26: 上記の既存Application層を呼び出すBacktest API
+(`app/api/routes/backtests.py`、`app/schemas/backtests.py`)を追加した。
+`POST /workspaces/{id}/backtests`(同期実行、`mode: "single"|"walk_forward"`)・
+`GET /workspaces/{id}/backtests`(履歴一覧)・
+`GET /workspaces/{id}/backtests/{id}/trades`(取引一覧)を実装し、最低限のUI
+(`features/backtests/`、ルート`/workspaces/:id/backtests`)も合わせて追加した。
+Units 1〜6のうち`dataset_snapshotの作成`(対象期間のcandle件数・欠損チェック・
+checksum算出)だけは実装が存在しておらず、新規`app/trading/application
+/backtest_provisioning.py`の`ensure_dataset_snapshot`で埋めた。StrategyVersionは
+Bot管理APIと同じ理由(戦略実装が`dummy_signal.py`の1つのみ)でAPIから選択不可とし、
+`dummy_pipeline.ensure_dummy_bot`と共有する`ensure_dummy_strategy_and_risk_profile`
+(既存コードからの抽出、挙動不変)を再利用した。着手前に利用者へスコープを確認し、
+ADR 0003が先送りにしたStrategyVersionのDraft/Validated/Approved/Retired承認
+ワークフローは対象外(Bot管理API・実行ループ・最低限のUIのみ)と決定した。
+
+実行はこのリポジトリの他のパイプライン(order_flow、dummy_pipeline)と同じく
+POSTリクエスト内で同期的に行われる(ジョブキューは無い)。大きな期間を指定すると
+応答が遅くなりうるが、進捗報告の仕組みは無い(意図した制約)。
+
+検証: `ruff`/`mypy`/`pytest`(526件)、フロントエンド`eslint`/`tsc --noEmit`/
+`vitest`(33件)/本番buildは全て成功。バックエンドとフロントエンドを実際に起動し、
+既存のテスト用Workspace(OIDC検証時に作成したもの)でsingle/walk-forward両方の
+バックテストを実際に実行し、一覧・取引一覧の表示・成功バッジ表示までブラウザで
+確認した。
+
 #### 開始条件
 
 - Paper Tradingの注文・約定・台帳モデルが安定している
