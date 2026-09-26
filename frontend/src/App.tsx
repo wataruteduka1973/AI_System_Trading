@@ -283,6 +283,7 @@ function App() {
       <BacktestForm
         visible={route.kind === 'backtests' && Boolean(selectedWorkspaceId)}
         workspaceInstruments={workspaceInstruments}
+        researchInstruments={backtests.researchInstruments}
         backtestMessage={backtests.backtestMessage}
         instrumentId={backtests.instrumentId}
         onInstrumentIdChange={backtests.setInstrumentId}

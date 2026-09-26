@@ -439,6 +439,49 @@ POSTリクエスト内で同期的に行われる(ジョブキューは無い)�
 バックテストを実際に実行し、一覧・取引一覧の表示・成功バッジ表示までブラウザで
 確認した。
 
+2026-09-26追記: Backtestの検証対象データについて、Binance Spot Testnetの
+BTCJPY履歴が短時間足で95〜99%フラット・出来高ゼロ(薄い実弾なしの検証用市場が
+原因)であることを直接SQL集計で確認し、戦略検証には使えないと判断した
+(利用者との相談の結果、`Binance本番の公開履歴API`を併用する方針(承認ゲート
+「Binance Public履歴の併用」参照)を承認)。対応として以下を追加した。
+
+- `app/exchanges/binance_public.py`: 認証不要のBinance本番`/api/v3/klines`・
+  `/api/v3/exchangeInfo`クライアント(`BinancePublicClient`)。発注・約定には
+  一切使わず、検証用の履歴取得専用。
+- `binance_public`という別のpseudo-Exchange(`alembic/versions/
+  20260926_0009_seed_binance_public_exchange.py`)と、その下に作る別の
+  `Instrument`行(Testnetと同じ`BTCJPY`シンボルだが別instrument_id)。
+  `Candle`の一意制約(`uq_candle_business_key`)がTestnetの同シンボルの
+  実データと衝突しないようにするための分離であり、Testnetで実際に使う価格系列
+  とは物理的に混ざらない。
+- `app/market_data/application/public_research.py`:
+  `ensure_public_research_instrument`(instrument行の作成・ルール同期)と
+  `backfill_public_klines`(ページング取得+upsert)。既存の`use_cases.py`は
+  全関数が`ExchangeConnection`/`WorkspaceAccountSelection`の存在を前提とする
+  ため、公開・無認証データはここでは扱わず別モジュールに分離した。
+- `scripts/fetch_binance_public_history.py`: 手動実行専用のCLI(常駐
+  Worker化やスケジュール実行はしない)。全7時間足×指定日数分を取得する。
+- Backtest APIの`_require_instrument_access`(`app/api/routes/backtests.py`)は
+  `binance_public`のinstrumentに対してのみアカウント接続チェックをskipする
+  (Workspace存在チェックのみ残す)。新規`GET /workspaces/{id}
+  /research-instruments`でWorkspace非依存の検証用instrument一覧を公開し、
+  フロントエンドのBacktestフォームで「取引用」「検証用」の2つの
+  `<optgroup>`として選択できるようにした。
+- `app/trading/application/backtest_provisioning.py`の
+  `_exchange_code_for_instrument`は`binance_public`を`binance`に正規化する
+  (手数料・slippage・ショート許可の判定ロジックは`"oanda"`/`"binance"`の
+  リテラル文字列しか認識しないため)。
+
+検証: 上記全ファイルの`ruff`/`mypy`、`pytest`(新規`tests/test_public_research.py`
+含め全件)、フロントエンド`eslint`/`tsc -b`/`vitest`/本番buildは全て成功。
+実際にBinance本番APIから2日分の1h実データ(出来高・trade_count共に非ゼロ)を
+DBへ取得できることをスモークテストで確認した後、バックエンド・フロントエンドを
+実際に起動し、ログイン済みWorkspaceのBacktestフォームで「BTCJPY (検証用)」を
+選択し、この研究用instrumentに対するバックテストが実際に成功(取引数4、
+成功バッジ表示)することをブラウザで確認した。全時間足・1年分の本番バックフィル
+(`python scripts/fetch_binance_public_history.py --symbol BTCJPY --days 365`)は
+実行中(手動・非常駐、数分〜十数分かかる想定)。
+
 #### 開始条件
 
 - Paper Tradingの注文・約定・台帳モデルが安定している

@@ -243,6 +243,25 @@ Ownerになります）。取引口座・Bot管理画面を試すには、取引
 `WorkspaceAccountSelection`行も用意する必要があります（`GET
 /workspaces/{id}/instruments`は選択済み口座がある取引所の銘柄のみを返すため）。
 
+### Backtest検証用データの取得（開発者向け、`binance_public`）
+
+Binance Spot Testnetの実データは薄い（短時間足では95%以上が値動きゼロ・
+出来高ゼロ）ため、戦略のBacktest検証には使えません。代わりに、認証不要の
+Binance本番公開履歴API（`GET /api/v3/klines`）から取得した実データを、
+`binance_public`という別のExchange・`Instrument`（Testnetの取引用instrumentとは
+別のid、`Candle`テーブル上で混ざりません）に保存して使います。発注・約定には
+一切使いません。
+
+```powershell
+python scripts/fetch_binance_public_history.py --symbol BTCJPY --days 365
+```
+
+初回実行時に`binance_public`配下のInstrument行を自動作成します。全7時間足を
+順に取得するため数分〜十数分かかります（Binanceのレート制限を避けるため
+リクエスト間隔を空けています）。取得した`Instrument`はどのWorkspaceからも
+`GET /workspaces/{id}/research-instruments`で参照でき、フロントエンドの
+Backtestフォームでは「検証用」として選択できます。
+
 ## ディレクトリ構成
 
 ```text

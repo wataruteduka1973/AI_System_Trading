@@ -117,6 +117,35 @@ def test_create_backtest_404_when_instrument_row_is_missing() -> None:
     assert response.status_code == 404
 
 
+def test_create_backtest_skips_the_account_connection_check_for_a_research_instrument(
+    monkeypatch,
+) -> None:
+    """A `binance_public` research instrument has no `ExchangeConnection`/
+    `WorkspaceAccountSelection` at all by design (see
+    `backtests_routes._require_instrument_access`'s docstring) -- this would
+    409 under the normal instrument-access check (as
+    `test_create_backtest_409_when_instrument_is_not_accessible` above
+    exercises), but must succeed here instead."""
+    instrument = _instrument()
+    run = _backtest_run()
+    session = MagicMock()
+    session.get.side_effect = [MagicMock(), instrument]  # workspace exists, then instrument row
+    session.scalar.return_value = "binance_public"  # _is_research_instrument's join query
+    monkeypatch.setattr(
+        backtests_routes, "run_backtest_for_workspace", MagicMock(return_value=[run])
+    )
+    _override_database(session)
+    try:
+        response = client.post(
+            f"/api/v1/workspaces/{uuid4()}/backtests",
+            json={**_BODY, "instrument_id": str(instrument.id)},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 201
+
+
 def test_create_backtest_422_when_provisioning_fails(monkeypatch) -> None:
     instrument = _instrument()
     session = MagicMock()
@@ -232,6 +261,28 @@ def test_list_backtest_trades() -> None:
 
     assert response.status_code == 200
     assert response.json()[0]["side"] == "buy"
+
+
+def test_list_research_instruments_returns_binance_public_instruments() -> None:
+    workspace_id = uuid4()
+    instrument = _instrument(
+        symbol="BTCJPY", allowed_order_types=["LIMIT", "MARKET"], capabilities={}, status="active"
+    )
+    exchange = MagicMock(code="binance_public")
+    market = MagicMock(code="crypto_spot")
+    session = MagicMock()
+    session.execute.return_value.all.return_value = [(instrument, exchange, market)]
+    _override_database(session)
+    try:
+        response = client.get(f"/api/v1/workspaces/{workspace_id}/research-instruments")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["symbol"] == "BTCJPY"
+    assert body[0]["exchange_code"] == "binance_public"
 
 
 def test_create_backtest_requires_operator_role() -> None:

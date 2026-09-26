@@ -41,12 +41,21 @@ def _checksum(payload: object) -> str:
 
 
 def _exchange_code_for_instrument(db: Session, instrument: Instrument) -> str:
+    """`run_replay`/`backtest_fill.py` key their fee/slippage/short-selling rules
+    off `exchange_code` (only "oanda"/"binance" are recognized), so a
+    `binance_public` research instrument (2026-09-26, real production Binance
+    klines fetched for backtesting -- see `app/exchanges/binance_public.py`)
+    is normalized to "binance" here: it is mechanically the same spot market,
+    just sourced from public production data instead of a credentialed
+    Testnet connection. This function's own return value is otherwise only
+    used to pick a fee/mechanics *model*, not to identify the literal
+    `Exchange` catalog row."""
     code = db.scalar(select(Exchange.code).where(Exchange.id == instrument.exchange_id))
     if code is None:
         raise BacktestProvisioningError(
             "exchange_not_found", "Could not resolve exchange code for this instrument"
         )
-    return code
+    return "binance" if code == "binance_public" else code
 
 
 def load_final_candles(

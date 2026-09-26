@@ -115,7 +115,7 @@ def list_workspace_instruments(
         .order_by(Exchange.code, Instrument.symbol)
     ).all()
     return [
-        _instrument_read(instrument, exchange.code, market.code)
+        instrument_read(instrument, exchange.code, market.code)
         for instrument, exchange, market in rows
     ]
 
@@ -182,7 +182,7 @@ async def sync_workspace_instruments(
         db.flush()
         _add_sync_audit(db, workspace_id, instrument, exchange.code, "succeeded")
         _auto_start_collection(db, workspace_id, instrument.id)
-        synced.append(_instrument_read(instrument, exchange.code, market.code))
+        synced.append(instrument_read(instrument, exchange.code, market.code))
     db.commit()
     return WorkspaceInstrumentSyncRead(instruments=synced)
 
@@ -279,7 +279,7 @@ def _upsert_instrument(
     return instrument
 
 
-def _instrument_read(
+def instrument_read(
     instrument: Instrument, exchange_code: str, market_code: str
 ) -> WorkspaceInstrumentRead:
     return WorkspaceInstrumentRead(
@@ -291,11 +291,11 @@ def _instrument_read(
         quote_asset=instrument.quote_asset,
         price_scale=instrument.price_scale,
         quantity_scale=instrument.quantity_scale,
-        tick_size=_decimal_text(instrument.tick_size),
-        step_size=_decimal_text(instrument.step_size),
-        min_quantity=_optional_decimal_text(instrument.min_quantity),
-        max_quantity=_optional_decimal_text(instrument.max_quantity),
-        min_notional=_optional_decimal_text(instrument.min_notional),
+        tick_size=decimal_text(instrument.tick_size),
+        step_size=decimal_text(instrument.step_size),
+        min_quantity=optional_decimal_text(instrument.min_quantity),
+        max_quantity=optional_decimal_text(instrument.max_quantity),
+        min_notional=optional_decimal_text(instrument.min_notional),
         allowed_order_types=instrument.allowed_order_types,
         capabilities=instrument.capabilities,
         status=instrument.status,
@@ -303,12 +303,12 @@ def _instrument_read(
     )
 
 
-def _decimal_text(value: Decimal) -> str:
+def decimal_text(value: Decimal) -> str:
     return format(value, "f")
 
 
-def _optional_decimal_text(value: Decimal | None) -> str | None:
-    return _decimal_text(value) if value is not None else None
+def optional_decimal_text(value: Decimal | None) -> str | None:
+    return decimal_text(value) if value is not None else None
 
 
 def _add_sync_audit(

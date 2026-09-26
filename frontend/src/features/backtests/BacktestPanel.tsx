@@ -98,6 +98,7 @@ export default function BacktestPanel({
 export function BacktestForm({
   visible,
   workspaceInstruments,
+  researchInstruments,
   backtestMessage,
   instrumentId,
   onInstrumentIdChange,
@@ -119,6 +120,7 @@ export function BacktestForm({
 }: {
   visible: boolean
   workspaceInstruments: WorkspaceInstrument[]
+  researchInstruments: WorkspaceInstrument[]
   backtestMessage: string
   instrumentId: string
   onInstrumentIdChange: (value: string) => void
@@ -154,11 +156,24 @@ export function BacktestForm({
           銘柄
           <select value={instrumentId} onChange={(event) => onInstrumentIdChange(event.target.value)}>
             <option value="">選択してください</option>
-            {workspaceInstruments.map((instrument) => (
-              <option key={instrument.id} value={instrument.id}>
-                {instrument.symbol}
-              </option>
-            ))}
+            {workspaceInstruments.length > 0 && (
+              <optgroup label="取引用(自分の接続)">
+                {workspaceInstruments.map((instrument) => (
+                  <option key={instrument.id} value={instrument.id}>
+                    {instrument.symbol}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {researchInstruments.length > 0 && (
+              <optgroup label="検証用(公開履歴データ・接続不要)">
+                {researchInstruments.map((instrument) => (
+                  <option key={instrument.id} value={instrument.id}>
+                    {instrument.symbol} (検証用)
+                  </option>
+                ))}
+              </optgroup>
+            )}
           </select>
         </label>
         <label>

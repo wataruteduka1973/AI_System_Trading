@@ -109,6 +109,29 @@ def test_ensure_dataset_snapshot_reuses_an_existing_snapshot_by_checksum() -> No
     db.add.assert_not_called()
 
 
+# ---- _exchange_code_for_instrument ----
+
+
+def test_exchange_code_for_instrument_normalizes_binance_public_to_binance() -> None:
+    db = MagicMock()
+    db.scalar.return_value = "binance_public"
+    instrument = _instrument()
+
+    code = provisioning._exchange_code_for_instrument(db, instrument)
+
+    assert code == "binance"
+
+
+def test_exchange_code_for_instrument_leaves_other_codes_unchanged() -> None:
+    db = MagicMock()
+    db.scalar.return_value = "oanda"
+    instrument = _instrument()
+
+    code = provisioning._exchange_code_for_instrument(db, instrument)
+
+    assert code == "oanda"
+
+
 # ---- run_backtest_for_workspace ----
 
 

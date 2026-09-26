@@ -27,9 +27,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.api.routes.instruments import instrument_read
 from app.db.session import get_db
 from app.market_data.application import use_cases as market_data_application
+from app.market_data.application.public_research import RESEARCH_EXCHANGE_CODE
 from app.models.backtest import BacktestRun, BacktestTrade
+from app.models.connections import Exchange, Market
 from app.models.instruments import Instrument
 from app.models.workspace import AppUser
 from app.schemas.backtests import (
@@ -38,6 +41,7 @@ from app.schemas.backtests import (
     BacktestRunRead,
     BacktestTradeRead,
 )
+from app.schemas.instruments import WorkspaceInstrumentRead
 from app.security.rbac import require_operator_role, require_viewer_role
 from app.trading.application.backtest_provisioning import (
     BacktestProvisioningError,
@@ -51,21 +55,64 @@ Viewer = Annotated[AppUser, Depends(require_viewer_role)]
 Operator = Annotated[AppUser, Depends(require_operator_role)]
 
 
+def _is_research_instrument(db: Session, instrument_id: UUID) -> bool:
+    exchange_code = db.scalar(
+        select(Exchange.code)
+        .join(Instrument, Instrument.exchange_id == Exchange.id)
+        .where(Instrument.id == instrument_id)
+    )
+    return exchange_code == RESEARCH_EXCHANGE_CODE
+
+
 def _require_instrument_access(db: Session, workspace_id: UUID, instrument_id: UUID) -> None:
     """Mirrors `market_data.py`'s own wrapper around the same application-layer
     checks -- an instrument only counts as usable once the workspace has an
     active, verified connection selected for its exchange (see
-    `use_cases._require_instrument_access`)."""
+    `use_cases._require_instrument_access`) -- **except** a `binance_public`
+    research instrument (2026-09-26), which has no `ExchangeConnection`/
+    `WorkspaceAccountSelection` at all by design (it is public, read-only
+    market data, not a tradeable account): only workspace existence is
+    checked for it."""
     try:
         market_data_application._require_workspace(db, workspace_id)
+    except market_data_application.MarketDataApplicationError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    if _is_research_instrument(db, instrument_id):
+        return
+    try:
         market_data_application._require_instrument_access(db, workspace_id, instrument_id)
     except market_data_application.MarketDataApplicationError as exc:
-        status_code = (
-            status.HTTP_404_NOT_FOUND
-            if exc.code == "workspace_not_found"
-            else status.HTTP_409_CONFLICT
-        )
-        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+@router.get(
+    "/workspaces/{workspace_id}/research-instruments",
+    response_model=list[WorkspaceInstrumentRead],
+    tags=["backtests"],
+)
+def list_research_instruments(
+    workspace_id: UUID, db: DatabaseSession, _viewer: Viewer
+) -> list[WorkspaceInstrumentRead]:
+    """Research-only instruments (2026-09-26 -- the `binance_public` exchange
+    and its `Instrument`s, see `app/market_data/application/public_research.py`)
+    for the Backtest form's instrument picker. `list_workspace_instruments`
+    (`app/api/routes/instruments.py`) can never return these: it joins on
+    `WorkspaceAccountSelection`, which a public, credential-less research
+    instrument has none of by design. `workspace_id` here only gates *access*
+    (the caller must be a viewer of some workspace, same as every other route
+    in this API) -- the returned data itself is identical for every workspace,
+    since public market data isn't workspace-scoped."""
+    rows = db.execute(
+        select(Instrument, Exchange, Market)
+        .join(Exchange, Instrument.exchange_id == Exchange.id)
+        .join(Market, Instrument.market_id == Market.id)
+        .where(Exchange.code == RESEARCH_EXCHANGE_CODE)
+        .order_by(Instrument.symbol)
+    ).all()
+    return [
+        instrument_read(instrument, exchange.code, market.code)
+        for instrument, exchange, market in rows
+    ]
 
 
 def _get_backtest_run(db: Session, workspace_id: UUID, backtest_run_id: UUID) -> BacktestRun:

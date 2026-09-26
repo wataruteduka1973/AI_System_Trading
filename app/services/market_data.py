@@ -391,6 +391,62 @@ def build_candle_coverage(
     )
 
 
+def upsert_candle_points(
+    db: Session,
+    instrument_id: UUID,
+    timeframe: str,
+    source: str,
+    quality_status: str,
+    points: list[CandlePoint],
+) -> tuple[int, int]:
+    """Extracted from `CandleIngestionService._upsert_points` (2026-09-26, when
+    `app/market_data/application/public_research.py` needed the identical
+    upsert against `uq_candle_business_key` without going through the rest of
+    that service's credentialed-account machinery). Returns (inserted,
+    updated)."""
+    received_at = datetime.now(UTC)
+    values = [
+        {
+            "instrument_id": instrument_id,
+            "timeframe": timeframe,
+            "open_time": point.open_time,
+            "close_time": point.close_time,
+            "open": point.open,
+            "high": point.high,
+            "low": point.low,
+            "close": point.close,
+            "volume": point.volume,
+            "trade_count": point.trade_count,
+            "source": source,
+            "quality_status": quality_status,
+            "is_final": True,
+            "received_at": received_at,
+        }
+        for point in points
+    ]
+    statement = pg_insert(Candle).values(values)
+    returning_statement = statement.on_conflict_do_update(
+        constraint="uq_candle_business_key",
+        set_={
+            "close_time": statement.excluded.close_time,
+            "open": statement.excluded.open,
+            "high": statement.excluded.high,
+            "low": statement.excluded.low,
+            "close": statement.excluded.close,
+            "volume": statement.excluded.volume,
+            "trade_count": statement.excluded.trade_count,
+            "source": statement.excluded.source,
+            "quality_status": statement.excluded.quality_status,
+            "is_final": True,
+            "received_at": received_at,
+            "corrected_at": received_at,
+        },
+    ).returning(literal_column("xmax = 0", Boolean))
+    inserted_flags = list(db.scalars(returning_statement).all())
+    inserted = sum(bool(flag) for flag in inserted_flags)
+    return inserted, len(inserted_flags) - inserted
+
+
 class CandleIngestionService:
     def __init__(
         self,
@@ -545,44 +601,6 @@ class CandleIngestionService:
         quality_status: str,
         points: list[CandlePoint],
     ) -> tuple[int, int]:
-        received_at = datetime.now(UTC)
-        values = [
-            {
-                "instrument_id": instrument_id,
-                "timeframe": timeframe,
-                "open_time": point.open_time,
-                "close_time": point.close_time,
-                "open": point.open,
-                "high": point.high,
-                "low": point.low,
-                "close": point.close,
-                "volume": point.volume,
-                "trade_count": point.trade_count,
-                "source": source,
-                "quality_status": quality_status,
-                "is_final": True,
-                "received_at": received_at,
-            }
-            for point in points
-        ]
-        statement = pg_insert(Candle).values(values)
-        returning_statement = statement.on_conflict_do_update(
-            constraint="uq_candle_business_key",
-            set_={
-                "close_time": statement.excluded.close_time,
-                "open": statement.excluded.open,
-                "high": statement.excluded.high,
-                "low": statement.excluded.low,
-                "close": statement.excluded.close,
-                "volume": statement.excluded.volume,
-                "trade_count": statement.excluded.trade_count,
-                "source": statement.excluded.source,
-                "quality_status": statement.excluded.quality_status,
-                "is_final": True,
-                "received_at": received_at,
-                "corrected_at": received_at,
-            },
-        ).returning(literal_column("xmax = 0", Boolean))
-        inserted_flags = list(self.db.scalars(returning_statement).all())
-        inserted = sum(bool(flag) for flag in inserted_flags)
-        return inserted, len(inserted_flags) - inserted
+        return upsert_candle_points(
+            self.db, instrument_id, timeframe, source, quality_status, points
+        )
