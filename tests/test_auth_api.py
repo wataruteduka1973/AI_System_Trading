@@ -337,6 +337,48 @@ def test_callback_succeeds_for_an_existing_user_and_sets_the_session_cookie(
     session.commit.assert_called_once()
 
 
+def test_callback_redirects_to_the_configured_frontend_origin_not_this_apis_own_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression test: a bare "/" only lands on the frontend when it and this
+    API share an origin. In local dev (Vite on a different port) and in any
+    deployment where the frontend is hosted separately, that redirected to a
+    404 on this API's own root instead of the frontend."""
+    _configure_oidc(monkeypatch)
+    monkeypatch.setattr(settings, "cors_origins", ["http://localhost:5173"])
+    monkeypatch.setattr(
+        auth_routes.oidc,
+        "verify_pending_login",
+        lambda token, *, secret: oidc.PendingLogin(state="s", code_verifier="v", nonce="n"),
+    )
+    monkeypatch.setattr(auth_routes.oidc, "fetch_discovery_document", _fake_discovery)
+
+    async def _exchange(*args: object, **kwargs: object) -> dict[str, str]:
+        return {"id_token": "opaque-token"}
+
+    monkeypatch.setattr(auth_routes.oidc, "exchange_code_for_tokens", _exchange)
+    monkeypatch.setattr(
+        auth_routes.oidc,
+        "verify_id_token",
+        lambda *a, **k: {"sub": "subject-1", "email": "active@example.com", "name": "Active"},
+    )
+    session = MagicMock()
+    session.scalar.return_value = AppUser(
+        id=uuid4(), email="active@example.com", display_name="Active", status="active"
+    )
+    app.dependency_overrides[get_db] = lambda: session
+    try:
+        response = client.get(
+            "/api/v1/auth/callback",
+            params={"code": "auth-code", "state": "s"},
+            cookies={"oidc_state": "whatever"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.headers["location"] == "http://localhost:5173"
+
+
 # ---- /auth/me ----
 
 

@@ -175,7 +175,16 @@ async def callback(
         secret=config.session_secret,
         ttl_seconds=settings.session_ttl_seconds,
     )
-    response = RedirectResponse("/", status_code=status.HTTP_303_SEE_OTHER)
+    # A bare "/" only lands on the frontend when it and this API share an origin.
+    # cors_origins[0] is already the frontend's own trusted origin (CORSMiddleware
+    # would reject its requests otherwise) -- not request-supplied, so this is not
+    # an open redirect -- and correctly sends the browser back to a separately
+    # hosted frontend (e.g. Vite dev server on a different port) instead of 404ing
+    # on this API's own root.
+    response = RedirectResponse(
+        settings.cors_origins[0] if settings.cors_origins else "/",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
     response.delete_cookie(_OIDC_STATE_COOKIE)
     response.set_cookie(
         _SESSION_COOKIE,
