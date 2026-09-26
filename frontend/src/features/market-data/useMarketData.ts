@@ -106,37 +106,6 @@ export function useMarketData(
     timeframe,
   ])
 
-  const startBackfill = async () => {
-    if (!selectedWorkspaceId || !activeInstrumentId || submissionPending.current) return
-    submissionPending.current = true
-    setSubmittingMarketAction(true)
-    const generation = marketGeneration.current
-    try {
-      setMarketDataMessage('過去1年分の取得を開始しています。処理中も画面を閉じられます。')
-      const response = await apiFetch(
-        `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/candle-backfills`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ instrument_id: activeInstrumentId, timeframe, days: 365 }),
-        },
-      )
-      if (generation !== marketGeneration.current) return
-      if (!response.ok) {
-        const message = await apiErrorMessage(response, '過去データ取得の開始に失敗しました')
-        if (generation === marketGeneration.current) setMarketDataMessage(message)
-        return
-      }
-      setMarketDataMessage('過去1年分の取得を受け付けました。進捗はこの画面に自動反映されます。')
-      await loadMarketData(selectedWorkspaceId, activeInstrumentId, timeframe)
-    } catch {
-      if (generation === marketGeneration.current) setMarketDataMessage('過去取得APIへ接続できません。')
-    } finally {
-      submissionPending.current = false
-      setSubmittingMarketAction(false)
-    }
-  }
-
   const setAutomaticCollection = async (enabled: boolean) => {
     if (!selectedWorkspaceId || !activeInstrumentId || submissionPending.current) return
     submissionPending.current = true
@@ -210,7 +179,6 @@ export function useMarketData(
     submittingMarketAction,
     marketDataMessage,
     loadOlderCandles,
-    startBackfill,
     setAutomaticCollection,
     reloadMarketData,
   }

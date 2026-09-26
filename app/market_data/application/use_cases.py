@@ -113,7 +113,15 @@ def enqueue_backfill(
     workspace_id: UUID,
     payload: BackfillCommand,
     validate_configuration: ConfigurationValidator,
+    *,
+    trigger_type: str = "manual",
 ) -> BackfillJob:
+    """`trigger_type` defaults to "manual" (an explicit `POST
+    .../candle-backfills` call) -- `instruments.py`'s auto-start-on-sync flow
+    (2026-09-26) is the one caller that passes `"automatic"` instead. Matches
+    `backfill_job.trigger_type`'s own CHECK constraint
+    (`database/postgresql_schema_v0.1.sql`), which already distinguished these
+    two values before this function ever used the second one."""
     with _rollback_on_failure(db):
         _validate_timeframe(payload.timeframe)
         if not 1 <= payload.days <= 365:
@@ -141,7 +149,7 @@ def enqueue_backfill(
             from_time=requested_from,
             to_time=now,
             requested_by=None,
-            trigger_type="manual",
+            trigger_type=trigger_type,
             status="queued",
         )
         db.add(job)

@@ -31,7 +31,6 @@ export default function MarketDataPanel({
   timeframe,
   onTimeframeChange,
   submittingMarketAction,
-  onStartBackfill,
   onStartAutomaticCollection,
   onStopAutomaticCollection,
   marketDataMessage,
@@ -60,7 +59,6 @@ export default function MarketDataPanel({
   timeframe: Timeframe
   onTimeframeChange: (timeframe: Timeframe) => void
   submittingMarketAction: boolean
-  onStartBackfill: () => void
   onStartAutomaticCollection: () => void
   onStopAutomaticCollection: () => void
   marketDataMessage: string
@@ -98,7 +96,8 @@ export default function MarketDataPanel({
         <p className="eyebrow">CANDLE DATA</p>
         <h2>ローソク足取得・保存</h2>
         <p className="panel-description">
-          確定済みデータだけを保存します。過去取得は最大1年、自動取得はバックエンドで1分ごとに続きます。
+          確定済みデータだけを保存します。接続管理で銘柄ルールを同期すると、過去1年分の取得と
+          自動取得が自動的に始まります(手動での取得開始は不要です)。
         </p>
       </div>
       <div className="market-data-controls">
@@ -120,7 +119,6 @@ export default function MarketDataPanel({
             ))}
           </select>
         </label>
-        <button type="button" disabled={submittingMarketAction} onClick={onStartBackfill}>過去1年を取得</button>
         <button type="button" disabled={submittingMarketAction} onClick={onStartAutomaticCollection}>この銘柄の全時間足を開始</button>
         <button type="button" disabled={submittingMarketAction} onClick={onStopAutomaticCollection}>この銘柄の全時間足を停止</button>
       </div>

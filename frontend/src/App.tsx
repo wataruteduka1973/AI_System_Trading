@@ -205,7 +205,6 @@ function App() {
         timeframe={marketData.timeframe}
         onTimeframeChange={marketData.setTimeframe}
         submittingMarketAction={marketData.submittingMarketAction}
-        onStartBackfill={() => void marketData.startBackfill()}
         onStartAutomaticCollection={() => void marketData.setAutomaticCollection(true)}
         onStopAutomaticCollection={() => void marketData.setAutomaticCollection(false)}
         marketDataMessage={marketData.marketDataMessage}
