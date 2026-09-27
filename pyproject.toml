@@ -22,7 +22,7 @@ dependencies = [
   "python-binance>=1.0.37,<2",
   "SQLAlchemy>=2.0.51,<2.1",
   "structlog>=26.1.0,<27",
-  "uvicorn[standard]>=0.51,<0.53",
+  "uvicorn[standard]>=0.51,<0.54",
 ]
 # httpx moved here from dev (Horizon5 Group A, docs/plans/horizon5-implementation-plan.md
 # Unit 3.3): app/security/oidc.py's discovery/token-exchange calls are now part of the
