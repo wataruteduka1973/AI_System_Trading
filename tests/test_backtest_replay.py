@@ -306,3 +306,125 @@ def test_risk_gate_sees_cash_not_equity_as_available_cash_while_holding(
     assert held > 0
     assert seen[1].available_cash == Decimal("1000000") - 100 * held
     assert seen[1].equity == Decimal("1000000") + 10 * held
+
+
+# ---- run_replay: protective exits (stop-loss / take-profit) ----
+#
+# `_stop_distance` is pinned to 5 so a long entered at 100 has its stop at 95 and
+# its take-profit at 100 + 5 * min_reward_risk (2.0) = 110.
+
+
+def _ohlc(i: int, open_: str, high: str, low: str, close: str) -> Candle:
+    t = datetime(2026, 9, 21, 0, 0, tzinfo=UTC) + timedelta(minutes=i)
+    return Candle(
+        id=uuid4(),
+        instrument_id=uuid4(),
+        timeframe="1m",
+        open_time=t,
+        close_time=t + timedelta(minutes=1),
+        open=Decimal(open_),
+        high=Decimal(high),
+        low=Decimal(low),
+        close=Decimal(close),
+        source="test",
+        is_final=True,
+    )
+
+
+def _run_with_exits(
+    candles: list[Candle],
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    entry: str = "buy",
+    protective_exits: bool = True,
+) -> replay.ReplayResult:
+    monkeypatch.setattr(gate, "_stop_distance", lambda *args: Decimal(5))
+
+    def scripted_signal(history: Sequence[Candle]) -> str:
+        return entry if len(history) == 1 else "hold"
+
+    return replay.run_replay(
+        candles,
+        instrument=_instrument(),
+        timeframe="1m",
+        exchange_code="oanda",  # zero fees, and shorts are allowed
+        rules=gate.CONSERVATIVE_V1_RULES,
+        initial_equity=Decimal("1000000"),
+        signal_generator=scripted_signal,  # type: ignore[arg-type]
+        protective_exits=protective_exits,
+    )
+
+
+def test_a_long_is_stopped_out_at_its_stop_price(monkeypatch: pytest.MonkeyPatch) -> None:
+    candles = [_ohlc(0, "100", "100", "100", "100"), _ohlc(1, "99", "101", "94", "96")]
+    result = _run_with_exits(candles, monkeypatch)
+
+    assert result.ending_position is None
+    [trade] = result.trades
+    assert trade.exit_price == Decimal("95")
+    assert trade.exit_reason == "stop_loss"
+    assert trade.exit_time == candles[1].close_time
+
+
+def test_a_gap_through_the_stop_fills_at_the_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    candles = [_ohlc(0, "100", "100", "100", "100"), _ohlc(1, "90", "91", "88", "89")]
+    [trade] = _run_with_exits(candles, monkeypatch).trades
+    assert trade.exit_price == Decimal("90")
+    assert trade.exit_reason == "stop_loss"
+
+
+def test_a_long_takes_profit_at_its_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    candles = [_ohlc(0, "100", "100", "100", "100"), _ohlc(1, "101", "111", "99", "108")]
+    [trade] = _run_with_exits(candles, monkeypatch).trades
+    assert trade.exit_price == Decimal("110")
+    assert trade.exit_reason == "take_profit"
+
+
+def test_when_one_bar_reaches_both_the_stop_is_assumed_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candles = [_ohlc(0, "100", "100", "100", "100"), _ohlc(1, "100", "111", "94", "100")]
+    [trade] = _run_with_exits(candles, monkeypatch).trades
+    assert trade.exit_price == Decimal("95")
+    assert trade.exit_reason == "stop_loss"
+
+
+def test_the_entry_bar_itself_never_triggers_an_exit(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The entry fills at bar 0's close; bar 0's own low happened before that.
+    candles = [_ohlc(0, "100", "100", "80", "100"), _ohlc(1, "100", "101", "99", "100")]
+    result = _run_with_exits(candles, monkeypatch)
+    assert result.trades == []
+    assert result.ending_position is not None
+
+
+def test_a_short_is_stopped_out_above_its_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    candles = [_ohlc(0, "100", "100", "100", "100"), _ohlc(1, "101", "106", "99", "104")]
+    [trade] = _run_with_exits(candles, monkeypatch, entry="sell").trades
+    assert trade.exit_price == Decimal("105")
+    assert trade.exit_reason == "stop_loss"
+
+
+def test_protective_exits_are_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    candles = [_ohlc(0, "100", "100", "100", "100"), _ohlc(1, "99", "101", "94", "96")]
+    result = _run_with_exits(candles, monkeypatch, protective_exits=False)
+    assert result.trades == []
+    assert result.ending_position is not None
+
+
+def test_signal_closes_are_labelled_as_signal_exits() -> None:
+    candles = [_candle(Decimal("100"), 0), _candle(Decimal("100"), 1), _candle(Decimal("110"), 2)]
+
+    def scripted_signal(history: Sequence[Candle]) -> str:
+        return {1: "buy", 2: "hold", 3: "sell"}[len(history)]
+
+    result = replay.run_replay(
+        candles,
+        instrument=_instrument(),
+        timeframe="1m",
+        exchange_code="oanda",
+        rules=gate.CONSERVATIVE_V1_RULES,
+        initial_equity=Decimal("1000000"),
+        signal_generator=scripted_signal,  # type: ignore[arg-type]
+    )
+    [trade] = result.trades
+    assert trade.exit_reason == "signal"

@@ -86,6 +86,7 @@ from app.trading.application import order_flow, risk_gate
 from app.trading.application.dummy_signal import DummySignalAction, generate_dummy_signal
 
 BacktestSignalGenerator = Callable[[Sequence[Candle]], DummySignalAction]
+ExitReason = Literal["signal", "stop_loss", "take_profit"]
 
 _HISTORY_WINDOW = risk_gate._ATR_HISTORY_CANDLES
 """Bound on how much of `candles` `run_replay` hands a bar's `signal_generator`
@@ -114,6 +115,7 @@ class TradeRecord:
     quantity: Decimal
     fees: Decimal
     realized_pnl: Decimal
+    exit_reason: ExitReason = "signal"
 
 
 @dataclass(frozen=True)
@@ -139,6 +141,8 @@ class _ReplayState:
     peak_equity: Decimal = Decimal(0)
     consecutive_losses: int = 0
     last_order_time: datetime | None = None
+    stop_price: Decimal | None = None
+    take_profit_price: Decimal | None = None
     trades: list[TradeRecord] = field(default_factory=list)
     equity_curve: list[tuple[datetime, Decimal]] = field(default_factory=list)
     next_sequence_no: int = 1
@@ -175,6 +179,7 @@ def _apply_and_record(
     now: datetime,
     *,
     allow_short: bool,
+    exit_reason: ExitReason = "signal",
 ) -> None:
     outcome = fill_sim.apply_fill_to_position(
         pre_fill_position, fill, order_side, allow_short=allow_short
@@ -197,6 +202,7 @@ def _apply_and_record(
                 quantity=closing_quantity,
                 fees=fill.fee_amount,
                 realized_pnl=outcome.realized_pnl,
+                exit_reason=exit_reason,
             )
         )
         state.next_sequence_no += 1
@@ -212,10 +218,41 @@ def _apply_and_record(
         state.position_opened_at = now
     elif outcome.position is None:
         state.position_opened_at = None
+        state.stop_price = None
+        state.take_profit_price = None
     # else: same-direction increase or partial reduce -- opened_at unchanged,
     # matching order_flow._apply_fill_to_position's own opened_at semantics.
 
     state.position = outcome.position
+
+
+def _protective_exit(
+    candle: Candle, position: fill_sim.BacktestPosition, stop: Decimal, target: Decimal
+) -> tuple[Decimal, ExitReason] | None:
+    """Where, if anywhere, `candle` hit `position`'s stop or target. A bar that
+    opens beyond a level fills at its open (a gap cannot fill at a price that
+    never traded). A bar whose range covers both levels is assumed to have hit
+    the stop first: OHLC cannot tell which came first, and assuming the loss is
+    the conservative choice."""
+    if position.side == "long":
+        if candle.open <= stop:
+            return candle.open, "stop_loss"
+        if candle.low <= stop:
+            return stop, "stop_loss"
+        if candle.open >= target:
+            return candle.open, "take_profit"
+        if candle.high >= target:
+            return target, "take_profit"
+        return None
+    if candle.open >= stop:
+        return candle.open, "stop_loss"
+    if candle.high >= stop:
+        return stop, "stop_loss"
+    if candle.open <= target:
+        return candle.open, "take_profit"
+    if candle.low <= target:
+        return target, "take_profit"
+    return None
 
 
 def run_replay(
@@ -229,6 +266,7 @@ def run_replay(
     spread: Decimal = Decimal(0),
     signal_generator: BacktestSignalGenerator = generate_dummy_signal,
     warmup_bars: int = 0,
+    protective_exits: bool = False,
 ) -> ReplayResult:
     """Replay `candles` (ascending by `open_time`, final bars only -- the caller is
     responsible for that, matching `_recent_final_candles`'s live-path filter) bar by
@@ -243,7 +281,15 @@ def run_replay(
     `equity_curve`. This lets a caller replaying a sub-window of a longer series
     (rolling walk-forward) hand a long-lookback `signal_generator` such as EMA(200)
     the bars just before the window, instead of losing the window's first ~200 bars
-    to an indicator that cannot be computed yet."""
+    to an indicator that cannot be computed yet.
+
+    With `protective_exits`, a position opened from flat (or flipped) gets a
+    stop at `stop_distance` from its fill price -- the same distance the Risk
+    Gate sized it for -- and a target at `stop_distance * min_reward_risk`.
+    From the next bar on, each bar's high/low is checked against both before
+    the signal is evaluated (see `_protective_exit`). Adding to a position
+    keeps the original levels. Off by default so existing callers (the
+    backtest API) keep the signal-only exit behaviour."""
     if warmup_bars < 0:
         raise ValueError("warmup_bars must be non-negative")
     if len(candles) <= warmup_bars:
@@ -259,6 +305,31 @@ def run_replay(
         candle = candles[i]
         now = candle.close_time
         history = candles[max(0, i + 1 - _HISTORY_WINDOW) : i + 1]
+
+        if (
+            protective_exits
+            and state.position is not None
+            and state.stop_price is not None
+            and state.take_profit_price is not None
+        ):
+            hit = _protective_exit(
+                candle, state.position, state.stop_price, state.take_profit_price
+            )
+            if hit is not None:
+                exit_price, reason = hit
+                held = state.position
+                exit_side: fill_sim.OrderSide = "sell" if held.side == "long" else "buy"
+                exit_fill = fill_sim.simulate_fill(
+                    exchange_code=exchange_code,
+                    side=exit_side,
+                    candle_close=exit_price,
+                    quantity=held.quantity,
+                    expected_slippage=_expected_slippage(exchange_code, spread),
+                )
+                _apply_and_record(
+                    state, held, exit_fill, exit_side, now,
+                    allow_short=allow_short, exit_reason=reason,
+                )  # fmt: skip
 
         mark_to_market_equity = state.cash_equity + _market_value(state.position, candle.close)
         state.equity_curve.append((now, mark_to_market_equity))
@@ -349,10 +420,19 @@ def run_replay(
             quantity=result.approved_quantity,
             expected_slippage=expected_slippage,
         )
+        pre_entry_position = state.position
         _apply_and_record(
-            state, state.position, entry_fill, signal_action, now, allow_short=allow_short
+            state, pre_entry_position, entry_fill, signal_action, now, allow_short=allow_short
         )
         state.last_order_time = now
+        opened_new_position = state.position is not None and (
+            pre_entry_position is None or pre_entry_position.side != state.position.side
+        )
+        if protective_exits and opened_new_position:
+            direction = Decimal(1) if signal_action == "buy" else Decimal(-1)
+            reward_risk = risk_gate._decimal(rules, "min_reward_risk")
+            state.stop_price = entry_fill.price - direction * stop_distance
+            state.take_profit_price = entry_fill.price + direction * stop_distance * reward_risk
 
     ending_equity = state.cash_equity + _market_value(state.position, candles[-1].close)
     return ReplayResult(

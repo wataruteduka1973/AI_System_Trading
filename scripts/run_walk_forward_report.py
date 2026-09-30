@@ -118,6 +118,11 @@ def main() -> int:
     parser.add_argument("--train-days", type=int, default=90)
     parser.add_argument("--test-days", type=int, default=30)
     parser.add_argument(
+        "--protective-exits",
+        action="store_true",
+        help="simulate the Risk Gate's ATR stop-loss and min_reward_risk take-profit",
+    )
+    parser.add_argument(
         "--strategies",
         default=",".join(STRATEGIES),
         help=f"comma-separated subset of: {', '.join(STRATEGIES)}",
@@ -148,7 +153,8 @@ def main() -> int:
             bars_per_day = _bars_per_day(timeframe)
             print(
                 f"\n=== {args.symbol} {timeframe}: {len(candles)} candles, "
-                f"train={args.train_days}d test={args.test_days}d ==="
+                f"train={args.train_days}d test={args.test_days}d "
+                f"protective_exits={args.protective_exits} ==="
             )
             for name in args.strategies.split(","):
                 signal_generator = STRATEGIES[name]
@@ -163,6 +169,7 @@ def main() -> int:
                     train_bars=args.train_days * bars_per_day,
                     test_bars=args.test_days * bars_per_day,
                     signal_generator=signal_generator,
+                    protective_exits=args.protective_exits,
                 )
                 _print_folds(candles, results)
     return 0

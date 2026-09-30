@@ -239,3 +239,30 @@ def test_rolling_walk_forward_warmup_is_bounded_by_the_history_window(
     _run_rolling(candles, spy)
 
     assert all(earliest == max(0, bar - 3) for bar, earliest in evaluated)
+
+
+def test_rolling_walk_forward_passes_protective_exits_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[bool] = []
+    real_run_replay = wf.run_replay
+
+    def spy(*args: object, **kwargs: object) -> replay.ReplayResult:
+        seen.append(bool(kwargs["protective_exits"]))
+        return real_run_replay(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(wf, "run_replay", spy)
+    candles = [_candle(Decimal("100"), i) for i in range(25)]
+    wf.run_rolling_walk_forward(
+        candles,
+        instrument=_instrument(),
+        timeframe="1m",
+        exchange_code="oanda",
+        rules=CONSERVATIVE_V1_RULES,
+        initial_equity=Decimal("1000000"),
+        signal_generator=lambda history: "hold",
+        train_bars=10,
+        test_bars=5,
+        protective_exits=True,
+    )
+    assert seen and all(seen)
