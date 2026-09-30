@@ -275,3 +275,34 @@ def test_equity_while_holding_is_initial_equity_plus_unrealized_pnl(
         Decimal("1000000") + 10 * quantity,  # held, price moved 10 in the position's favour
     ]
     assert result.ending_equity == Decimal("1000000") + 10 * quantity
+
+
+def test_risk_gate_sees_cash_not_equity_as_available_cash_while_holding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candles = [_candle(Decimal("100"), 0), _candle(Decimal("110"), 1)]
+    seen: list[gate.RiskState] = []
+    real_evaluate = gate._evaluate_conservative_v1
+
+    def spy(state: gate.RiskState) -> gate.PureRiskResult:
+        seen.append(state)
+        return real_evaluate(state)
+
+    monkeypatch.setattr(gate, "_evaluate_conservative_v1", spy)
+
+    replay.run_replay(
+        candles,
+        instrument=_instrument(),
+        timeframe="1m",
+        exchange_code="oanda",  # zero fees keep the arithmetic exact
+        rules=gate.CONSERVATIVE_V1_RULES,
+        initial_equity=Decimal("1000000"),
+        signal_generator=lambda history: "buy",  # enter, then add to the long
+    )
+
+    assert len(seen) == 2
+    assert seen[0].available_cash == seen[0].equity == Decimal("1000000")  # flat
+    held = seen[1].existing_position_quantity
+    assert held > 0
+    assert seen[1].available_cash == Decimal("1000000") - 100 * held
+    assert seen[1].equity == Decimal("1000000") + 10 * held

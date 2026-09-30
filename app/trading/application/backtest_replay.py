@@ -325,6 +325,7 @@ def run_replay(
             expected_slippage=expected_slippage,
             fee_buffer_per_unit=fee_buffer_per_unit,
             equity=mark_to_market_equity,
+            available_cash=state.cash_equity,
             existing_open_risk=existing_open_risk,
             has_open_position=state.position is not None,
             existing_position_quantity=(

@@ -65,6 +65,11 @@ account between the two calls within one `evaluate_signal` invocation, so they w
 always equal). `_evaluate_conservative_v1` now reuses `state.equity` for that
 calculation instead, removing the redundant second query. Every other query this
 module issues is unchanged in both count and order.
+
+(2026-09-30: once `compute_equity` started counting an open position at market
+value, equity and spendable JPY stopped being the same number while BTC is held.
+`available_jpy` is now `RiskState.available_cash`, the cash half of the same
+`value_account` call -- still no extra query.)
 """
 
 from dataclasses import dataclass
@@ -89,7 +94,7 @@ from app.models.trading import (
     TradingPosition,
 )
 from app.trading.application import order_flow, trading_halt
-from app.trading.application.account_valuation import compute_equity
+from app.trading.application.account_valuation import value_account
 
 CONSERVATIVE_V1_RULES: dict[str, object] = {
     "risk_per_trade": "0.005",
@@ -329,6 +334,11 @@ class RiskState:
     expected_slippage: Decimal
     fee_buffer_per_unit: Decimal
     equity: Decimal
+    available_cash: Decimal
+    """Spendable quote-asset balance (cash only, no position value). Binance's
+    `order_limit_pct_of_available` is a share of this, not of `equity` -- the two
+    are equal while flat, but while BTC is held equity also counts the BTC, which
+    cannot be spent on another buy."""
     existing_open_risk: Decimal
     has_open_position: bool
     existing_position_quantity: Decimal
@@ -381,7 +391,7 @@ def _evaluate_conservative_v1(state: RiskState) -> PureRiskResult:
     # --- broker_limit ---
     broker_limit_quantity = instrument.max_quantity if instrument.max_quantity is not None else None
     if state.exchange_code == "binance":
-        order_limit_notional = state.equity * _decimal(
+        order_limit_notional = max(Decimal(0), state.available_cash) * _decimal(
             rules["binance"], "order_limit_pct_of_available"
         )
         binance_order_limit_quantity = (
@@ -633,7 +643,8 @@ def evaluate_signal(
     )
     fee_buffer = _fee_buffer_per_unit(exchange_code, market_price, rules)
 
-    equity = compute_equity(db, account, instrument)
+    valuation = value_account(db, account, instrument)
+    equity = valuation.equity
     if equity <= 0:
         # Short-circuit, kept here (not in `_evaluate_conservative_v1`): every
         # downstream check divides by or scales with equity, so there is nothing
@@ -687,6 +698,7 @@ def evaluate_signal(
         expected_slippage=expected_slippage,
         fee_buffer_per_unit=fee_buffer,
         equity=equity,
+        available_cash=valuation.cash,
         existing_open_risk=existing_open_risk,
         has_open_position=has_open_position,
         existing_position_quantity=existing_position_quantity,

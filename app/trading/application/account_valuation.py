@@ -27,6 +27,7 @@ instrument shape of this codebase): a `TradingAccount` holding positions in more
 one instrument is out of scope for this function.
 """
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -79,12 +80,25 @@ def _open_position_valuation(
     return market_value, unrealized
 
 
-def compute_equity(db: Session, account: TradingAccount, instrument: Instrument) -> Decimal:
-    # Evaluation order matches record_account_snapshot's (position first, then cash) --
-    # deliberately consistent between the two so tests/callers can rely on one call order.
-    market_value, _ = _open_position_valuation(db, account, instrument)
+@dataclass(frozen=True)
+class AccountValuation:
+    cash: Decimal
+    """Spendable quote-asset balance -- what Binance's `order_limit_pct_of_available`
+    is a share of. Differs from `equity` whenever a position is open."""
+    unrealized_pnl: Decimal
+    equity: Decimal
+
+
+def value_account(db: Session, account: TradingAccount, instrument: Instrument) -> AccountValuation:
+    # Evaluation order (position first, then cash) is relied on by callers' tests,
+    # which mock db.scalar as an ordered side_effect list.
+    market_value, unrealized = _open_position_valuation(db, account, instrument)
     cash = _cash_balance(db, account, instrument.quote_asset)
-    return cash + market_value
+    return AccountValuation(cash=cash, unrealized_pnl=unrealized, equity=cash + market_value)
+
+
+def compute_equity(db: Session, account: TradingAccount, instrument: Instrument) -> Decimal:
+    return value_account(db, account, instrument).equity
 
 
 def record_account_snapshot(
@@ -97,15 +111,13 @@ def record_account_snapshot(
     """Compute and persist one `AccountSnapshot` row. Does not commit -- callers
     (e.g. `order_flow.place_order`) decide the transaction boundary."""
     now = datetime.now(UTC)
-    market_value, unrealized = _open_position_valuation(db, account, instrument)
-    cash = _cash_balance(db, account, instrument.quote_asset)
-    equity = cash + market_value
+    valuation = value_account(db, account, instrument)
     snapshot = AccountSnapshot(
         account_id=account.id,
         captured_at=now,
-        balances={instrument.quote_asset: str(cash)},
-        equity=equity,
-        unrealized_pnl=unrealized,
+        balances={instrument.quote_asset: str(valuation.cash)},
+        equity=valuation.equity,
+        unrealized_pnl=valuation.unrealized_pnl,
         source=source,
     )
     db.add(snapshot)

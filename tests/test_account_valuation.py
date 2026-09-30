@@ -6,7 +6,11 @@ from uuid import uuid4
 from app.models.instruments import Instrument
 from app.models.market_data import Candle
 from app.models.trading import AccountSnapshot, TradingAccount, TradingPosition
-from app.trading.application.account_valuation import compute_equity, record_account_snapshot
+from app.trading.application.account_valuation import (
+    compute_equity,
+    record_account_snapshot,
+    value_account,
+)
 
 
 def _instrument() -> Instrument:
@@ -144,3 +148,35 @@ def test_record_account_snapshot_values_an_open_long_at_market() -> None:
     assert snapshot.equity == Decimal("1001000")
     assert snapshot.unrealized_pnl == Decimal("1000")
     assert snapshot.balances == {"JPY": "850000"}
+
+
+def test_value_account_separates_spendable_cash_from_equity() -> None:
+    db = MagicMock()
+    instrument = _instrument()
+    position = TradingPosition(
+        id=uuid4(),
+        account_id=uuid4(),
+        instrument_id=instrument.id,
+        side="long",
+        quantity=Decimal("1000"),
+        average_entry_price=Decimal("150"),
+        status="open",
+    )
+    candle = Candle(
+        id=uuid4(),
+        instrument_id=instrument.id,
+        timeframe="1m",
+        open_time=datetime.now(UTC),
+        close_time=datetime.now(UTC),
+        open=Decimal("151"),
+        high=Decimal("151"),
+        low=Decimal("151"),
+        close=Decimal("151"),
+        source="test",
+        is_final=True,
+    )
+    db.scalar.side_effect = [position, candle, Decimal("850000")]
+    valuation = value_account(db, _account(), instrument)
+    assert valuation.cash == Decimal("850000")
+    assert valuation.unrealized_pnl == Decimal("1000")
+    assert valuation.equity == Decimal("1001000")

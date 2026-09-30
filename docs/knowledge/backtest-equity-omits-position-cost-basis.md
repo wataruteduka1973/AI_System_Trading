@@ -36,17 +36,25 @@ equity = `cash + 保有ポジションの時価`(long: `+qty*price`、short: `-q
 - 修正前に記録したバックテスト結果(max DD、保有中のequity、Risk Gateの判定が
   変わったdummy_signalの結果など)は比較に使わないこと。
 
-## 残っている近似(未対応)
+## equityと利用可能cashを区別する
 
-Binanceの `order_limit_pct_of_available`(10%)は、仕様上は「利用可能なJPY残高」に
-対する上限だが、`_evaluate_conservative_v1` は `state.equity` で代用している。
-この修正でequityが正しくなった結果、ロング保有中に買い増す場合は、この上限が
-仕様より少し緩くなる(保有上限25%があるため、最大でも「equityの10%」対
-「equityの7.5%」の差)。フラットからのエントリーでは cash = equity なので差は無い。
-正しく扱うには `RiskState` に利用可能cashを別フィールドとして渡す必要がある。
+Binanceの `order_limit_pct_of_available`(10%)は、仕様上「利用可能なJPY残高」に
+対する上限。修正前のequityは保有中もほぼcashと同じ値だったため、equityで代用しても
+差が出なかった。equityにポジションの時価を含めた結果、保有中は両者が一致しなくなった。
+そのため `account_valuation.value_account` がcash・含み損益・equityをまとめて返し、
+Risk Gateは `RiskState.available_cash`(ライブ: `value_account(...).cash`、
+バックテスト: `_ReplayState.cash_equity`)で注文上限を判定する。クエリの数と順序は
+変わらない。
+
+equityを使うべき判定(risk budget、損失上限、peak drawdown、BTC保有上限)と、
+cashを使うべき判定(買える金額の上限)を混同しないこと。
 
 ## 再発防止
 
-`tests/test_account_valuation.py` と
-`tests/test_backtest_replay.py::test_equity_while_holding_is_initial_equity_plus_unrealized_pnl`
-が、保有中の equity = 初期資金 + 含み損益 を long/short 両方で検証する。
+- `tests/test_account_valuation.py` と
+  `tests/test_backtest_replay.py::test_equity_while_holding_is_initial_equity_plus_unrealized_pnl`
+  が、保有中の equity = 初期資金 + 含み損益 を long/short 両方で検証する。
+- `tests/test_risk_gate.py::test_binance_order_limit_is_a_share_of_available_cash_not_equity`
+  と `tests/test_backtest_replay.py::test_risk_gate_sees_cash_not_equity_as_available_cash_while_holding`
+  が、注文上限がcashで判定されることを検証する。
+- `RiskState.available_cash` は必須フィールドなので、渡し忘れは mypy で検出される。

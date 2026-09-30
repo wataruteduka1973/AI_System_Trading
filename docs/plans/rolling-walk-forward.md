@@ -53,17 +53,17 @@ candles(全期間) → `split_candles_rolling(train_bars, test_bars)` → fold�
 
 ## 検証結果 (2026-09-30, BTCJPY 1年, train=90日 / test=30日, 9 fold)
 
-`python scripts/run_walk_forward_report.py` の結果(equity修正後。
+`python scripts/run_walk_forward_report.py` の結果(equity修正と、注文上限をcashで判定する修正の後。
 docs/knowledge/backtest-equity-omits-position-cost-basis.md)。netは決済済み取引のみ、
 mtmは区間末に保有中のポジションも時価で含めた損益。
 
 | 時間足 | 戦略 | 検証foldでmtm>0 | 検証fold合計net | 検証fold合計mtm |
 |---|---|---|---|---|
-| 15m | dummy_sma5 | 0/9 | -13,129 | -27,804 |
+| 15m | dummy_sma5 | 0/9 | -14,274 | -29,287 |
 | 15m | ema_trend | 0/9 | -20,866 | -28,755 |
-| 1h | dummy_sma5 | 1/9 | -23,837 | -44,187 |
+| 1h | dummy_sma5 | 1/9 | -23,210 | -42,962 |
 | 1h | ema_trend | 2/9 | -13,825 | -19,321 |
-| 4h | dummy_sma5 | 1/9 | -45,214 | -59,565 |
+| 4h | dummy_sma5 | 1/9 | -43,178 | -56,962 |
 | 4h | ema_trend | 4/9 | -11,614 | +13,730 |
 
 - **「検証区間が下落相場だっただけ」という仮説は否定された**: 直近3 fold
