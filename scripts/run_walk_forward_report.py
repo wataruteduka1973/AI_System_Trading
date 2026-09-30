@@ -16,6 +16,7 @@ Run: python scripts/run_walk_forward_report.py [--symbol BTCJPY]
 """
 
 import argparse
+from collections import Counter
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -83,7 +84,8 @@ def _metrics_cells(metrics: ReplayMetrics, mtm: Decimal) -> str:
     pf = "-" if metrics.profit_factor is None else f"{metrics.profit_factor:.2f}"
     return (
         f"trades={metrics.trade_count:>3} win={float(metrics.win_rate):>6.1%} "
-        f"net={metrics.net_pnl:>8.0f} mtm={mtm:>8.0f} pf={pf:>5}"
+        f"net={metrics.net_pnl:>8.0f} mtm={mtm:>8.0f} pf={pf:>5} "
+        f"dd={float(metrics.max_drawdown_pct):>5.1%}"
     )
 
 
@@ -91,7 +93,9 @@ def _print_folds(candles: Sequence[Candle], results: list[RollingFoldResult]) ->
     total_net = Decimal(0)
     total_mtm = Decimal(0)
     positive_folds = 0
+    exit_reasons: Counter[str] = Counter()
     for r in results:
+        exit_reasons.update(trade.exit_reason for trade in r.test_result.trades)
         test_window = candles[r.fold.train_end : r.fold.test_end]
         mtm = r.test_result.ending_equity - INITIAL_EQUITY
         total_net += r.test_metrics.net_pnl
@@ -108,6 +112,13 @@ def _print_folds(candles: Sequence[Candle], results: list[RollingFoldResult]) ->
     print(
         f"  => test folds with mtm>0: {positive_folds}/{len(results)}, "
         f"total test net={total_net:.0f}, total test mtm={total_mtm:.0f}"
+    )
+    worst_mtm = min(r.test_result.ending_equity - INITIAL_EQUITY for r in results)
+    worst_dd = max(r.test_metrics.max_drawdown_pct for r in results)
+    exits = ", ".join(f"{reason}={count}" for reason, count in sorted(exit_reasons.items()))
+    print(
+        f"  => worst test fold mtm={worst_mtm:.0f}, worst test fold dd={float(worst_dd):.1%}, "
+        f"exits: {exits or 'none'}"
     )
 
 
