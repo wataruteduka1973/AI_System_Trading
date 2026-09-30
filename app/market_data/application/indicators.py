@@ -3,7 +3,9 @@
 (08_取引アルゴリズムとリスク初期値.md§4: `max(ATR(14) * coefficient, spread * 3, ...)`).
 `exponential_moving_average` was added 2026-09-28 for `app/trading/application
 /ema_trend_signal.py` (comparing candidate hand-crafted strategies against the
-dummy SMA5 baseline on real BTCJPY data -- see that module's docstring). No
+dummy SMA5 baseline on real BTCJPY data -- see that module's docstring).
+`relative_strength_index` was added 2026-09-30 for `app/trading/application
+/rsi_mean_reversion_signal.py`, the next candidate in the same comparison. No
 other indicator infrastructure (rolling windows, caching, a registry of
 indicators, etc.) is added; building that out remains out of scope.
 """
@@ -70,3 +72,34 @@ def exponential_moving_average(candles: Sequence[Candle], period: int) -> Decima
     for close in closes[period:]:
         ema = (close - ema) * multiplier + ema
     return ema
+
+
+def relative_strength_index(candles: Sequence[Candle], period: int = 14) -> Decimal | None:
+    """Wilder's RSI of closes: the average gain and average loss of close-to-close
+    changes are seeded by the simple average of the first `period` changes, then
+    smoothed the same way as `average_true_range`
+    (`avg[t] = (avg[t-1] * (period - 1) + value[t]) / period`), and
+    `RSI = 100 - 100 / (1 + avg_gain / avg_loss)`. Stateless like the other
+    indicators here, so the result depends on how much history is passed in.
+
+    Edge cases: 100 when there were gains but no losses, 0 when there were losses
+    but no gains, and 50 (neutral) when price never changed -- the formula itself
+    is undefined there, and treating a flat market as neither overbought nor
+    oversold keeps a signal from firing on it. Returns None if fewer than
+    `period + 1` candles are given (not enough changes for a seed)."""
+    if len(candles) < period + 1:
+        return None
+    changes = [
+        current.close - previous.close
+        for previous, current in zip(candles, candles[1:], strict=False)
+    ]
+    gains = [max(change, Decimal(0)) for change in changes]
+    losses = [max(-change, Decimal(0)) for change in changes]
+    avg_gain = sum(gains[:period], Decimal(0)) / period
+    avg_loss = sum(losses[:period], Decimal(0)) / period
+    for gain, loss in zip(gains[period:], losses[period:], strict=True):
+        avg_gain = (avg_gain * (period - 1) + gain) / period
+        avg_loss = (avg_loss * (period - 1) + loss) / period
+    if avg_loss == 0:
+        return Decimal(100) if avg_gain > 0 else Decimal(50)
+    return Decimal(100) - Decimal(100) / (1 + avg_gain / avg_loss)
