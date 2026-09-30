@@ -35,14 +35,25 @@ from app.trading.application.backtest_walk_forward import (
     RollingFoldResult,
     run_rolling_walk_forward,
 )
+from app.trading.application.donchian_breakout_signal import (
+    DonchianSignalAction,
+    generate_donchian_breakout_signal,
+)
 from app.trading.application.dummy_signal import generate_dummy_signal
 from app.trading.application.ema_trend_signal import generate_ema_trend_signal
 from app.trading.application.risk_gate import CONSERVATIVE_V1_RULES
 from sqlalchemy import select
 
+
+def _donchian_55_20(candles: Sequence[Candle]) -> DonchianSignalAction:
+    return generate_donchian_breakout_signal(candles, entry_period=55, exit_period=20)
+
+
 STRATEGIES: dict[str, BacktestSignalGenerator] = {
     "dummy_sma5": generate_dummy_signal,
     "ema_trend": generate_ema_trend_signal,
+    "donchian_20_10": generate_donchian_breakout_signal,
+    "donchian_55_20": _donchian_55_20,
 }
 INITIAL_EQUITY = Decimal(1_000_000)
 
