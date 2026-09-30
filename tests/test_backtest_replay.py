@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
+import pytest
 from app.models.instruments import Instrument
 from app.models.market_data import Candle
 from app.trading.application import backtest_replay as replay
@@ -145,4 +146,93 @@ def test_run_replay_never_shows_the_signal_generator_a_future_candle() -> None:
     for bar_index, max_close_seen in enumerate(seen_max_close_by_call):
         assert max_close_seen == bar_index, (
             f"bar {bar_index} saw a candle with close={max_close_seen}, which is from a later bar"
+        )
+
+
+# ---- run_replay: warmup_bars ----
+
+
+def test_warmup_bars_are_shown_as_history_but_never_traded_or_marked() -> None:
+    # Closes equal their index, so the spy can tell which bars it was shown.
+    candles = [_candle(Decimal(i + 1), i) for i in range(6)]
+    history_lengths: list[int] = []
+    first_close_seen: list[int] = []
+
+    def spy(history: Sequence[Candle]) -> str:
+        history_lengths.append(len(history))
+        first_close_seen.append(int(history[0].close))
+        return "buy"  # would open a position on any bar it is asked about
+
+    result = replay.run_replay(
+        candles,
+        instrument=_instrument(),
+        timeframe="1m",
+        exchange_code="oanda",
+        rules=gate.CONSERVATIVE_V1_RULES,
+        initial_equity=Decimal("1000000"),
+        signal_generator=spy,  # type: ignore[arg-type]
+        warmup_bars=4,
+    )
+
+    # Only the two post-warm-up bars are evaluated, each with the warm-up prefix
+    # included in its history.
+    assert history_lengths == [5, 6]
+    assert first_close_seen == [1, 1]
+    assert [t for t, _ in result.equity_curve] == [c.close_time for c in candles[4:]]
+    assert result.ending_position is not None
+    assert result.ending_position.average_entry_price == Decimal("5")
+
+
+def test_warmup_bars_keep_the_look_ahead_guarantee() -> None:
+    candles = [_candle(Decimal(i), i) for i in range(20)]
+    seen_max_close_by_call: list[int] = []
+
+    def spy(history: Sequence[Candle]) -> str:
+        seen_max_close_by_call.append(int(max(c.close for c in history)))
+        return "hold"
+
+    replay.run_replay(
+        candles,
+        instrument=_instrument(),
+        timeframe="1m",
+        exchange_code="oanda",
+        rules=gate.CONSERVATIVE_V1_RULES,
+        initial_equity=Decimal("1000000"),
+        signal_generator=spy,  # type: ignore[arg-type]
+        warmup_bars=8,
+    )
+
+    assert seen_max_close_by_call == list(range(8, 20))
+
+
+def test_warmup_covering_every_candle_is_a_no_op() -> None:
+    candles = [_candle(Decimal("100"), i) for i in range(3)]
+
+    result = replay.run_replay(
+        candles,
+        instrument=_instrument(),
+        timeframe="1m",
+        exchange_code="oanda",
+        rules=gate.CONSERVATIVE_V1_RULES,
+        initial_equity=Decimal("1000000"),
+        signal_generator=lambda history: "buy",
+        warmup_bars=3,
+    )
+
+    assert result.trades == []
+    assert result.equity_curve == []
+    assert result.ending_equity == Decimal("1000000")
+    assert result.ending_position is None
+
+
+def test_negative_warmup_bars_is_rejected() -> None:
+    with pytest.raises(ValueError):
+        replay.run_replay(
+            [_candle(Decimal("100"), 0)],
+            instrument=_instrument(),
+            timeframe="1m",
+            exchange_code="oanda",
+            rules=gate.CONSERVATIVE_V1_RULES,
+            initial_equity=Decimal("1000000"),
+            warmup_bars=-1,
         )

@@ -5,6 +5,7 @@ already covered by tests/test_backtest_replay.py -- see this module's own docstr
 for why the split does not introduce a new instance of that risk.
 """
 
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock
@@ -13,6 +14,7 @@ from uuid import uuid4
 import pytest
 from app.models.instruments import Instrument
 from app.models.market_data import Candle
+from app.trading.application import backtest_replay as replay
 from app.trading.application import backtest_walk_forward as wf
 from app.trading.application.risk_gate import CONSERVATIVE_V1_RULES
 
@@ -132,3 +134,108 @@ def test_run_and_persist_walk_forward_links_both_runs() -> None:
     assert train_run.parameters["walk_forward_counterpart_run_id"] == str(test_run.id)
     assert train_run.status == "succeeded"
     assert test_run.status == "succeeded"
+
+
+# ---- split_candles_rolling ----
+
+
+def test_rolling_split_slides_by_test_bars_and_drops_the_partial_tail() -> None:
+    folds = wf.split_candles_rolling(25, train_bars=10, test_bars=5)
+    assert [(f.index, f.train_start, f.train_end, f.test_end) for f in folds] == [
+        (0, 0, 10, 15),
+        (1, 5, 15, 20),
+        (2, 10, 20, 25),
+    ]
+    # 27 candles: the last 2 bars are too few for a full test window and are dropped.
+    assert len(wf.split_candles_rolling(27, train_bars=10, test_bars=5)) == 3
+
+
+def test_rolling_split_test_windows_never_overlap() -> None:
+    folds = wf.split_candles_rolling(100, train_bars=30, test_bars=7)
+    for previous, current in zip(folds, folds[1:], strict=False):
+        assert previous.test_end == current.train_end
+
+
+@pytest.mark.parametrize(("train_bars", "test_bars"), [(0, 5), (10, 0), (-1, 5)])
+def test_rolling_split_rejects_non_positive_window_sizes(train_bars: int, test_bars: int) -> None:
+    with pytest.raises(wf.WalkForwardError) as exc:
+        wf.split_candles_rolling(100, train_bars=train_bars, test_bars=test_bars)
+    assert exc.value.code == "invalid_window_size"
+
+
+def test_rolling_split_rejects_too_few_candles_for_one_fold() -> None:
+    with pytest.raises(wf.WalkForwardError) as exc:
+        wf.split_candles_rolling(14, train_bars=10, test_bars=5)
+    assert exc.value.code == "insufficient_candles"
+
+
+# ---- run_rolling_walk_forward ----
+
+
+def _run_rolling(candles: list[Candle], spy: object) -> list[wf.RollingFoldResult]:
+    return wf.run_rolling_walk_forward(
+        candles,
+        instrument=_instrument(),
+        timeframe="1m",
+        exchange_code="oanda",
+        rules=CONSERVATIVE_V1_RULES,
+        initial_equity=Decimal("1000000"),
+        signal_generator=spy,  # type: ignore[arg-type]
+        train_bars=10,
+        test_bars=5,
+    )
+
+
+def test_rolling_walk_forward_evaluates_each_window_with_preceding_bars_as_warmup() -> None:
+    # Close equals index, so the spy records exactly which bars each call saw.
+    candles = [_candle(Decimal(i), i) for i in range(25)]
+    evaluated: list[tuple[int, int]] = []  # (current bar, earliest bar in history)
+
+    def spy(history: Sequence[Candle]) -> str:
+        evaluated.append((int(history[-1].close), int(history[0].close)))
+        return "hold"
+
+    results = _run_rolling(candles, spy)
+
+    assert [r.fold.index for r in results] == [0, 1, 2]
+    evaluated_bars = [bar for bar, _ in evaluated]
+    # fold 0: train 0-9, test 10-14; fold 1: train 5-14, test 15-19; fold 2: ...
+    assert evaluated_bars == [
+        *range(0, 10), *range(10, 15),
+        *range(5, 15), *range(15, 20),
+        *range(10, 20), *range(20, 25),
+    ]  # fmt: skip
+    # Every window's history reaches back to bar 0 (all bars are within the
+    # history bound here) -- warm-up, not a fresh start at the window boundary --
+    # and never past the bar being evaluated.
+    assert all(earliest == 0 for _, earliest in evaluated)
+
+
+def test_rolling_walk_forward_evaluates_every_window_from_the_same_initial_equity() -> None:
+    candles = [_candle(Decimal("100"), i) for i in range(25)]
+
+    results = _run_rolling(candles, lambda history: "hold")
+
+    for r in results:
+        assert r.train_result.ending_equity == Decimal("1000000")
+        assert r.test_result.ending_equity == Decimal("1000000")
+        assert len(r.train_result.equity_curve) == 10
+        assert len(r.test_result.equity_curve) == 5
+
+
+def test_rolling_walk_forward_warmup_is_bounded_by_the_history_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A 4-bar history window means at most 3 warm-up bars before each window.
+    monkeypatch.setattr(wf, "_HISTORY_WINDOW", 4)
+    monkeypatch.setattr(replay, "_HISTORY_WINDOW", 4)
+    candles = [_candle(Decimal(i), i) for i in range(25)]
+    evaluated: list[tuple[int, int]] = []
+
+    def spy(history: Sequence[Candle]) -> str:
+        evaluated.append((int(history[-1].close), int(history[0].close)))
+        return "hold"
+
+    _run_rolling(candles, spy)
+
+    assert all(earliest == max(0, bar - 3) for bar, earliest in evaluated)

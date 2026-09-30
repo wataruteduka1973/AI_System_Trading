@@ -219,6 +219,7 @@ def run_replay(
     initial_equity: Decimal,
     spread: Decimal = Decimal(0),
     signal_generator: BacktestSignalGenerator = generate_dummy_signal,
+    warmup_bars: int = 0,
 ) -> ReplayResult:
     """Replay `candles` (ascending by `open_time`, final bars only -- the caller is
     responsible for that, matching `_recent_final_candles`'s live-path filter) bar by
@@ -226,8 +227,17 @@ def run_replay(
     `candles[i]` (see `_HISTORY_WINDOW` below) -- no code path in this function reads
     `candles[j]` for `j > i` while evaluating bar `i`, so the look-ahead-bias
     guarantee still holds; it just no longer hands out the full, ever-growing prefix
-    to get there."""
-    if not candles:
+    to get there.
+
+    The first `warmup_bars` candles are history only: they appear in later bars'
+    `history` (and ATR window) but are never evaluated, traded, or added to
+    `equity_curve`. This lets a caller replaying a sub-window of a longer series
+    (rolling walk-forward) hand a long-lookback `signal_generator` such as EMA(200)
+    the bars just before the window, instead of losing the window's first ~200 bars
+    to an indicator that cannot be computed yet."""
+    if warmup_bars < 0:
+        raise ValueError("warmup_bars must be non-negative")
+    if len(candles) <= warmup_bars:
         return ReplayResult(
             trades=[], ending_equity=initial_equity, ending_position=None, equity_curve=[]
         )
@@ -236,7 +246,8 @@ def run_replay(
     bar_seconds = TIMEFRAME_SECONDS[timeframe]
     state = _ReplayState(cash_equity=initial_equity)
 
-    for i, candle in enumerate(candles):
+    for i in range(warmup_bars, len(candles)):
+        candle = candles[i]
         now = candle.close_time
         history = candles[max(0, i + 1 - _HISTORY_WINDOW) : i + 1]
 
