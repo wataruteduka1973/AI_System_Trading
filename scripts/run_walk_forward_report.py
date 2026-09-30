@@ -12,6 +12,7 @@ equity, so it also counts a position still held at the window's end (marked
 
 Run: python scripts/run_walk_forward_report.py [--symbol BTCJPY]
      [--timeframes 15m,1h,4h] [--train-days 90] [--test-days 30]
+     [--strategies ema_trend,rsi14_30_70]
 """
 
 import argparse
@@ -42,6 +43,10 @@ from app.trading.application.donchian_breakout_signal import (
 from app.trading.application.dummy_signal import generate_dummy_signal
 from app.trading.application.ema_trend_signal import generate_ema_trend_signal
 from app.trading.application.risk_gate import CONSERVATIVE_V1_RULES
+from app.trading.application.rsi_mean_reversion_signal import (
+    RsiSignalAction,
+    generate_rsi_mean_reversion_signal,
+)
 from sqlalchemy import select
 
 
@@ -49,11 +54,19 @@ def _donchian_55_20(candles: Sequence[Candle]) -> DonchianSignalAction:
     return generate_donchian_breakout_signal(candles, entry_period=55, exit_period=20)
 
 
+def _rsi2_10_70(candles: Sequence[Candle]) -> RsiSignalAction:
+    return generate_rsi_mean_reversion_signal(
+        candles, rsi_period=2, oversold=Decimal(10), exit_level=Decimal(70)
+    )
+
+
 STRATEGIES: dict[str, BacktestSignalGenerator] = {
     "dummy_sma5": generate_dummy_signal,
     "ema_trend": generate_ema_trend_signal,
     "donchian_20_10": generate_donchian_breakout_signal,
     "donchian_55_20": _donchian_55_20,
+    "rsi14_30_70": generate_rsi_mean_reversion_signal,
+    "rsi2_10_70": _rsi2_10_70,
 }
 INITIAL_EQUITY = Decimal(1_000_000)
 
@@ -104,7 +117,15 @@ def main() -> int:
     parser.add_argument("--timeframes", default="15m,1h,4h")
     parser.add_argument("--train-days", type=int, default=90)
     parser.add_argument("--test-days", type=int, default=30)
+    parser.add_argument(
+        "--strategies",
+        default=",".join(STRATEGIES),
+        help=f"comma-separated subset of: {', '.join(STRATEGIES)}",
+    )
     args = parser.parse_args()
+    unknown = set(args.strategies.split(",")) - set(STRATEGIES)
+    if unknown:
+        parser.error(f"unknown strategies: {', '.join(sorted(unknown))}")
 
     with SessionLocal() as db:
         instrument = db.scalar(
@@ -129,7 +150,8 @@ def main() -> int:
                 f"\n=== {args.symbol} {timeframe}: {len(candles)} candles, "
                 f"train={args.train_days}d test={args.test_days}d ==="
             )
-            for name, signal_generator in STRATEGIES.items():
+            for name in args.strategies.split(","):
+                signal_generator = STRATEGIES[name]
                 print(f"-- {name} --")
                 results = run_rolling_walk_forward(
                     candles,

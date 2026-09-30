@@ -2,7 +2,11 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
-from app.market_data.application.indicators import average_true_range, exponential_moving_average
+from app.market_data.application.indicators import (
+    average_true_range,
+    exponential_moving_average,
+    relative_strength_index,
+)
 from app.models.market_data import Candle
 
 
@@ -103,3 +107,27 @@ def test_ema_rolls_forward_one_bar_past_the_seed() -> None:
 def test_ema_of_a_constant_series_equals_that_constant() -> None:
     candles = [_candle(100, 100, 100, 100, i) for i in range(30)]
     assert exponential_moving_average(candles, period=10) == Decimal(100)
+
+
+def _closes(*closes: int) -> list[Candle]:
+    return [_candle(c, c, c, c, i) for i, c in enumerate(closes)]
+
+
+def test_rsi_returns_none_with_insufficient_candles() -> None:
+    assert relative_strength_index(_closes(10, 11), period=2) is None
+
+
+def test_rsi_seed_and_wilder_smoothing_match_a_hand_computed_value() -> None:
+    # changes +1, -1, +2. Seed (first 2): avg gain 0.5, avg loss 0.5.
+    # Next: gain (0.5*1 + 2)/2 = 1.25, loss (0.5*1 + 0)/2 = 0.25 -> RS 5 -> RSI 100 - 100/6.
+    rsi = relative_strength_index(_closes(10, 11, 10, 12), period=2)
+    assert rsi == Decimal(100) - Decimal(100) / Decimal(6)
+
+
+def test_rsi_is_100_with_only_gains_and_0_with_only_losses() -> None:
+    assert relative_strength_index(_closes(1, 2, 3, 4), period=2) == Decimal(100)
+    assert relative_strength_index(_closes(4, 3, 2, 1), period=2) == Decimal(0)
+
+
+def test_rsi_of_an_unchanged_series_is_neutral_50() -> None:
+    assert relative_strength_index(_closes(5, 5, 5, 5), period=2) == Decimal(50)
