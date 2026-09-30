@@ -64,3 +64,36 @@ def test_top_share_is_how_much_of_the_total_the_best_items_account_for() -> None
 
 def test_top_share_is_none_when_the_total_is_not_positive() -> None:
     assert rb.top_share([10.0, -20.0], top_n=1) is None
+
+
+def test_summarize_windows_compounds_and_splits_the_history_in_half() -> None:
+    windows = [
+        ([(_t(0), 1.0)], 1.10),
+        ([(_t(1), 1.0)], 0.90),
+        ([(_t(2), 1.0)], 1.20),
+        ([(_t(3), 1.0)], 1.00),
+    ]
+    summary = rb.summarize_windows(windows, years=2.0)
+    assert summary.total_return == pytest.approx(1.10 * 0.90 * 1.20 * 1.00 - 1)
+    assert summary.annual_return == pytest.approx((1.10 * 0.90 * 1.20) ** 0.5 - 1)
+    assert summary.first_half_return == pytest.approx(1.10 * 0.90 - 1)
+    assert summary.second_half_return == pytest.approx(1.20 - 1)
+    assert summary.worst_window_return == pytest.approx(-0.10)
+    assert summary.winning_window_ratio == pytest.approx(0.5)
+
+
+def test_crash_returns_reports_each_crash_window_or_none_when_uncovered() -> None:
+    curve = [(_t(0), 1.0), (_t(1), 1.0), (_t(2), 0.9), (_t(3), 0.95)]
+    crashes = {"covered": (_t(2), _t(2, 23)), "before the data": (_t(-10), _t(-9))}
+    assert rb.crash_returns(curve, crashes) == {
+        "covered": pytest.approx(-0.10),
+        "before the data": None,
+    }
+
+
+def test_hold_windows_scale_each_windows_price_move_by_the_exposure() -> None:
+    windows = rb.hold_windows(
+        [[(_t(0), 100.0), (_t(1), 120.0)], [(_t(2), 50.0), (_t(3), 40.0)]], 0.1
+    )
+    assert [ending for _, ending in windows] == pytest.approx([1.02, 0.98])
+    assert [value for _, value in windows[0][0]] == pytest.approx([1.0, 1.02])

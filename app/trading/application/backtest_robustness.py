@@ -18,7 +18,7 @@ that is booked anywhere.
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 Curve = Sequence[tuple[datetime, float]]
 
@@ -110,3 +110,109 @@ def top_share(amounts: Sequence[float], *, top_n: int) -> float | None:
     if total <= 0:
         return None
     return sum(sorted(amounts, reverse=True)[:top_n]) / total
+
+
+Windows = Sequence[tuple[Curve, float]]
+"""`(curve, ending)` per test window, each as fractions of that window's own start."""
+
+
+def compounded_return(windows: Windows) -> float:
+    level = 1.0
+    for _, ending in windows:
+        level *= ending
+    return level - 1
+
+
+@dataclass(frozen=True)
+class WindowSummary:
+    total_return: float
+    annual_return: float
+    first_half_return: float
+    second_half_return: float
+    last_24_return: float
+    top5_share: float | None
+    """Share of the total the 5 best windows account for; above 1.0 means the
+    rest together lost money."""
+    max_drawdown: float
+    longest_underwater: timedelta
+    worst_day: float | None
+    worst_window_return: float
+    winning_window_ratio: float
+
+
+def summarize_windows(windows: Windows, *, years: float) -> WindowSummary:
+    """Both questions asked of an exit policy / filter set on 2026-09-30: does it
+    keep making money (halves, recent windows, dependence on a few windows), and
+    does it survive crashes (drawdown, time underwater, worst day/window)."""
+    curve = chain_windows(windows)
+    total = compounded_return(windows)
+    half = len(windows) // 2
+    returns = [ending - 1 for _, ending in windows]
+    return WindowSummary(
+        total_return=total,
+        annual_return=(1 + total) ** (1 / years) - 1,
+        first_half_return=compounded_return(windows[:half]),
+        second_half_return=compounded_return(windows[half:]),
+        last_24_return=compounded_return(windows[-24:]),
+        top5_share=top_share(returns, top_n=5),
+        max_drawdown=max_drawdown(curve).depth,
+        longest_underwater=longest_underwater(curve),
+        worst_day=worst_daily_return(curve),
+        worst_window_return=min(returns),
+        winning_window_ratio=sum(r > 0 for r in returns) / len(returns),
+    )
+
+
+def _utc_day(day: str) -> datetime:
+    return datetime.fromisoformat(day).replace(tzinfo=UTC)
+
+
+BTC_CRASHES: dict[str, tuple[datetime, datetime]] = {
+    name: (_utc_day(start), _utc_day(end) + timedelta(days=1))
+    for name, (start, end) in {
+        "2018-11 hash war": ("2018-11-14", "2018-12-15"),
+        "2020-03 COVID": ("2020-03-08", "2020-03-16"),
+        "2021-05 China ban": ("2021-05-12", "2021-05-23"),
+        "2022-05 LUNA": ("2022-05-05", "2022-05-18"),
+        "2022-06 3AC/Celsius": ("2022-06-10", "2022-06-20"),
+        "2022-11 FTX": ("2022-11-06", "2022-11-12"),
+        "2024-08 yen carry": ("2024-08-01", "2024-08-07"),
+    }.items()
+}
+"""Historical BTC crashes, fixed before looking at any strategy's result (UTC,
+the end day inclusive)."""
+
+
+def crash_returns(
+    curve: Curve, crashes: dict[str, tuple[datetime, datetime]]
+) -> dict[str, float | None]:
+    return {
+        name: window_return(curve, start=start, end=end) for name, (start, end) in crashes.items()
+    }
+
+
+def hold_windows(prices: Sequence[Curve], exposure: float) -> list[tuple[Curve, float]]:
+    """Benchmark windows for holding `exposure` of equity in the asset through
+    each window, given each window's `(time, close)` series."""
+    windows: list[tuple[Curve, float]] = []
+    for series in prices:
+        start = series[0][1]
+        curve = [(time, 1 + exposure * (close / start - 1)) for time, close in series]
+        windows.append((curve, curve[-1][1]))
+    return windows
+
+
+def format_summary(label: str, summary: WindowSummary) -> str:
+    """One report line for the research scripts."""
+    top5 = "-" if summary.top5_share is None else f"{summary.top5_share:.0%}"
+    worst_day = "-" if summary.worst_day is None else f"{summary.worst_day:+.2%}"
+    return (
+        f"{label:<34} cagr={summary.annual_return:>+6.2%} total={summary.total_return:>+7.1%} "
+        f"1st-half={summary.first_half_return:>+7.1%} "
+        f"2nd-half={summary.second_half_return:>+7.1%} "
+        f"last24={summary.last_24_return:>+6.1%} top5-share={top5:>5} | "
+        f"maxDD={summary.max_drawdown:>5.1%} "
+        f"underwater={summary.longest_underwater.days:>4}d worst-day={worst_day:>7} "
+        f"worst-window={summary.worst_window_return:>+6.2%} "
+        f"win-windows={summary.winning_window_ratio:>4.0%}"
+    )
