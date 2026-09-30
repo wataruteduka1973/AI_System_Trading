@@ -10,6 +10,12 @@ disjoint, chronologically-ordered windows -- ahead of Chronos, where a train win
 will actually mean something (model fitting) and out-of-sample degradation is the
 whole point of running this at all.
 
+**Rolling folds** (`run_rolling_walk_forward`, docs/plans/rolling-walk-forward.md)
+were added 2026-09-30 on top of the single split: one 70/30 split could not tell "the
+test window happened to be a bad market for long-only strategies" apart from "the
+strategy has no edge" (EMA trend on BTCJPY collapsed out-of-sample, but so did the
+SMA5 baseline over the same window).
+
 **Look-ahead bias**: already covered by Unit 4's own test
 (`test_run_replay_never_shows_the_signal_generator_a_future_candle` in
 tests/test_backtest_replay.py) at the single-replay level; splitting the candle
@@ -48,6 +54,7 @@ from app.trading.application.backtest_metrics import (
     persist_backtest_run,
 )
 from app.trading.application.backtest_replay import (
+    _HISTORY_WINDOW,
     BacktestSignalGenerator,
     ReplayResult,
     generate_dummy_signal,
@@ -130,6 +137,110 @@ def run_walk_forward(
         test_result=test_result,
         test_metrics=test_metrics,
     )
+
+
+@dataclass(frozen=True)
+class RollingFold:
+    """Index ranges into the full candle series: train is
+    `[train_start, train_end)`, test is `[train_end, test_end)`."""
+
+    index: int
+    train_start: int
+    train_end: int
+    test_end: int
+
+
+@dataclass(frozen=True)
+class RollingFoldResult:
+    fold: RollingFold
+    train_result: ReplayResult
+    train_metrics: ReplayMetrics
+    test_result: ReplayResult
+    test_metrics: ReplayMetrics
+
+
+def split_candles_rolling(
+    candle_count: int, *, train_bars: int, test_bars: int
+) -> list[RollingFold]:
+    """Fixed-size rolling folds, each sliding forward by `test_bars` so test
+    windows tile the series without overlapping (docs/plans/rolling-walk-forward.md).
+    A trailing remainder shorter than `test_bars` is dropped rather than evaluated
+    as a shorter, not-comparable window."""
+    if train_bars <= 0 or test_bars <= 0:
+        raise WalkForwardError(
+            "invalid_window_size", "train_bars and test_bars must both be positive"
+        )
+    if train_bars + test_bars > candle_count:
+        raise WalkForwardError(
+            "insufficient_candles",
+            f"train_bars={train_bars} + test_bars={test_bars} exceeds "
+            f"{candle_count} candles; not even one fold fits",
+        )
+    folds: list[RollingFold] = []
+    train_start = 0
+    while train_start + train_bars + test_bars <= candle_count:
+        train_end = train_start + train_bars
+        folds.append(
+            RollingFold(
+                index=len(folds),
+                train_start=train_start,
+                train_end=train_end,
+                test_end=train_end + test_bars,
+            )
+        )
+        train_start += test_bars
+    return folds
+
+
+def run_rolling_walk_forward(
+    candles: Sequence[Candle],
+    *,
+    instrument: Instrument,
+    timeframe: str,
+    exchange_code: str,
+    rules: dict,
+    initial_equity: Decimal,
+    train_bars: int,
+    test_bars: int,
+    spread: Decimal = Decimal(0),
+    signal_generator: BacktestSignalGenerator = generate_dummy_signal,
+) -> list[RollingFoldResult]:
+    """Every window starts from `initial_equity`, as in `run_walk_forward` (and so
+    `peak_drawdown_limit_hard`'s lock never carries across windows). Unlike
+    `run_walk_forward`, each window is replayed with the bars just before it as
+    warm-up history, so a long-lookback signal such as EMA(200) can trade from the
+    window's first bar."""
+    max_warmup = _HISTORY_WINDOW - 1  # the history window already includes the current bar
+
+    def _replay(start: int, end: int) -> tuple[ReplayResult, ReplayMetrics]:
+        warmup = min(start, max_warmup)
+        result = run_replay(
+            candles[start - warmup : end],
+            instrument=instrument,
+            timeframe=timeframe,
+            exchange_code=exchange_code,
+            rules=rules,
+            initial_equity=initial_equity,
+            spread=spread,
+            signal_generator=signal_generator,
+            warmup_bars=warmup,
+        )
+        return result, compute_metrics(result, initial_equity)
+
+    results: list[RollingFoldResult] = []
+    for fold in split_candles_rolling(len(candles), train_bars=train_bars, test_bars=test_bars):
+        train_result, train_metrics = _replay(fold.train_start, fold.train_end)
+        test_result, test_metrics = _replay(fold.train_end, fold.test_end)
+        results.append(
+            RollingFoldResult(
+                fold=fold,
+                train_result=train_result,
+                train_metrics=train_metrics,
+                test_result=test_result,
+                test_metrics=test_metrics,
+            )
+        )
+    return results
 
 
 def run_and_persist_walk_forward(

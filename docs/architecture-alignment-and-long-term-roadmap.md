@@ -254,6 +254,22 @@ Application抽出を先行する。OANDA確認やHorizon 1全体を完了扱い�
 （2026-09-17時点で②③④⑤⑥⑦が完了。耐障害性・運用可視性の試験⑧は実環境接続が前提のため
 未着手。詳細な進捗は`docs/plans/realtime-market-data-stream.md`のstatus logを正とする）。
 
+2026-09-26: 銘柄ルール同期成功時に、過去1年分のbackfillと全7時間足の自動取得を
+自動的に開始するよう変更した(利用者判断: 認証・同期さえ済んでいれば手動でボタンを
+押さなくてもデータ取得が始まるようにしたい、という要望)。従来は「銘柄ルールを同期」
+→「過去1年を取得」→「この銘柄の全時間足を開始」の3手動操作が必要だったが、
+「過去1年を取得」ボタンをフロントエンドから廃止し、`app/api/routes/instruments.py`
+の`sync_workspace_instruments`が成功した時点で`_auto_start_collection`
+(新規)が両方を自動的に起動するようにした。バックエンドの
+`enqueue_backfill`は`trigger_type`引数を新設し(`backfill_job.trigger_type`の
+CHECK制約は元々`'automatic'`/`'manual'`を許容していたが、これまで`'manual'`しか
+使われていなかった)、自動起動時は`"automatic"`を記録する。「この銘柄の全時間足を
+開始/停止」ボタン自体は残し、利用者が後から止める/再開する操作は引き続き手動。
+
+この変更は、利用者が開発優先順位を戦略検証優先に見直した際の調査
+(BTCJPYには実データが約6週間分蓄積済みだがUSD_JPYは実データ皆無であることが判明)
+を受けて着手した。OANDA側の実データ取得自体は本変更の対象外で、引き続き未解決。
+
 #### 開始条件
 
 - Durable Workerが安定稼働する
@@ -303,6 +319,66 @@ Pythonから直接呼ぶ以外に到達手段が無かった。
 揃えた。まだ未実装: 実行ループ/Worker（`run_dummy_pipeline_once`を定期実行する経路が無い）、
 最低限のUI。次のUnitで着手予定（利用者指示「Bot管理API→実行ループ→最低限のUI」の順）。
 
+2026-09-25: 上記の実行ループ/Workerを実装した。`app/trading/worker/`
+（`python -m app.trading.worker`で起動）は、`actual_state`が`running`/`paused`の
+全Botを一定間隔（既定5秒、`BOT_EXECUTION_POLL_INTERVAL_SECONDS`）でポーリングし、
+`app/trading/application/bot_execution_loop.py`の`run_active_bots_once`経由で
+`dummy_pipeline.run_dummy_pipeline_once`を呼び出す。Notification Worker
+（Horizon5 Group D）と同じ単純ポーリング形状を採用し、市場データWorkerのlease/
+heartbeat機構は使っていない（1回の評価が短いDBアクセスのみで外部ネットワークI/Oを
+伴わないため、長時間実行ジョブ向けのstale-recoveryが不要という理由も同じ）。
+
+実装前の調査で、`run_dummy_pipeline_once`自体に潜在バグを発見し修正した:
+この関数は呼び出し元ゼロ・試験ゼロのまま実装されており、同じ最新確定バーに対して
+2回呼ばれると2回目の`db.commit()`が`uq_signal_idempotency`制約違反の未捕捉
+`IntegrityError`で失敗する状態だった。Workerはポーリング間隔と実際の新規バー到着
+間隔が一致する保証が無いため、この経路は確実に踏まれる。`(bot_run_id, candle_id)`
+単位で既存Signalを確認し、有れば`{"action": "already_processed"}`を返して早期
+returnする冪等性ガードを追加して解消した（Worker側で per-bot 状態を追跡する必要が
+無くなる、より単純な設計）。
+
+Bot管理API（`POST .../bots/{id}/start`等）と合わせて、Botをstartすると実際に
+シグナル評価・注文が進行する状態になった。次のUnit: 最低限のUI（利用者指示の順序
+どおり）。
+
+2026-09-26: 上記の最低限のUIを実装した。着手前に利用者とデザインを協議し
+（更新方式は自動ポーリング、実行状況はdesired/actual stateに加え直近のBotRun/
+シグナル情報も表示、との決定）、決定に沿ってバックエンドへ
+`GET .../bots/{id}/latest-run`（直近BotRunと直近Signalを1回の呼び出しで返す、
+`app/schemas/trading.py`の`BotRunSummaryRead`）を追加してから着手した。
+フロントエンドは既存の`features/connections/`と同じ構成規約
+（`useXxx`フック + Panelコンポーネント + Pageラッパー、App.tsxへ集約配線する
+既存の(やや集中的な)構造）に揃え、`features/trading/`（`useTrading.ts`、
+`TradingPanel.tsx`）・`pages/TradingPage.tsx`・ルート`/workspaces/:id/trading`・
+AppShellへの「Bot管理」ナビリンクを追加した。取引口座の作成・入金、Botの作成・
+start/pause/resume/stop、状態バッジと直近シグナル表示を5秒間隔でポーリングする
+（`useMarketData.ts`と同じ形状）。ロール別のボタン出し分けは既存UIが一切行って
+いない規約に合わせて実装せず、APIの403に委ねている。
+
+検証: `ruff`/`mypy`/`pytest`（510件）、フロントエンド`eslint`/`tsc --noEmit`/
+`vitest`（33件）/本番buildは全て成功。バックエンドとフロントエンドを実際に起動し、
+新規10エンドポイントが`/openapi.json`に登録されていること、`/health/db`が
+`postgresql`で成功すること、フロントエンドが未認証画面までコンソールエラー無く
+到達することを確認した。
+
+2026-09-26: 上記で未検証のまま残した「実際のログイン後の画面操作」を、利用者の
+依頼を受けて追加検証した。`scripts/mock_oidc_server.py`（新規、Authorization
+Code + PKCE + Discoveryを実装するローカル専用の簡易OIDCプロバイダ、外部IdP
+アカウント不要）を作成し、`.env`にOIDC/セッション署名設定を追加、ローカルDBが
+未適用だったmigration`20260921_0008`（`fx.session_revocation`追加、追加のみで
+データ損失なし）を適用した上で、実際にバックエンド・フロントエンドを起動して
+ブラウザから確認した。ログイン→Workspace作成→取引所接続登録→取引口座作成→
+入金→Bot作成→start/pause/resume/stop（4遷移すべて）→
+`run_active_bots_once`を1回手動実行してSignal生成→5秒ポーリングで
+「直近シグナル: hold (時刻)」が画面に反映されるまでを一通り確認した。
+未検証のまま接続を検証しようとした際の422エラー（`Exchange connection is
+missing...`）がエラーメッセージ欄に正しく表示されることも確認した。コンソール
+エラーは意図した4xx/一部無関係なmarket-data機能の409のみで、JS例外・React
+crashは無し。今回作成したWorkspace「Local Test Workspace」・Bot・Paper口座・
+接続・USD_JPY銘柄等のテストデータは、継続検証に使えるよう利用者判断でDBに
+残している。`scripts/mock_oidc_server.py`も同様に利用者判断でリポジトリに残し、
+README「ローカルでの確認」節に開発者向け手順として追記した。
+
 #### 開始条件
 
 - 観測基盤が安定し、履歴とリアルタイムの整合性が確認済み
@@ -331,6 +407,80 @@ Pythonから直接呼ぶ以外に到達手段が無かった。
 
 Horizon 6着手前の縮小スコープ(Horizon4-lite)としての先行着手方針は
 `decisions/0003-horizon4-lite-backtest-before-chronos.md`を参照。
+
+状態: `[~]` `docs/plans/horizon4-lite-backtest.md`のUnit 1〜6(DatasetSnapshot/
+BacktestRun/BacktestTradeのORM、リプレイハーネス、約定シミュレーション、評価指標、
+walk-forward分割、look-ahead bias検知テスト)はコードとして実装・試験済みだったが、
+本節にはこれまで状態行が無かった(Horizon 3と同じ、本ロードマップ更新漏れ)。HTTPから
+到達する経路も無く、Pythonから直接呼ぶ以外に利用できなかった。
+
+2026-09-26: 上記の既存Application層を呼び出すBacktest API
+(`app/api/routes/backtests.py`、`app/schemas/backtests.py`)を追加した。
+`POST /workspaces/{id}/backtests`(同期実行、`mode: "single"|"walk_forward"`)・
+`GET /workspaces/{id}/backtests`(履歴一覧)・
+`GET /workspaces/{id}/backtests/{id}/trades`(取引一覧)を実装し、最低限のUI
+(`features/backtests/`、ルート`/workspaces/:id/backtests`)も合わせて追加した。
+Units 1〜6のうち`dataset_snapshotの作成`(対象期間のcandle件数・欠損チェック・
+checksum算出)だけは実装が存在しておらず、新規`app/trading/application
+/backtest_provisioning.py`の`ensure_dataset_snapshot`で埋めた。StrategyVersionは
+Bot管理APIと同じ理由(戦略実装が`dummy_signal.py`の1つのみ)でAPIから選択不可とし、
+`dummy_pipeline.ensure_dummy_bot`と共有する`ensure_dummy_strategy_and_risk_profile`
+(既存コードからの抽出、挙動不変)を再利用した。着手前に利用者へスコープを確認し、
+ADR 0003が先送りにしたStrategyVersionのDraft/Validated/Approved/Retired承認
+ワークフローは対象外(Bot管理API・実行ループ・最低限のUIのみ)と決定した。
+
+実行はこのリポジトリの他のパイプライン(order_flow、dummy_pipeline)と同じく
+POSTリクエスト内で同期的に行われる(ジョブキューは無い)。大きな期間を指定すると
+応答が遅くなりうるが、進捗報告の仕組みは無い(意図した制約)。
+
+検証: `ruff`/`mypy`/`pytest`(526件)、フロントエンド`eslint`/`tsc --noEmit`/
+`vitest`(33件)/本番buildは全て成功。バックエンドとフロントエンドを実際に起動し、
+既存のテスト用Workspace(OIDC検証時に作成したもの)でsingle/walk-forward両方の
+バックテストを実際に実行し、一覧・取引一覧の表示・成功バッジ表示までブラウザで
+確認した。
+
+2026-09-26追記: Backtestの検証対象データについて、Binance Spot Testnetの
+BTCJPY履歴が短時間足で95〜99%フラット・出来高ゼロ(薄い実弾なしの検証用市場が
+原因)であることを直接SQL集計で確認し、戦略検証には使えないと判断した
+(利用者との相談の結果、`Binance本番の公開履歴API`を併用する方針(承認ゲート
+「Binance Public履歴の併用」参照)を承認)。対応として以下を追加した。
+
+- `app/exchanges/binance_public.py`: 認証不要のBinance本番`/api/v3/klines`・
+  `/api/v3/exchangeInfo`クライアント(`BinancePublicClient`)。発注・約定には
+  一切使わず、検証用の履歴取得専用。
+- `binance_public`という別のpseudo-Exchange(`alembic/versions/
+  20260926_0009_seed_binance_public_exchange.py`)と、その下に作る別の
+  `Instrument`行(Testnetと同じ`BTCJPY`シンボルだが別instrument_id)。
+  `Candle`の一意制約(`uq_candle_business_key`)がTestnetの同シンボルの
+  実データと衝突しないようにするための分離であり、Testnetで実際に使う価格系列
+  とは物理的に混ざらない。
+- `app/market_data/application/public_research.py`:
+  `ensure_public_research_instrument`(instrument行の作成・ルール同期)と
+  `backfill_public_klines`(ページング取得+upsert)。既存の`use_cases.py`は
+  全関数が`ExchangeConnection`/`WorkspaceAccountSelection`の存在を前提とする
+  ため、公開・無認証データはここでは扱わず別モジュールに分離した。
+- `scripts/fetch_binance_public_history.py`: 手動実行専用のCLI(常駐
+  Worker化やスケジュール実行はしない)。全7時間足×指定日数分を取得する。
+- Backtest APIの`_require_instrument_access`(`app/api/routes/backtests.py`)は
+  `binance_public`のinstrumentに対してのみアカウント接続チェックをskipする
+  (Workspace存在チェックのみ残す)。新規`GET /workspaces/{id}
+  /research-instruments`でWorkspace非依存の検証用instrument一覧を公開し、
+  フロントエンドのBacktestフォームで「取引用」「検証用」の2つの
+  `<optgroup>`として選択できるようにした。
+- `app/trading/application/backtest_provisioning.py`の
+  `_exchange_code_for_instrument`は`binance_public`を`binance`に正規化する
+  (手数料・slippage・ショート許可の判定ロジックは`"oanda"`/`"binance"`の
+  リテラル文字列しか認識しないため)。
+
+検証: 上記全ファイルの`ruff`/`mypy`、`pytest`(新規`tests/test_public_research.py`
+含め全件)、フロントエンド`eslint`/`tsc -b`/`vitest`/本番buildは全て成功。
+実際にBinance本番APIから2日分の1h実データ(出来高・trade_count共に非ゼロ)を
+DBへ取得できることをスモークテストで確認した後、バックエンド・フロントエンドを
+実際に起動し、ログイン済みWorkspaceのBacktestフォームで「BTCJPY (検証用)」を
+選択し、この研究用instrumentに対するバックテストが実際に成功(取引数4、
+成功バッジ表示)することをブラウザで確認した。全時間足・1年分の本番バックフィル
+(`python scripts/fetch_binance_public_history.py --symbol BTCJPY --days 365`)は
+実行中(手動・非常駐、数分〜十数分かかる想定)。
 
 #### 開始条件
 
@@ -568,6 +718,42 @@ ADR 0005によりroadmap原文の前提（運営者が本番環境を運用す�
    達成済みのため、開始条件自体は満たしている。
 
 Paper Tradingの詳細設計は3・4と並行して作成できるが、実装開始はHorizon 2完了後とする。
+
+### 2026-09-26改訂: 現在の優先順位（利用者判断）
+
+上記1〜5(Horizon 0〜2)は完了済み。Horizon 3(Paper Tradingコア)はBot管理API・
+実行ループ/Worker・最低限のUIまで、Horizon 4はBacktest API・最低限のUIまで
+実装済み(各節の状態行を参照)。この時点で、利用者は開発計画を見直し、
+**サーバーへのデプロイ・課金・Horizon 5残タスク(ライセンス・顧客管理機構、
+ADR 0006参照)を、実際に機能し利益を生むトレードロジックが検証できるまで
+後回しにする**方針を示した。
+
+理由: 調査の結果、現在全Botの売買判断ロジックは`app/trading/application
+/dummy_signal.py`の`generate_dummy_signal`のみであることが判明した。中身は
+「直近5本の終値のSMAと比較して上なら買い・下なら売り」という固定ルールで、
+モジュール自身のdocstringに「do not tune this to chase performance --
+意図的に単純な説明用ルールであり、開発中の戦略ではない」と明記されている。
+つまりこれまで一度も「儲かるように作る/検証する」対象にされたことがない。
+デプロイ・課金基盤がどれだけ整っていても、この核心部分が機能しなければ
+無意味、との判断である。
+
+次の推奨単位:
+
+1. **技術指標ベースの手作り戦略を開発し、Backtest APIで検証する**
+   (2026-09-26決定: AI/MLモデル(Chronos、Horizon 6)導入より先に着手する。
+   Horizon 6は「non-AI baselineが既にある」ことを開始条件の一つとしており、
+   現状の`dummy_signal.py`は収益性検証済みのbaselineとは言えないため、この
+   単位はHorizon 6着手の前提を実質的に整備する意味も持つが、目的はあくまで
+   実際に機能する戦略を作ることであり、Horizon 6着手そのものではない)。
+   `dummy_signal.py`を置き換える/追加する形でRSI・MACD・ボリンジャーバンド等を
+   組み合わせた具体的な戦略候補を実装し、`POST /workspaces/{id}/backtests`
+   (Horizon4、2026-09-26実装)で過去データに対する収益性(net_pnl、
+   Profit Factor、勝率、最大DD)をwalk-forward評価で確認する。既存の
+   Strategy/StrategyVersionモデル・Backtest基盤をそのまま利用できる。
+2. 検証結果が有望であれば、paper運用(既存のBot管理API・実行ループ)で
+   実データに対する追加検証を行う。
+3. デプロイ・課金・Horizon 5残タスクの再開は、利用者からの明示的な意思表示を
+   待つ。
 
 ## 11. 文書運用
 

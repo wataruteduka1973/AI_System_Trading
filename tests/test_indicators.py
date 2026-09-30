@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
-from app.market_data.application.indicators import average_true_range
+from app.market_data.application.indicators import average_true_range, exponential_moving_average
 from app.models.market_data import Candle
 
 
@@ -75,3 +75,31 @@ def test_average_true_range_matches_wilder_formula_over_a_longer_series() -> Non
     for tr in true_ranges[period:]:
         expected = (expected * (period - 1) + tr) / period
     assert average_true_range(candles, period=period) == expected
+
+
+# ---- exponential_moving_average ----
+
+
+def test_ema_returns_none_with_insufficient_candles() -> None:
+    candles = [_candle(100, 101, 99, 100, i) for i in range(4)]
+    assert exponential_moving_average(candles, period=5) is None
+
+
+def test_ema_seed_is_simple_average_with_exactly_period_candles() -> None:
+    closes = [100, 102, 104, 103, 101]
+    candles = [_candle(c, c, c, c, i) for i, c in enumerate(closes)]
+    assert exponential_moving_average(candles, period=5) == Decimal(102)  # (100+..+101)/5
+
+
+def test_ema_rolls_forward_one_bar_past_the_seed() -> None:
+    closes = [100, 102, 104, 103, 101, 110]
+    candles = [_candle(c, c, c, c, i) for i, c in enumerate(closes)]
+    seed = Decimal(102)  # average of the first 5 closes
+    multiplier = Decimal(2) / Decimal(6)
+    expected = (Decimal(110) - seed) * multiplier + seed
+    assert exponential_moving_average(candles, period=5) == expected
+
+
+def test_ema_of_a_constant_series_equals_that_constant() -> None:
+    candles = [_candle(100, 100, 100, 100, i) for i in range(30)]
+    assert exponential_moving_average(candles, period=10) == Decimal(100)

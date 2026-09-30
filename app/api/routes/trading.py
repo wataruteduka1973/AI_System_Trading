@@ -35,11 +35,13 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models.connections import ExchangeConnection
 from app.models.instruments import Instrument
-from app.models.strategy import BotRun, TradingBot
+from app.models.strategy import BotRun, Signal, TradingBot
 from app.models.trading import LedgerTransaction, TradingAccount
 from app.models.workspace import AppUser
 from app.schemas.trading import (
     BotRunRead,
+    BotRunSummaryRead,
+    LatestSignalRead,
     TradingAccountCreate,
     TradingAccountDepositCreate,
     TradingAccountDepositRead,
@@ -222,6 +224,49 @@ def get_trading_bot(
     workspace_id: UUID, bot_id: UUID, db: DatabaseSession, _viewer: Viewer
 ) -> TradingBot:
     return _get_bot(db, workspace_id, bot_id)
+
+
+@router.get(
+    "/workspaces/{workspace_id}/bots/{bot_id}/latest-run",
+    response_model=BotRunSummaryRead,
+    tags=["bots"],
+)
+def get_latest_bot_run(
+    workspace_id: UUID, bot_id: UUID, db: DatabaseSession, _viewer: Viewer
+) -> BotRunSummaryRead:
+    bot = _get_bot(db, workspace_id, bot_id)
+    bot_run = db.scalar(
+        select(BotRun).where(BotRun.bot_id == bot.id).order_by(BotRun.started_at.desc()).limit(1)
+    )
+    if bot_run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="This bot has never been started"
+        )
+    latest_signal = db.scalar(
+        select(Signal)
+        .where(Signal.bot_run_id == bot_run.id)
+        .order_by(Signal.created_at.desc())
+        .limit(1)
+    )
+    return BotRunSummaryRead(
+        id=bot_run.id,
+        bot_id=bot_run.bot_id,
+        status=bot_run.status,
+        code_version=bot_run.code_version,
+        started_at=bot_run.started_at,
+        stopped_at=bot_run.stopped_at,
+        stop_reason=bot_run.stop_reason,
+        heartbeat_at=bot_run.heartbeat_at,
+        latest_signal=(
+            LatestSignalRead(
+                id=latest_signal.id,
+                action=latest_signal.action,
+                created_at=latest_signal.created_at,
+            )
+            if latest_signal is not None
+            else None
+        ),
+    )
 
 
 @router.post(

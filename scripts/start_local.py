@@ -46,6 +46,7 @@ def commands(root: Path) -> list[list[str]]:
         [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000"],
         [node, str(vite), "--host", "127.0.0.1", "--port", "5173", "--strictPort"],
         [sys.executable, "-m", "app.market_data.worker"],
+        [sys.executable, "-m", "app.trading.worker"],
     ]
 
 

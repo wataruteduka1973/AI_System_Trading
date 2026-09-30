@@ -119,6 +119,14 @@ DBが必須のAlembicリビジョン（`20260831_0005`）に達していない�
 - `PUT /api/v1/workspaces/{workspace_id}/connections/{connection_id}/credentials` — 暗号化資格情報を置換して即時再検証
 - `GET /api/v1/workspaces/{workspace_id}/trading-halts` — 発動中のtrading halt一覧
 - `POST /api/v1/workspaces/{workspace_id}/trading-halts/{halt_id}/release` — halt解除(Ownerのみ)
+- `POST /api/v1/workspaces/{workspace_id}/trading-accounts` — paper口座作成
+- `GET /api/v1/workspaces/{workspace_id}/bots` — Bot一覧
+- `POST /api/v1/workspaces/{workspace_id}/bots` — Bot作成(作成のみ、開始しない)
+- `POST /api/v1/workspaces/{workspace_id}/bots/{bot_id}/{start,pause,resume,stop}` — Bot操作
+- `GET /api/v1/workspaces/{workspace_id}/bots/{bot_id}/latest-run` — 直近のBotRunと直近シグナル
+- `POST /api/v1/workspaces/{workspace_id}/backtests` — バックテスト実行(同期。walk-forward可)
+- `GET /api/v1/workspaces/{workspace_id}/backtests` — バックテスト実行履歴
+- `GET /api/v1/workspaces/{workspace_id}/backtests/{backtest_run_id}/trades` — 実行内の取引一覧
 - `GET /api/v1/exchanges` — 対応取引所一覧
 - `GET /api/v1/markets` — 対応市場一覧
 
@@ -193,6 +201,67 @@ lease機構は使いません（通知送信は1回で完結する短い処理�
 （基盤のみ実装済み、詳細は`docs/plans/horizon5-implementation-plan.md` Unit 8を参照）。
 `scripts/start_local.py`には含めていないため、試す場合は別ターミナルで手動起動してください。
 
+### Bot execution Worker（Horizon 3、実行ループ）
+
+`app/trading/worker/`（`python -m app.trading.worker`で起動）は、`actual_state`が
+`running`/`paused`の全Botを一定間隔（`.env`の`BOT_EXECUTION_POLL_INTERVAL_SECONDS`、
+既定5秒）でポーリングし、`app/trading/application/dummy_pipeline.py`の
+`run_dummy_pipeline_once`を呼び出す単純なポーリングループです。Notification Worker
+同様、市場データWorkerのlease機構は使いません（1回の評価が短いDBアクセスのみで完結し、
+外部ネットワークI/Oを伴わないため）。同じ最新確定バーに対して複数回呼ばれても
+`run_dummy_pipeline_once`自身が`(bot_run_id, candle_id)`単位で冪等なため安全です。
+外部設定の前提条件（SMTPのような）が無いため、`scripts/start_local.py`に含めています。
+
+### ログイン後のUIをローカルで手動確認する（開発者向け）
+
+OIDCログインは外部IdPを前提としており、`.env`にIdPを設定しない限り「ログインが
+必要です」より先の画面（Workspace選択・Bot管理等）は確認できません。外部IdP
+アカウントを用意せずに一通り確認したい場合、`scripts/mock_oidc_server.py`
+（Authorization Code + PKCE + Discoveryを実装したローカル専用の簡易OIDC
+プロバイダ、固定の1テストユーザーを自動承認するだけでログイン画面は無い）を
+使えます。**本番や共有環境では絶対に使わないでください**（誰でもセッションを
+取得できます）。
+
+```powershell
+python scripts/mock_oidc_server.py
+```
+
+別ターミナルで`.env`に追記してバックエンドを起動します。
+
+```text
+OIDC_ISSUER=http://127.0.0.1:9000
+OIDC_CLIENT_ID=local-test-client
+OIDC_CLIENT_SECRET=local-test-secret
+SESSION_SIGNING_SECRET=<python -c "import secrets; print(secrets.token_urlsafe(32))" の出力>
+```
+
+ログイン後は所属Workspaceが無い状態で始まるため、`POST /api/v1/workspaces`を
+自分で叩くか、フロントエンドに将来Workspace作成UIが追加されるまでは
+ブラウザの開発者ツール等から`fetch`で作成してください（作成者が自動的に
+Ownerになります）。取引口座・Bot管理画面を試すには、取引所接続
+（`POST /workspaces/{id}/connections`）と、必要なら`Instrument`/
+`WorkspaceAccountSelection`行も用意する必要があります（`GET
+/workspaces/{id}/instruments`は選択済み口座がある取引所の銘柄のみを返すため）。
+
+### Backtest検証用データの取得（開発者向け、`binance_public`）
+
+Binance Spot Testnetの実データは薄い（短時間足では95%以上が値動きゼロ・
+出来高ゼロ）ため、戦略のBacktest検証には使えません。代わりに、認証不要の
+Binance本番公開履歴API（`GET /api/v3/klines`）から取得した実データを、
+`binance_public`という別のExchange・`Instrument`（Testnetの取引用instrumentとは
+別のid、`Candle`テーブル上で混ざりません）に保存して使います。発注・約定には
+一切使いません。
+
+```powershell
+python scripts/fetch_binance_public_history.py --symbol BTCJPY --days 365
+```
+
+初回実行時に`binance_public`配下のInstrument行を自動作成します。全7時間足を
+順に取得するため数分〜十数分かかります（Binanceのレート制限を避けるため
+リクエスト間隔を空けています）。取得した`Instrument`はどのWorkspaceからも
+`GET /workspaces/{id}/research-instruments`で参照でき、フロントエンドの
+Backtestフォームでは「検証用」として選択できます。
+
 ## ディレクトリ構成
 
 ```text
@@ -205,6 +274,7 @@ app/                         # FastAPIバックエンドの実行コード（唯
   security/                  # OIDCログイン・セッション・RBAC
   services/                  # 未分割のアプリケーションサービス
   trading/application/       # 注文実行・リスク判定・trading halt・backtest replay
+  trading/worker/            # Bot execution Worker（実行ループ）
 frontend/                    # Reactフロントエンド
 tests/                       # 自動テスト
 ```

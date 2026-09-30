@@ -3,6 +3,8 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
+import pytest
+from app.api.routes import instruments as instruments_routes
 from app.db.session import get_db
 from app.exchanges.oanda import OandaInstrumentRules, get_oanda_practice_client
 from app.main import app
@@ -33,7 +35,13 @@ def override_database(session: MagicMock) -> None:
     app.dependency_overrides[require_operator_role] = lambda: _TEST_USER
 
 
-def test_sync_selected_oanda_instrument_without_disclosing_secrets() -> None:
+def test_sync_selected_oanda_instrument_without_disclosing_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Auto-start (2026-09-26, per user decision) is exercised by its own dedicated
+    # test below; mocking it out here keeps this test focused on the sync response
+    # itself and avoids needing to simulate its much deeper db.scalar/execute chain.
+    monkeypatch.setattr(instruments_routes, "_auto_start_collection", MagicMock())
     now = datetime.now(UTC)
     workspace_id = uuid4()
     exchange = Exchange(id=uuid4(), code="oanda", name="OANDA", status="active")
@@ -120,6 +128,87 @@ def test_sync_selected_oanda_instrument_without_disclosing_secrets() -> None:
         "symbol": "USD_JPY",
         "outcome": "succeeded",
     }
+    # 2026-09-26 (per user decision): a successful sync must not require a
+    # separate manual "get past year" click before an instrument has any data.
+    instruments_routes._auto_start_collection.assert_called_once()
+
+
+def test_auto_start_collection_enables_all_timeframes_and_backfills_each(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.market_data.application import use_cases as market_data_application
+
+    db = MagicMock()
+    workspace_id, instrument_id = uuid4(), uuid4()
+    subscription_calls: list[dict[str, object]] = []
+    backfill_calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr(
+        market_data_application,
+        "update_subscriptions",
+        lambda db_, ws, inst, *, enabled, validate_configuration, timeframe=None: (
+            subscription_calls.append(
+                {"enabled": enabled, "timeframe": timeframe, "instrument_id": inst}
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        market_data_application,
+        "enqueue_backfill",
+        lambda db_, ws, command, validate_configuration, *, trigger_type: backfill_calls.append(
+            (command.instrument_id, command.timeframe, command.days, trigger_type)
+        ),
+    )
+
+    instruments_routes._auto_start_collection(db, workspace_id, instrument_id)
+
+    assert subscription_calls == [
+        {"enabled": True, "timeframe": None, "instrument_id": instrument_id}
+    ]
+    assert backfill_calls == [
+        (instrument_id, frame, 365, "automatic")
+        for frame in market_data_application.SUPPORTED_TIMEFRAMES
+    ]
+
+
+def test_auto_start_collection_skips_an_already_overlapping_backfill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.market_data.application import use_cases as market_data_application
+
+    db = MagicMock()
+    monkeypatch.setattr(market_data_application, "update_subscriptions", MagicMock())
+    monkeypatch.setattr(
+        market_data_application,
+        "enqueue_backfill",
+        MagicMock(
+            side_effect=market_data_application.MarketDataApplicationError(
+                "overlapping_backfill", "already running"
+            )
+        ),
+    )
+
+    instruments_routes._auto_start_collection(db, uuid4(), uuid4())  # does not raise
+
+
+def test_auto_start_collection_reraises_other_backfill_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.market_data.application import use_cases as market_data_application
+
+    db = MagicMock()
+    monkeypatch.setattr(market_data_application, "update_subscriptions", MagicMock())
+    monkeypatch.setattr(
+        market_data_application,
+        "enqueue_backfill",
+        MagicMock(
+            side_effect=market_data_application.MarketDataApplicationError(
+                "credentials_missing", "no credentials"
+            )
+        ),
+    )
+
+    with pytest.raises(market_data_application.MarketDataApplicationError):
+        instruments_routes._auto_start_collection(db, uuid4(), uuid4())
 
 
 def test_sync_requires_selected_verified_account() -> None:

@@ -88,23 +88,19 @@ def _checksum(payload: object) -> str:
     return hashlib.sha256(repr(payload).encode()).hexdigest()
 
 
-def ensure_dummy_bot(
+def ensure_dummy_strategy_and_risk_profile(
     db: Session,
     workspace_id: UUID,
-    account: TradingAccount,
-    instrument: Instrument,
     *,
-    bot_name: str,
-    timeframe: str = "1m",
     strategy_name: str = "dummy-sma-pipeline-skeleton",
     risk_profile_name: str = "conservative-v1-dummy",
-) -> TradingBot:
+) -> tuple[StrategyVersion, RiskProfileVersion]:
     """Idempotent: reuses existing rows by (workspace_id, name) if this has already
-    been called for this workspace. `strategy_name`/`risk_profile_name` default to
-    the one dummy strategy/risk-profile every bot in a workspace currently shares
-    (there is only one real strategy implementation, `dummy_signal.py`) --
-    `bot_name` has no such shared default since it must be unique per bot
-    (`uq_trading_bot_name`) and the caller always has a real one to give it."""
+    been called for this workspace. Extracted from `ensure_dummy_bot` (2026-09-26,
+    Horizon 4 backtest API task) so the backtest provisioning flow -- which needs a
+    `StrategyVersion`/`RiskProfileVersion` but not a `TradingBot`/`TradingAccount` --
+    can reuse the same one dummy strategy/risk-profile every bot in a workspace
+    already shares, instead of duplicating this block. Caller commits."""
     strategy = db.scalar(
         select(Strategy).where(
             Strategy.workspace_id == workspace_id, Strategy.name == strategy_name
@@ -162,6 +158,30 @@ def ensure_dummy_bot(
         db.add(risk_profile_version)
         db.flush()
 
+    return strategy_version, risk_profile_version
+
+
+def ensure_dummy_bot(
+    db: Session,
+    workspace_id: UUID,
+    account: TradingAccount,
+    instrument: Instrument,
+    *,
+    bot_name: str,
+    timeframe: str = "1m",
+    strategy_name: str = "dummy-sma-pipeline-skeleton",
+    risk_profile_name: str = "conservative-v1-dummy",
+) -> TradingBot:
+    """Idempotent: reuses existing rows by (workspace_id, name) if this has already
+    been called for this workspace. `strategy_name`/`risk_profile_name` default to
+    the one dummy strategy/risk-profile every bot in a workspace currently shares
+    (there is only one real strategy implementation, `dummy_signal.py`) --
+    `bot_name` has no such shared default since it must be unique per bot
+    (`uq_trading_bot_name`) and the caller always has a real one to give it."""
+    strategy_version, risk_profile_version = ensure_dummy_strategy_and_risk_profile(
+        db, workspace_id, strategy_name=strategy_name, risk_profile_name=risk_profile_name
+    )
+
     bot = db.scalar(
         select(TradingBot).where(
             TradingBot.workspace_id == workspace_id, TradingBot.name == bot_name
@@ -216,12 +236,23 @@ def _open_position(
 
 def run_dummy_pipeline_once(db: Session, bot: TradingBot, bot_run: BotRun) -> dict:
     """Runs one evaluation cycle for `bot`. Returns a small dict describing what
-    happened (`action`: "hold" | "close_only" | "denied" | "opened", plus the row ids
-    involved) -- meant for tests/scripts to assert against, not a public API.
+    happened (`action`: "hold" | "already_processed" | "close_only" | "denied" |
+    "opened", plus the row ids involved) -- meant for tests/scripts to assert
+    against, not a public API.
 
     Gated on `bot.actual_state` -- see module docstring for the stopped-vs-paused
     distinction (stopped skips everything below before even generating a signal;
-    paused still generates one and still allows a close-only, just not a new entry)."""
+    paused still generates one and still allows a close-only, just not a new entry).
+
+    **Idempotent per (bot_run_id, candle_id)** (2026-09-25, added for the execution
+    loop/Worker task): the Worker calling this repeatedly on a poll interval will
+    often see the same still-latest final candle more than once before a new one
+    closes. Without a guard, a second call for the same candle would call
+    `generate_dummy_signal` again (deterministic, same result) and then fail on
+    `db.commit()` below with an uncaught `IntegrityError` against
+    `uq_signal_idempotency` -- this function had no callers before the Worker, so
+    that path was never exercised. Returning "already_processed" early makes
+    repeated polling safe without the Worker needing to track per-bot state itself."""
     if bot.actual_state not in ("running", "paused"):
         return {"action": "hold", "reason": "bot_not_active", "actual_state": bot.actual_state}
 
@@ -247,6 +278,12 @@ def run_dummy_pipeline_once(db: Session, bot: TradingBot, bot_run: BotRun) -> di
     if not candles:
         return {"action": "hold", "reason": "no_candles"}
     latest_candle = candles[-1]
+
+    already_processed = db.scalar(
+        select(Signal).where(Signal.bot_run_id == bot_run.id, Signal.candle_id == latest_candle.id)
+    )
+    if already_processed is not None:
+        return {"action": "already_processed", "signal_id": already_processed.id}
 
     signal_action = generate_dummy_signal(candles)
     input_checksum = _checksum(

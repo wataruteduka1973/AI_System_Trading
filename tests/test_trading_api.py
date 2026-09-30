@@ -14,7 +14,7 @@ from app.db.session import get_db
 from app.main import app
 from app.models.connections import ExchangeConnection
 from app.models.instruments import Instrument
-from app.models.strategy import BotRun, TradingBot
+from app.models.strategy import BotRun, Signal, TradingBot
 from app.models.trading import LedgerTransaction, TradingAccount
 from app.models.workspace import AppUser
 from app.security.rbac import require_operator_role, require_viewer_role
@@ -319,6 +319,68 @@ def test_get_trading_bot_404_for_bot_in_another_workspace() -> None:
         app.dependency_overrides.clear()
 
     assert response.status_code == 404
+
+
+def test_get_latest_bot_run_404_when_bot_has_never_been_started() -> None:
+    workspace_id = uuid4()
+    bot = _bot(workspace_id=workspace_id)
+    session = MagicMock()
+    # _get_bot finds the bot, then the BotRun lookup finds nothing.
+    session.scalar.side_effect = [bot, None]
+    _override_database(session)
+    try:
+        response = client.get(f"/api/v1/workspaces/{workspace_id}/bots/{bot.id}/latest-run")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 404
+
+
+def test_get_latest_bot_run_without_a_signal_yet() -> None:
+    workspace_id = uuid4()
+    bot = _bot(workspace_id=workspace_id)
+    run = _bot_run(bot_id=bot.id, status="running")
+    session = MagicMock()
+    session.scalar.side_effect = [bot, run, None]  # bot, latest BotRun, no Signal yet
+    _override_database(session)
+    try:
+        response = client.get(f"/api/v1/workspaces/{workspace_id}/bots/{bot.id}/latest-run")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "running"
+    assert body["latest_signal"] is None
+
+
+def test_get_latest_bot_run_includes_the_latest_signal() -> None:
+    workspace_id = uuid4()
+    bot = _bot(workspace_id=workspace_id)
+    run = _bot_run(bot_id=bot.id, status="running")
+    signal = Signal(
+        id=uuid4(),
+        workspace_id=workspace_id,
+        bot_run_id=run.id,
+        candle_id=uuid4(),
+        strategy_version_id=bot.strategy_version_id,
+        action="buy",
+        rationale={},
+        input_checksum="x",
+        created_at=datetime.now(UTC),
+    )
+    session = MagicMock()
+    session.scalar.side_effect = [bot, run, signal]
+    _override_database(session)
+    try:
+        response = client.get(f"/api/v1/workspaces/{workspace_id}/bots/{bot.id}/latest-run")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["latest_signal"]["action"] == "buy"
+    assert body["latest_signal"]["id"] == str(signal.id)
 
 
 def test_start_trading_bot() -> None:

@@ -221,6 +221,21 @@ button:disabled {
   background: #61451f;
 }
 
+.bot-state-running {
+  color: #7df0c6;
+  background: #124b3d;
+}
+
+.bot-state-paused {
+  color: #ffd28d;
+  background: #61451f;
+}
+
+.bot-state-failed {
+  color: #ffb2bb;
+  background: #5b2730;
+}
+
 .secondary-button {
   color: #eaf2ff;
   background: #38506f;

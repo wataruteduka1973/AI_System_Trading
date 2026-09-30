@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 from binance import AsyncClient
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 
-from app.exchanges.types import CandlePoint
+from app.exchanges.types import BinanceKlineFormatError, CandlePoint, parse_binance_kline
 
 TESTNET_HOST = "testnet.binance.vision"
 ClientFactory = Callable[..., Awaitable[AsyncClient]]
@@ -238,25 +238,10 @@ class BinanceSpotTestnetClient:
 
     @staticmethod
     def _parse_candle(payload: object) -> CandlePoint:
-        if not isinstance(payload, list) or len(payload) < 9:
-            raise BinanceApiError("Binance candle response contains an invalid candle")
         try:
-            point = CandlePoint(
-                open_time=datetime.fromtimestamp(int(payload[0]) / 1000, tz=UTC),
-                close_time=datetime.fromtimestamp((int(payload[6]) + 1) / 1000, tz=UTC),
-                open=Decimal(str(payload[1])),
-                high=Decimal(str(payload[2])),
-                low=Decimal(str(payload[3])),
-                close=Decimal(str(payload[4])),
-                volume=Decimal(str(payload[5])),
-                trade_count=int(payload[8]),
-                is_final=(int(payload[6]) + 1) <= int(datetime.now(UTC).timestamp() * 1000),
-            )
-        except (TypeError, ValueError, ArithmeticError) as exc:
-            raise BinanceApiError("Binance candle response is missing price data") from exc
-        if min(point.open, point.high, point.low, point.close) <= 0:
-            raise BinanceApiError("Binance candle response contains a non-positive price")
-        return point
+            return parse_binance_kline(payload)
+        except BinanceKlineFormatError as exc:
+            raise BinanceApiError(str(exc)) from exc
 
     @staticmethod
     def _require_mapping(payload: Any) -> dict[str, Any]:
