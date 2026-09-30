@@ -36,7 +36,12 @@ def test_compute_equity_is_cash_only_when_flat() -> None:
     assert equity == Decimal("1000000")
 
 
-def test_compute_equity_adds_unrealized_profit_for_open_long() -> None:
+# Cash balances below already include the entry notional booked by
+# order_flow._record_ledger: 1,000,000 - 1000 * 150 = 850,000 after buying a long,
+# 1,000,000 + 1000 * 150 = 1,150,000 after selling a short.
+
+
+def test_compute_equity_adds_open_long_at_market_value() -> None:
     db = MagicMock()
     instrument = _instrument()
     position = TradingPosition(
@@ -63,10 +68,11 @@ def test_compute_equity_adds_unrealized_profit_for_open_long() -> None:
     )
     db.scalar.side_effect = [position, candle, Decimal("850000")]
     equity = compute_equity(db, _account(), instrument)
-    assert equity == Decimal("850000") + Decimal("1000")  # cash + (151-150)*1000
+    # cash + 1000 * 151 == initial 1,000,000 + unrealized (151-150)*1000
+    assert equity == Decimal("1001000")
 
 
-def test_compute_equity_subtracts_unrealized_loss_for_open_short() -> None:
+def test_compute_equity_subtracts_open_short_at_market_value() -> None:
     db = MagicMock()
     instrument = _instrument()
     position = TradingPosition(
@@ -91,9 +97,10 @@ def test_compute_equity_subtracts_unrealized_loss_for_open_short() -> None:
         source="test",
         is_final=True,
     )
-    db.scalar.side_effect = [position, candle, Decimal("850000")]
+    db.scalar.side_effect = [position, candle, Decimal("1150000")]
     equity = compute_equity(db, _account(), instrument)
-    assert equity == Decimal("850000") - Decimal("1000")
+    # cash - 1000 * 151 == initial 1,000,000 + unrealized (150-151)*1000
+    assert equity == Decimal("999000")
 
 
 def test_record_account_snapshot_persists_and_flushes() -> None:
@@ -105,3 +112,35 @@ def test_record_account_snapshot_persists_and_flushes() -> None:
     assert snapshot.unrealized_pnl == Decimal("0")
     db.add.assert_called_once()
     db.flush.assert_called_once()
+
+
+def test_record_account_snapshot_values_an_open_long_at_market() -> None:
+    db = MagicMock()
+    instrument = _instrument()
+    position = TradingPosition(
+        id=uuid4(),
+        account_id=uuid4(),
+        instrument_id=instrument.id,
+        side="long",
+        quantity=Decimal("1000"),
+        average_entry_price=Decimal("150"),
+        status="open",
+    )
+    candle = Candle(
+        id=uuid4(),
+        instrument_id=instrument.id,
+        timeframe="1m",
+        open_time=datetime.now(UTC),
+        close_time=datetime.now(UTC),
+        open=Decimal("151"),
+        high=Decimal("151"),
+        low=Decimal("151"),
+        close=Decimal("151"),
+        source="test",
+        is_final=True,
+    )
+    db.scalar.side_effect = [position, candle, Decimal("850000")]
+    snapshot = record_account_snapshot(db, _account(), instrument)
+    assert snapshot.equity == Decimal("1001000")
+    assert snapshot.unrealized_pnl == Decimal("1000")
+    assert snapshot.balances == {"JPY": "850000"}

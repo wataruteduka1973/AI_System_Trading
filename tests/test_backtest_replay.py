@@ -236,3 +236,42 @@ def test_negative_warmup_bars_is_rejected() -> None:
             initial_equity=Decimal("1000000"),
             warmup_bars=-1,
         )
+
+
+# ---- run_replay: equity while a position is held ----
+
+
+@pytest.mark.parametrize(("entry_action", "exit_close"), [("buy", "110"), ("sell", "90")])
+def test_equity_while_holding_is_initial_equity_plus_unrealized_pnl(
+    entry_action: str, exit_close: str
+) -> None:
+    # Regression: equity used to be cash + unrealized P&L, but cash has already paid
+    # out (long) or received (short) the entry notional, so a held long read ~one
+    # notional too low and a held short ~one notional too high.
+    candles = [
+        _candle(Decimal("100"), 0),
+        _candle(Decimal("100"), 1),
+        _candle(Decimal(exit_close), 2),
+    ]
+
+    def scripted_signal(history: Sequence[Candle]) -> str:
+        return {1: entry_action, 2: "hold", 3: "hold"}[len(history)]
+
+    result = replay.run_replay(
+        candles,
+        instrument=_instrument(),
+        timeframe="1m",
+        exchange_code="oanda",  # zero fees, so equity moves only with price
+        rules=gate.CONSERVATIVE_V1_RULES,
+        initial_equity=Decimal("1000000"),
+        signal_generator=scripted_signal,  # type: ignore[arg-type]
+    )
+
+    assert result.ending_position is not None
+    quantity = result.ending_position.quantity
+    assert [equity for _, equity in result.equity_curve] == [
+        Decimal("1000000"),
+        Decimal("1000000"),  # held, price unchanged since entry
+        Decimal("1000000") + 10 * quantity,  # held, price moved 10 in the position's favour
+    ]
+    assert result.ending_equity == Decimal("1000000") + 10 * quantity

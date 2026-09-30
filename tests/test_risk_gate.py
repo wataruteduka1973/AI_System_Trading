@@ -156,7 +156,7 @@ def test_evaluate_signal_denies_with_no_equity() -> None:
     # _recent_final_candles -> db.scalars(...).all(); everything else via db.scalar/db.get
     db.scalars.return_value.all.return_value = candles
     db.get.return_value = None  # no InstrumentSpread row -> spread=0
-    # compute_equity: _unrealized_pnl (position=None) then _cash_balance (0)
+    # compute_equity: _open_position_valuation (position=None) then _cash_balance (0)
     db.scalar.side_effect = [None, Decimal("0")]
 
     result = gate.evaluate_signal(
