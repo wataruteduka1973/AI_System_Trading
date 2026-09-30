@@ -336,7 +336,7 @@ def _run_with_exits(
     monkeypatch: pytest.MonkeyPatch,
     *,
     entry: str = "buy",
-    protective_exits: bool = True,
+    exit_policy: replay.ExitPolicy = "stop_and_target",
 ) -> replay.ReplayResult:
     monkeypatch.setattr(gate, "_stop_distance", lambda *args: Decimal(5))
 
@@ -351,7 +351,7 @@ def _run_with_exits(
         rules=gate.CONSERVATIVE_V1_RULES,
         initial_equity=Decimal("1000000"),
         signal_generator=scripted_signal,  # type: ignore[arg-type]
-        protective_exits=protective_exits,
+        exit_policy=exit_policy,
     )
 
 
@@ -404,9 +404,9 @@ def test_a_short_is_stopped_out_above_its_entry(monkeypatch: pytest.MonkeyPatch)
     assert trade.exit_reason == "stop_loss"
 
 
-def test_protective_exits_are_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_signal_exit_policy_ignores_stops_and_targets(monkeypatch: pytest.MonkeyPatch) -> None:
     candles = [_ohlc(0, "100", "100", "100", "100"), _ohlc(1, "99", "101", "94", "96")]
-    result = _run_with_exits(candles, monkeypatch, protective_exits=False)
+    result = _run_with_exits(candles, monkeypatch, exit_policy="signal")
     assert result.trades == []
     assert result.ending_position is not None
 
@@ -472,3 +472,19 @@ def test_a_break_even_round_trip_is_still_recorded(monkeypatch: pytest.MonkeyPat
     assert trade.realized_pnl == 0
     assert trade.fees > 0
     assert -trade.fees == result.ending_equity - initial
+
+
+def test_stop_loss_policy_lets_a_winner_run_past_the_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candles = [_ohlc(0, "100", "100", "100", "100"), _ohlc(1, "101", "111", "99", "108")]
+    result = _run_with_exits(candles, monkeypatch, exit_policy="stop_loss")
+    assert result.trades == []
+    assert result.ending_position is not None
+
+
+def test_stop_loss_policy_still_stops_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    candles = [_ohlc(0, "100", "100", "100", "100"), _ohlc(1, "99", "101", "94", "96")]
+    [trade] = _run_with_exits(candles, monkeypatch, exit_policy="stop_loss").trades
+    assert trade.exit_price == Decimal("95")
+    assert trade.exit_reason == "stop_loss"

@@ -20,6 +20,7 @@ from collections import Counter
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import get_args
 
 from app.db.session import SessionLocal
 from app.exchanges.types import TIMEFRAME_SECONDS
@@ -32,7 +33,7 @@ from app.trading.application.backtest_provisioning import (
     _exchange_code_for_instrument,
     load_final_candles,
 )
-from app.trading.application.backtest_replay import BacktestSignalGenerator
+from app.trading.application.backtest_replay import BacktestSignalGenerator, ExitPolicy
 from app.trading.application.backtest_walk_forward import (
     RollingFoldResult,
     run_rolling_walk_forward,
@@ -129,9 +130,11 @@ def main() -> int:
     parser.add_argument("--train-days", type=int, default=90)
     parser.add_argument("--test-days", type=int, default=30)
     parser.add_argument(
-        "--protective-exits",
-        action="store_true",
-        help="simulate the Risk Gate's ATR stop-loss and min_reward_risk take-profit",
+        "--exit-policy",
+        choices=get_args(ExitPolicy),
+        default="signal",
+        help="signal: opposing signal only; stop_loss: plus the Risk Gate's ATR stop; "
+        "stop_and_target: plus a min_reward_risk take-profit",
     )
     parser.add_argument(
         "--strategies",
@@ -165,7 +168,7 @@ def main() -> int:
             print(
                 f"\n=== {args.symbol} {timeframe}: {len(candles)} candles, "
                 f"train={args.train_days}d test={args.test_days}d "
-                f"protective_exits={args.protective_exits} ==="
+                f"exit_policy={args.exit_policy} ==="
             )
             for name in args.strategies.split(","):
                 signal_generator = STRATEGIES[name]
@@ -180,7 +183,7 @@ def main() -> int:
                     train_bars=args.train_days * bars_per_day,
                     test_bars=args.test_days * bars_per_day,
                     signal_generator=signal_generator,
-                    protective_exits=args.protective_exits,
+                    exit_policy=args.exit_policy,
                 )
                 _print_folds(candles, results)
     return 0

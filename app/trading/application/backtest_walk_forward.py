@@ -56,6 +56,7 @@ from app.trading.application.backtest_metrics import (
 from app.trading.application.backtest_replay import (
     _HISTORY_WINDOW,
     BacktestSignalGenerator,
+    ExitPolicy,
     ReplayResult,
     generate_dummy_signal,
     run_replay,
@@ -204,7 +205,7 @@ def run_rolling_walk_forward(
     test_bars: int,
     spread: Decimal = Decimal(0),
     signal_generator: BacktestSignalGenerator = generate_dummy_signal,
-    protective_exits: bool = False,
+    exit_policy: ExitPolicy = "signal",
 ) -> list[RollingFoldResult]:
     """Every window starts from `initial_equity`, as in `run_walk_forward` (and so
     `peak_drawdown_limit_hard`'s lock never carries across windows). Unlike
@@ -225,7 +226,7 @@ def run_rolling_walk_forward(
             spread=spread,
             signal_generator=signal_generator,
             warmup_bars=warmup,
-            protective_exits=protective_exits,
+            exit_policy=exit_policy,
         )
         return result, compute_metrics(result, initial_equity)
 

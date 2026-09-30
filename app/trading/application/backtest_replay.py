@@ -87,6 +87,10 @@ from app.trading.application.dummy_signal import DummySignalAction, generate_dum
 
 BacktestSignalGenerator = Callable[[Sequence[Candle]], DummySignalAction]
 ExitReason = Literal["signal", "stop_loss", "take_profit"]
+ExitPolicy = Literal["signal", "stop_loss", "stop_and_target"]
+"""How a position may exit besides an opposing signal: `signal` (the signal
+only), `stop_loss` (plus a fixed stop, letting winners run until the signal
+exits), or `stop_and_target` (plus a fixed take-profit as well)."""
 
 _HISTORY_WINDOW = risk_gate._ATR_HISTORY_CANDLES
 """Bound on how much of `candles` `run_replay` hands a bar's `signal_generator`
@@ -248,7 +252,7 @@ def _apply_and_record(
 
 
 def _protective_exit(
-    candle: Candle, position: fill_sim.BacktestPosition, stop: Decimal, target: Decimal
+    candle: Candle, position: fill_sim.BacktestPosition, stop: Decimal, target: Decimal | None
 ) -> tuple[Decimal, ExitReason] | None:
     """Where, if anywhere, `candle` hit `position`'s stop or target. A bar that
     opens beyond a level fills at its open (a gap cannot fill at a price that
@@ -260,6 +264,8 @@ def _protective_exit(
             return candle.open, "stop_loss"
         if candle.low <= stop:
             return stop, "stop_loss"
+        if target is None:
+            return None
         if candle.open >= target:
             return candle.open, "take_profit"
         if candle.high >= target:
@@ -269,6 +275,8 @@ def _protective_exit(
         return candle.open, "stop_loss"
     if candle.high >= stop:
         return stop, "stop_loss"
+    if target is None:
+        return None
     if candle.open <= target:
         return candle.open, "take_profit"
     if candle.low <= target:
@@ -287,7 +295,7 @@ def run_replay(
     spread: Decimal = Decimal(0),
     signal_generator: BacktestSignalGenerator = generate_dummy_signal,
     warmup_bars: int = 0,
-    protective_exits: bool = False,
+    exit_policy: ExitPolicy = "signal",
 ) -> ReplayResult:
     """Replay `candles` (ascending by `open_time`, final bars only -- the caller is
     responsible for that, matching `_recent_final_candles`'s live-path filter) bar by
@@ -304,13 +312,14 @@ def run_replay(
     the bars just before the window, instead of losing the window's first ~200 bars
     to an indicator that cannot be computed yet.
 
-    With `protective_exits`, a position opened from flat (or flipped) gets a
-    stop at `stop_distance` from its fill price -- the same distance the Risk
-    Gate sized it for -- and a target at `stop_distance * min_reward_risk`.
-    From the next bar on, each bar's high/low is checked against both before
-    the signal is evaluated (see `_protective_exit`). Adding to a position
-    keeps the original levels. Off by default so existing callers (the
-    backtest API) keep the signal-only exit behaviour."""
+    With `exit_policy` other than `signal`, a position opened from flat (or
+    flipped) gets a stop at `stop_distance` from its fill price -- the same
+    distance the Risk Gate sized it for -- and, with `stop_and_target`, a
+    target at `stop_distance * min_reward_risk`. From the next bar on, each
+    bar's high/low is checked against them before the signal is evaluated
+    (see `_protective_exit`). Adding to a position keeps the original levels.
+    The default `signal` keeps existing callers (the backtest API) on the
+    signal-only exit behaviour."""
     if warmup_bars < 0:
         raise ValueError("warmup_bars must be non-negative")
     if len(candles) <= warmup_bars:
@@ -327,12 +336,7 @@ def run_replay(
         now = candle.close_time
         history = candles[max(0, i + 1 - _HISTORY_WINDOW) : i + 1]
 
-        if (
-            protective_exits
-            and state.position is not None
-            and state.stop_price is not None
-            and state.take_profit_price is not None
-        ):
+        if exit_policy != "signal" and state.position is not None and state.stop_price is not None:
             hit = _protective_exit(
                 candle, state.position, state.stop_price, state.take_profit_price
             )
@@ -449,11 +453,12 @@ def run_replay(
         opened_new_position = state.position is not None and (
             pre_entry_position is None or pre_entry_position.side != state.position.side
         )
-        if protective_exits and opened_new_position:
+        if exit_policy != "signal" and opened_new_position:
             direction = Decimal(1) if signal_action == "buy" else Decimal(-1)
-            reward_risk = risk_gate._decimal(rules, "min_reward_risk")
             state.stop_price = entry_fill.price - direction * stop_distance
-            state.take_profit_price = entry_fill.price + direction * stop_distance * reward_risk
+            if exit_policy == "stop_and_target":
+                reward_risk = risk_gate._decimal(rules, "min_reward_risk")
+                state.take_profit_price = entry_fill.price + direction * stop_distance * reward_risk
 
     ending_equity = state.cash_equity + _market_value(state.position, candles[-1].close)
     return ReplayResult(
