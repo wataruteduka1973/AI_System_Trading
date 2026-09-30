@@ -48,27 +48,32 @@ candles(全期間) → `split_candles_rolling(train_bars, test_bars)` → fold�
 ## 想定リスク
 
 - 検証区間の末尾で未決済のポジションは `net_pnl`(決済済み取引のみ)に含まれない。
-  レポートでは該当foldに `open` を表示する。時価評価の損益は、保有中のequity計算に
-  既知の不具合があるため表示しない(docs/knowledge/backtest-equity-omits-position-cost-basis.md)。
+  レポートでは該当foldに `open` を表示し、時価評価の損益(mtm)を併記する。
 - 15mで1年分(約35,000本)をfold数×2回replayするため実行時間が伸びる。
 
 ## 検証結果 (2026-09-30, BTCJPY 1年, train=90日 / test=30日, 9 fold)
 
-`python scripts/run_walk_forward_report.py` の結果。netは決済済み取引のみ。
+`python scripts/run_walk_forward_report.py` の結果(equity修正と、注文上限をcashで判定する修正の後。
+docs/knowledge/backtest-equity-omits-position-cost-basis.md)。netは決済済み取引のみ、
+mtmは区間末に保有中のポジションも時価で含めた損益。
 
-| 時間足 | 戦略 | 検証foldでnet>0 | 検証fold合計net |
-|---|---|---|---|
-| 15m | dummy_sma5 | 1/9 | -12,000 |
-| 15m | ema_trend | 0/9 | -20,866 |
-| 1h | dummy_sma5 | 1/9 | -19,218 |
-| 1h | ema_trend | 2/9 | -13,825 |
-| 4h | dummy_sma5 | 1/9 | -29,972 |
-| 4h | ema_trend | 1/9 | -11,614 |
+| 時間足 | 戦略 | 検証foldでmtm>0 | 検証fold合計net | 検証fold合計mtm |
+|---|---|---|---|---|
+| 15m | dummy_sma5 | 0/9 | -14,274 | -29,287 |
+| 15m | ema_trend | 0/9 | -20,866 | -28,755 |
+| 1h | dummy_sma5 | 1/9 | -23,210 | -42,962 |
+| 1h | ema_trend | 2/9 | -13,825 | -19,321 |
+| 4h | dummy_sma5 | 1/9 | -43,178 | -56,962 |
+| 4h | ema_trend | 4/9 | -11,614 | +13,730 |
 
 - **「検証区間が下落相場だっただけ」という仮説は否定された**: 直近3 fold
   (2026-06-23〜09-21)は買い持ちで+6〜15%の上昇相場だったが、2戦略×3時間足×3 fold
-  の18区間のうち黒字は1区間だけだった(15m dummy_sma5 fold 6、+198円、PF 1.05)。
-  負けている原因はロングオンリー制約ではなく、戦略にエッジが無いことだと判断する。
+  の18区間のうちmtmが黒字なのは2区間だけで、どちらも4h ema_trendが区間末に
+  ロングを保有していた区間だった。負けている原因はロングオンリー制約ではなく、
+  戦略にエッジが無いことだと判断する。
+- 4h ema_trendの合計mtmがプラスなのは、決済済み取引(合計net -11,614)ではなく、
+  上昇相場の区間末に保有していたロング4件の含み益による。取引数も1区間0〜3件と
+  少なく、エッジの根拠にはならない。
 - 70/30分割で有望に見えた15m ema_trendの訓練区間のnet(+6,920)は、fold 0の
   訓練区間(最初の90日)のnetと同額。利益は最初の90日だけで出ていた。
 - 以後の戦略候補は、この9 fold全体で評価すること(単一分割や訓練区間だけの結果で

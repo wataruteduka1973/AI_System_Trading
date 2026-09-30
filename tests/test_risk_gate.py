@@ -156,7 +156,7 @@ def test_evaluate_signal_denies_with_no_equity() -> None:
     # _recent_final_candles -> db.scalars(...).all(); everything else via db.scalar/db.get
     db.scalars.return_value.all.return_value = candles
     db.get.return_value = None  # no InstrumentSpread row -> spread=0
-    # compute_equity: _unrealized_pnl (position=None) then _cash_balance (0)
+    # value_account: _open_position_valuation (position=None) then _cash_balance (0)
     db.scalar.side_effect = [None, Decimal("0")]
 
     result = gate.evaluate_signal(
@@ -189,6 +189,7 @@ def _state(**overrides: object) -> gate.RiskState:
         expected_slippage=Decimal(0),
         fee_buffer_per_unit=Decimal(0),
         equity=Decimal("1000000"),
+        available_cash=Decimal("1000000"),
         existing_open_risk=Decimal(0),
         has_open_position=False,
         existing_position_quantity=Decimal(0),
@@ -275,6 +276,24 @@ def test_evaluate_conservative_v1_adjusts_quantity_down_to_broker_limit() -> Non
     result = gate._evaluate_conservative_v1(_state(instrument=small_max))
     assert result.outcome == "allow_with_adjustment"
     assert result.approved_quantity == Decimal("100")
+
+
+def test_binance_order_limit_is_a_share_of_available_cash_not_equity() -> None:
+    # Holding BTC: equity (cash + BTC at market) is 1,000,000 but only 400,000 JPY
+    # is actually available to spend -- the 10% order limit applies to the latter.
+    result = gate._evaluate_conservative_v1(
+        _state(
+            exchange_code="binance",
+            equity=Decimal("1000000"),
+            available_cash=Decimal("400000"),
+            has_open_position=True,
+        )
+    )
+    quantity_calculation = result.rule_results["quantity_calculation"]
+    assert isinstance(quantity_calculation, dict)
+    assert Decimal(quantity_calculation["broker_limit_quantity"]) == (
+        Decimal("400000") * Decimal("0.10") / Decimal("150")
+    )
 
 
 # ---- _sync_trading_halts ----

@@ -6,11 +6,9 @@ return over the same window -- so "the strategy lost" can be read against
 "the market fell" rather than in isolation.
 
 Research only: nothing is persisted. `net` counts closed trades only (see
-`compute_metrics`); `open` marks a window that ended with a position still
-held, whose P&L `net` therefore leaves out. Mark-to-market equity is
-deliberately not shown: while a position is held, `run_replay`'s equity
-(cash + unrealized P&L) omits the position's cost basis, which the cash
-balance has already paid out (tracked separately as a known issue).
+`compute_metrics`); `mtm` is the window's ending equity minus the initial
+equity, so it also counts a position still held at the window's end (marked
+`open`), valued at its last close.
 
 Run: python scripts/run_walk_forward_report.py [--symbol BTCJPY]
      [--timeframes 15m,1h,4h] [--train-days 90] [--test-days 30]
@@ -57,32 +55,35 @@ def _buy_and_hold_return(candles: Sequence[Candle]) -> Decimal:
     return candles[-1].close / candles[0].close - 1
 
 
-def _metrics_cells(metrics: ReplayMetrics) -> str:
+def _metrics_cells(metrics: ReplayMetrics, mtm: Decimal) -> str:
     pf = "-" if metrics.profit_factor is None else f"{metrics.profit_factor:.2f}"
     return (
         f"trades={metrics.trade_count:>3} win={float(metrics.win_rate):>6.1%} "
-        f"net={metrics.net_pnl:>8.0f} pf={pf:>5}"
+        f"net={metrics.net_pnl:>8.0f} mtm={mtm:>8.0f} pf={pf:>5}"
     )
 
 
 def _print_folds(candles: Sequence[Candle], results: list[RollingFoldResult]) -> None:
     total_net = Decimal(0)
+    total_mtm = Decimal(0)
     positive_folds = 0
     for r in results:
         test_window = candles[r.fold.train_end : r.fold.test_end]
+        mtm = r.test_result.ending_equity - INITIAL_EQUITY
         total_net += r.test_metrics.net_pnl
-        positive_folds += r.test_metrics.net_pnl > 0
+        total_mtm += mtm
+        positive_folds += mtm > 0
         open_at_end = "open" if r.test_result.ending_position is not None else "    "
         print(
             f"  fold {r.fold.index:>2} test {test_window[0].open_time:%Y-%m-%d}"
             f"..{test_window[-1].close_time:%Y-%m-%d} "
             f"market={float(_buy_and_hold_return(test_window)):>+7.1%} | "
-            f"{_metrics_cells(r.test_metrics)} {open_at_end} | "
+            f"{_metrics_cells(r.test_metrics, mtm)} {open_at_end} | "
             f"train net={r.train_metrics.net_pnl:>8.0f}"
         )
     print(
-        f"  => test folds with net>0: {positive_folds}/{len(results)}, "
-        f"total test net={total_net:.0f}"
+        f"  => test folds with mtm>0: {positive_folds}/{len(results)}, "
+        f"total test net={total_net:.0f}, total test mtm={total_mtm:.0f}"
     )
 
 

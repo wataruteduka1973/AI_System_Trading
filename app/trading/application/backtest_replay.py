@@ -45,9 +45,11 @@ notional (+ for a sell, - for a buy) minus its fee -- algebraically the same
 sums for the live path (`realized_pnl` ledger entries are informational only there,
 never summed into cash -- see that module's docstring -- so this mirrors it exactly
 without needing a `realized_pnl`-shaped entry here at all). At any bar, "equity" fed
-into `RiskState` is `cash_equity` plus the *unrealized* P&L of the currently open
-position marked at that bar's close, matching `compute_equity`'s own definition
-(cash + unrealized P&L of the one open position).
+into `RiskState` is `cash_equity` plus the signed *market value* of the currently
+open position marked at that bar's close, matching `compute_equity`'s own definition
+(see that module's docstring for why market value, not unrealized P&L: fixed
+2026-09-30, the old `cash + unrealized` omitted the entry notional cash had already
+paid out or received).
 
 **`day_start_equity`/`week_start_equity`** are captured once, on the first bar whose
 `close_time.date()` falls in a new day/ISO week, using that bar's own mark-to-market
@@ -140,6 +142,13 @@ class _ReplayState:
     trades: list[TradeRecord] = field(default_factory=list)
     equity_curve: list[tuple[datetime, Decimal]] = field(default_factory=list)
     next_sequence_no: int = 1
+
+
+def _market_value(position: fill_sim.BacktestPosition | None, price: Decimal) -> Decimal:
+    if position is None:
+        return Decimal(0)
+    direction = Decimal(1) if position.side == "long" else Decimal(-1)
+    return price * position.quantity * direction
 
 
 def _unrealized_pnl(position: fill_sim.BacktestPosition | None, price: Decimal) -> Decimal:
@@ -251,7 +260,7 @@ def run_replay(
         now = candle.close_time
         history = candles[max(0, i + 1 - _HISTORY_WINDOW) : i + 1]
 
-        mark_to_market_equity = state.cash_equity + _unrealized_pnl(state.position, candle.close)
+        mark_to_market_equity = state.cash_equity + _market_value(state.position, candle.close)
         state.equity_curve.append((now, mark_to_market_equity))
         state.peak_equity = max(state.peak_equity, mark_to_market_equity)
 
@@ -316,6 +325,7 @@ def run_replay(
             expected_slippage=expected_slippage,
             fee_buffer_per_unit=fee_buffer_per_unit,
             equity=mark_to_market_equity,
+            available_cash=state.cash_equity,
             existing_open_risk=existing_open_risk,
             has_open_position=state.position is not None,
             existing_position_quantity=(
@@ -344,7 +354,7 @@ def run_replay(
         )
         state.last_order_time = now
 
-    ending_equity = state.cash_equity + _unrealized_pnl(state.position, candles[-1].close)
+    ending_equity = state.cash_equity + _market_value(state.position, candles[-1].close)
     return ReplayResult(
         trades=state.trades,
         ending_equity=ending_equity,
