@@ -24,52 +24,25 @@ from typing import get_args
 
 from app.db.session import SessionLocal
 from app.exchanges.types import TIMEFRAME_SECONDS
-from app.market_data.application.public_research import RESEARCH_EXCHANGE_CODE
-from app.models.connections import Exchange
-from app.models.instruments import Instrument
+from app.market_data.application.public_research import (
+    RESEARCH_EXCHANGE_CODE,
+    find_public_research_instrument,
+)
 from app.models.market_data import Candle
 from app.trading.application.backtest_metrics import ReplayMetrics
 from app.trading.application.backtest_provisioning import (
     _exchange_code_for_instrument,
     load_final_candles,
 )
-from app.trading.application.backtest_replay import BacktestSignalGenerator, ExitPolicy
+from app.trading.application.backtest_replay import ExitPolicy
 from app.trading.application.backtest_walk_forward import (
     RollingFoldResult,
     run_rolling_walk_forward,
 )
-from app.trading.application.donchian_breakout_signal import (
-    DonchianSignalAction,
-    generate_donchian_breakout_signal,
-)
-from app.trading.application.dummy_signal import generate_dummy_signal
-from app.trading.application.ema_trend_signal import generate_ema_trend_signal
+from app.trading.application.research_strategies import RESEARCH_STRATEGIES
 from app.trading.application.risk_gate import CONSERVATIVE_V1_RULES
-from app.trading.application.rsi_mean_reversion_signal import (
-    RsiSignalAction,
-    generate_rsi_mean_reversion_signal,
-)
-from sqlalchemy import select
 
-
-def _donchian_55_20(candles: Sequence[Candle]) -> DonchianSignalAction:
-    return generate_donchian_breakout_signal(candles, entry_period=55, exit_period=20)
-
-
-def _rsi2_10_70(candles: Sequence[Candle]) -> RsiSignalAction:
-    return generate_rsi_mean_reversion_signal(
-        candles, rsi_period=2, oversold=Decimal(10), exit_level=Decimal(70)
-    )
-
-
-STRATEGIES: dict[str, BacktestSignalGenerator] = {
-    "dummy_sma5": generate_dummy_signal,
-    "ema_trend": generate_ema_trend_signal,
-    "donchian_20_10": generate_donchian_breakout_signal,
-    "donchian_55_20": _donchian_55_20,
-    "rsi14_30_70": generate_rsi_mean_reversion_signal,
-    "rsi2_10_70": _rsi2_10_70,
-}
+STRATEGIES = RESEARCH_STRATEGIES
 INITIAL_EQUITY = Decimal(1_000_000)
 
 
@@ -147,11 +120,7 @@ def main() -> int:
         parser.error(f"unknown strategies: {', '.join(sorted(unknown))}")
 
     with SessionLocal() as db:
-        instrument = db.scalar(
-            select(Instrument)
-            .join(Exchange, Exchange.id == Instrument.exchange_id)
-            .where(Exchange.code == RESEARCH_EXCHANGE_CODE, Instrument.symbol == args.symbol)
-        )
+        instrument = find_public_research_instrument(db, args.symbol)
         if instrument is None:
             print(
                 f"[NG] no {RESEARCH_EXCHANGE_CODE} instrument for {args.symbol} -- run "

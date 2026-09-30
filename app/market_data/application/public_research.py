@@ -32,6 +32,16 @@ class PublicResearchError(Exception):
         self.code = code
 
 
+def find_public_research_instrument(db: Session, symbol: str) -> Instrument | None:
+    """The already-fetched research instrument for `symbol`, or None if
+    `scripts/fetch_binance_public_history.py` has not been run for it yet."""
+    return db.scalar(
+        select(Instrument)
+        .join(Exchange, Exchange.id == Instrument.exchange_id)
+        .where(Exchange.code == RESEARCH_EXCHANGE_CODE, Instrument.symbol == symbol)
+    )
+
+
 async def ensure_public_research_instrument(
     db: Session, client: BinancePublicClient, symbol: str = "BTCJPY"
 ) -> Instrument:
