@@ -1,8 +1,11 @@
-"""Minimal technical indicators. Only Average True Range exists here -- it is the one
-indicator `risk_gate.py`'s stop-distance formula needs
+"""Minimal technical indicators. Average True Range is the one indicator
+`risk_gate.py`'s stop-distance formula needs
 (08_取引アルゴリズムとリスク初期値.md§4: `max(ATR(14) * coefficient, spread * 3, ...)`).
-No other indicator infrastructure (rolling windows, caching, a registry of indicators,
-etc.) is added; building that out is explicitly out of scope for this task.
+`exponential_moving_average` was added 2026-09-28 for `app/trading/application
+/ema_trend_signal.py` (comparing candidate hand-crafted strategies against the
+dummy SMA5 baseline on real BTCJPY data -- see that module's docstring). No
+other indicator infrastructure (rolling windows, caching, a registry of
+indicators, etc.) is added; building that out remains out of scope.
 """
 
 from collections.abc import Sequence
@@ -45,3 +48,25 @@ def average_true_range(candles: Sequence[Candle], period: int = 14) -> Decimal |
     for true_range in true_ranges[period:]:
         atr = (atr * (period - 1) + true_range) / period
     return atr
+
+
+def exponential_moving_average(candles: Sequence[Candle], period: int) -> Decimal | None:
+    """EMA of closes over `period`, seeded by the simple average of the oldest
+    `period` closes in `candles`, then rolled forward one bar at a time:
+    `EMA[t] = (close[t] - EMA[t-1]) * multiplier + EMA[t-1]`,
+    `multiplier = 2 / (period + 1)`.
+
+    Like `average_true_range`, this is stateless: called fresh over whatever
+    window `candles` is (the caller does not maintain a running EMA across
+    calls), so the result depends on how much history is passed in, not just
+    the most recent `period` candles -- with exactly `period` candles there is
+    only a seed and no smoothing has happened yet. Returns None if fewer than
+    `period` candles are given."""
+    if len(candles) < period:
+        return None
+    closes = [c.close for c in candles]
+    multiplier = Decimal(2) / Decimal(period + 1)
+    ema = sum(closes[:period], Decimal(0)) / period
+    for close in closes[period:]:
+        ema = (close - ema) * multiplier + ema
+    return ema

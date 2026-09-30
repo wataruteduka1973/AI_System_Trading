@@ -89,12 +89,13 @@ _HISTORY_WINDOW = risk_gate._ATR_HISTORY_CANDLES
 """Bound on how much of `candles` `run_replay` hands a bar's `signal_generator`
 (and, downstream, the ATR calculation) -- /code-review finding: `history =
 candles[:i+1]` used to copy a growing, unbounded prefix on every one of an N-bar
-run's iterations (O(N^2) total). 100 matches `risk_gate._ATR_HISTORY_CANDLES`,
-the largest lookback any current consumer needs (`generate_dummy_signal`'s
-default `period` is 5). A custom `signal_generator` that needs a longer lookback
-than this is not supported by `run_replay` today -- raise this constant (not
-just the call-site slice) if one is added, since the ATR window below relies on
-the same bound."""
+run's iterations (O(N^2) total). Matches `risk_gate._ATR_HISTORY_CANDLES` (see
+that constant's own docstring for its current value and history -- raised
+2026-09-28 from 100 to 260 for `ema_trend_signal.py`'s EMA(200) filter). A
+custom `signal_generator` that needs a longer lookback than this is not
+supported by `run_replay` today -- raise `risk_gate._ATR_HISTORY_CANDLES`
+itself (not just a call-site slice here) if one is added, since the ATR window
+below relies on the same bound."""
 
 
 @dataclass(frozen=True)

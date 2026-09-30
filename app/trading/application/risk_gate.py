@@ -146,13 +146,31 @@ def _decimal(rules: dict, key: str) -> Decimal:
     return Decimal(str(rules[key]))
 
 
-_ATR_HISTORY_CANDLES = 100
-"""How many candles to fetch for `average_true_range`'s ATR(14). Wilder's smoothing
-(see indicators.py) only reflects recent volatility once it has enough bars to roll
-forward past the initial seed -- fetching just `period + 1` (15) would give the same
-result as the old flat-SMA version, defeating the point of switching to Wilder's
-method. 100 is a judgment call (not derived from a formula): enough bars that the
-seed's influence has decayed by roughly (13/14)^85, without an unbounded query."""
+_ATR_HISTORY_CANDLES = 260
+"""How many candles to fetch for `average_true_range`'s ATR(14), and (via
+`backtest_replay._HISTORY_WINDOW = risk_gate._ATR_HISTORY_CANDLES`) the bounded
+window a backtest's `signal_generator` sees each bar. Wilder's smoothing (see
+indicators.py) only reflects recent volatility once it has enough bars to roll
+forward past the initial seed -- fetching just `period + 1` (15) would give the
+same result as the old flat-SMA version, defeating the point of switching to
+Wilder's method. 100 was the original judgment call (not derived from a
+formula): enough bars that the seed's influence has decayed by roughly
+(13/14)^85, without an unbounded query.
+
+Raised to 260, 2026-09-28: `app/trading/application/ema_trend_signal.py`'s
+EMA(200) trend filter needs at least 200 candles to seed plus one more for its
+own crossover-detection comparison (201), and `backtest_replay.run_replay`
+hands `signal_generator` exactly this constant's value each bar (see that
+module's own docstring for why raising this constant, not just a call-site
+slice, is how a longer-lookback signal generator is supported) -- 260 keeps
+100's margin-above-the-minimum reasoning for the new 201-candle floor instead
+of shipping a bare minimum. This also feeds `average_true_range` more history
+than before, which per its own docstring makes ATR track recent volatility
+more closely -- an intentional side effect, not a regression, but it does mean
+`dummy_signal.py`'s own backtest numbers shift slightly (different
+ATR-driven position sizing) after this change; re-run any prior baseline
+under the same window for a fair comparison rather than reusing older
+numbers."""
 
 
 def _recent_final_candles(
