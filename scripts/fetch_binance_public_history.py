@@ -8,6 +8,7 @@ delay to stay well under Binance's public rate limits and avoid a temporary
 IP ban; a full year of 1m data is ~526 requests and will take several minutes.
 
 Run: python scripts/fetch_binance_public_history.py [--symbol BTCJPY] [--days 365]
+     [--timeframes 1h,4h,1d]  (default: every supported timeframe)
 """
 
 import argparse
@@ -24,13 +25,13 @@ from app.market_data.application.use_cases import SUPPORTED_TIMEFRAMES
 _REQUEST_PACING_SECONDS = 0.25
 
 
-async def _run(symbol: str, days: int) -> None:
+async def _run(symbol: str, days: int, timeframes: list[str]) -> None:
     client = get_binance_public_client()
     with SessionLocal() as db:
         instrument = await ensure_public_research_instrument(db, client, symbol)
         db.commit()
         print(f"[OK] {symbol} research instrument ready (id={instrument.id})")
-        for timeframe in SUPPORTED_TIMEFRAMES:
+        for timeframe in timeframes:
             print(f"[..] {symbol} {timeframe}: fetching {days}d of history...")
             inserted, updated = await backfill_public_klines(
                 db, client, instrument, timeframe, days
@@ -43,8 +44,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--symbol", default="BTCJPY")
     parser.add_argument("--days", type=int, default=365)
+    parser.add_argument("--timeframes", default=",".join(SUPPORTED_TIMEFRAMES))
     args = parser.parse_args()
-    asyncio.run(_run(args.symbol, args.days))
+    timeframes = args.timeframes.split(",")
+    unknown = set(timeframes) - set(SUPPORTED_TIMEFRAMES)
+    if unknown:
+        parser.error(f"unsupported timeframes: {', '.join(sorted(unknown))}")
+    asyncio.run(_run(args.symbol, args.days, timeframes))
     return 0
 
 
