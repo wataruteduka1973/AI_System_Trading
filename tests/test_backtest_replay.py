@@ -428,3 +428,47 @@ def test_signal_closes_are_labelled_as_signal_exits() -> None:
     )
     [trade] = result.trades
     assert trade.exit_reason == "signal"
+
+
+# ---- run_replay: every fee and every round trip is attributed to a trade ----
+
+
+def _binance_round_trip(
+    closes: list[str], monkeypatch: pytest.MonkeyPatch
+) -> tuple[replay.ReplayResult, Decimal]:
+    monkeypatch.setattr(gate, "_stop_distance", lambda *args: Decimal(5))
+
+    def scripted_signal(history: Sequence[Candle]) -> str:
+        return {1: "buy", len(closes): "sell"}.get(len(history), "hold")
+
+    initial = Decimal("1000000")
+    result = replay.run_replay(
+        [_candle(Decimal(c), i) for i, c in enumerate(closes)],
+        instrument=_instrument(),
+        timeframe="1m",
+        exchange_code="binance",  # 0.1% fee on both the entry and the exit
+        rules=gate.CONSERVATIVE_V1_RULES,
+        initial_equity=initial,
+        signal_generator=scripted_signal,  # type: ignore[arg-type]
+    )
+    return result, initial
+
+
+def test_a_trade_carries_both_its_entry_and_exit_fees(monkeypatch: pytest.MonkeyPatch) -> None:
+    result, initial = _binance_round_trip(["100", "105", "110"], monkeypatch)
+
+    [trade] = result.trades
+    entry_fee = Decimal("100") * trade.quantity * Decimal("0.001")
+    exit_fee = Decimal("110") * trade.quantity * Decimal("0.001")
+    assert trade.fees == entry_fee + exit_fee
+    # Flat at the end: closed trades' net P&L must account for the whole equity change.
+    assert trade.realized_pnl - trade.fees == result.ending_equity - initial
+
+
+def test_a_break_even_round_trip_is_still_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
+    result, initial = _binance_round_trip(["100", "100", "100"], monkeypatch)
+
+    [trade] = result.trades
+    assert trade.realized_pnl == 0
+    assert trade.fees > 0
+    assert -trade.fees == result.ending_equity - initial

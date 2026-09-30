@@ -143,6 +143,9 @@ class _ReplayState:
     last_order_time: datetime | None = None
     stop_price: Decimal | None = None
     take_profit_price: Decimal | None = None
+    open_entry_fees: Decimal = Decimal(0)
+    """Entry fees paid for the currently open position and not yet attributed to
+    a `TradeRecord` -- charged to trades in proportion to the quantity they close."""
     trades: list[TradeRecord] = field(default_factory=list)
     equity_curve: list[tuple[datetime, Decimal]] = field(default_factory=list)
     next_sequence_no: int = 1
@@ -187,10 +190,25 @@ def _apply_and_record(
     notional = fill.price * fill.quantity
     state.cash_equity += (notional if order_side == "sell" else -notional) - fill.fee_amount
 
-    if outcome.realized_pnl != 0:
+    # Decided by direction, not by `realized_pnl != 0`: a close at exactly the entry
+    # price realizes 0 but is still a round trip that paid two fees.
+    closes_position = pre_fill_position is not None and order_side == (
+        "sell" if pre_fill_position.side == "long" else "buy"
+    )
+    closing_quantity = (
+        min(fill.quantity, pre_fill_position.quantity)
+        if closes_position and pre_fill_position is not None
+        else Decimal(0)
+    )
+    closing_fee = (
+        fill.fee_amount * closing_quantity / fill.quantity if fill.quantity else Decimal(0)
+    )
+
+    if closes_position:
         assert pre_fill_position is not None
         assert state.position_opened_at is not None
-        closing_quantity = min(fill.quantity, pre_fill_position.quantity)
+        entry_fee_share = state.open_entry_fees * closing_quantity / pre_fill_position.quantity
+        state.open_entry_fees -= entry_fee_share
         state.trades.append(
             TradeRecord(
                 sequence_no=state.next_sequence_no,
@@ -200,13 +218,15 @@ def _apply_and_record(
                 entry_price=pre_fill_position.average_entry_price,
                 exit_price=fill.price,
                 quantity=closing_quantity,
-                fees=fill.fee_amount,
+                fees=closing_fee + entry_fee_share,
                 realized_pnl=outcome.realized_pnl,
                 exit_reason=exit_reason,
             )
         )
         state.next_sequence_no += 1
         state.consecutive_losses = state.consecutive_losses + 1 if outcome.realized_pnl < 0 else 0
+
+    state.open_entry_fees += fill.fee_amount - closing_fee
 
     opened_from_flat = pre_fill_position is None and outcome.position is not None
     flipped = (
@@ -220,6 +240,7 @@ def _apply_and_record(
         state.position_opened_at = None
         state.stop_price = None
         state.take_profit_price = None
+        state.open_entry_fees = Decimal(0)
     # else: same-direction increase or partial reduce -- opened_at unchanged,
     # matching order_flow._apply_fill_to_position's own opened_at semantics.
 
