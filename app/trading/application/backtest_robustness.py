@@ -18,7 +18,7 @@ that is booked anywhere.
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 Curve = Sequence[tuple[datetime, float]]
 
@@ -167,7 +167,7 @@ def _utc_day(day: str) -> datetime:
     return datetime.fromisoformat(day).replace(tzinfo=UTC)
 
 
-BTC_CRASHES: dict[str, tuple[datetime, datetime]] = {
+MARKET_CRASHES: dict[str, tuple[datetime, datetime]] = {
     name: (_utc_day(start), _utc_day(end) + timedelta(days=1))
     for name, (start, end) in {
         "2018-11 hash war": ("2018-11-14", "2018-12-15"),
@@ -177,10 +177,13 @@ BTC_CRASHES: dict[str, tuple[datetime, datetime]] = {
         "2022-06 3AC/Celsius": ("2022-06-10", "2022-06-20"),
         "2022-11 FTX": ("2022-11-06", "2022-11-12"),
         "2024-08 yen carry": ("2024-08-01", "2024-08-07"),
+        "2025-10 liquidation": ("2025-10-10", "2025-10-11"),
     }.items()
 }
-"""Historical BTC crashes, fixed before looking at any strategy's result (UTC,
-the end day inclusive)."""
+"""Historical crypto-wide crashes, fixed before looking at any strategy's result
+(UTC, the end day inclusive). The 2025-10 liquidation cascade was added on
+2026-09-30 when the multi-asset data showed it as LTC's worst 4h bar -- before
+any multi-asset strategy result was computed."""
 
 
 def crash_returns(
@@ -216,3 +219,53 @@ def format_summary(label: str, summary: WindowSummary) -> str:
         f"worst-window={summary.worst_window_return:>+6.2%} "
         f"win-windows={summary.winning_window_ratio:>4.0%}"
     )
+
+
+def _daily_closes(curve: Curve) -> dict[date, tuple[datetime, float]]:
+    closes: dict[date, tuple[datetime, float]] = {}
+    for time, value in curve:
+        closes[time.date()] = (time, value)
+    return closes
+
+
+def equal_weight_portfolio(curves: Sequence[Curve]) -> list[tuple[datetime, float]]:
+    """One curve for splitting capital equally across `curves` (one per asset),
+    rebalanced daily: each day's return is the average of the daily returns
+    (last value of the day vs. the previous day's) of the assets that have
+    both. An asset joins once it has a previous day -- assets listed later
+    simply start contributing later. Starts at 1.0 on the first day any asset
+    has a value."""
+    per_asset = [_daily_closes(curve) for curve in curves]
+    days = sorted({day for closes in per_asset for day in closes})
+    portfolio: list[tuple[datetime, float]] = []
+    level = 1.0
+    previous_day: dict[int, date] = {}
+    for day in days:
+        returns = []
+        for index, closes in enumerate(per_asset):
+            if day not in closes:
+                continue
+            value = closes[day][1]
+            if index in previous_day:
+                returns.append(value / closes[previous_day[index]][1] - 1)
+            previous_day[index] = day
+        if returns:
+            level *= 1 + sum(returns) / len(returns)
+        portfolio.append((datetime.combine(day, datetime.min.time(), UTC), level))
+    return portfolio
+
+
+def yearly_returns(curve: Curve) -> dict[int, float]:
+    """Return of each calendar year: its last value against the previous year's
+    last value (or, for the first year, the curve's first value)."""
+    result: dict[int, float] = {}
+    if not curve:
+        return result
+    base = curve[0][1]
+    year_end: dict[int, float] = {}
+    for time, value in curve:
+        year_end[time.year] = value
+    for year in sorted(year_end):
+        result[year] = year_end[year] / base - 1
+        base = year_end[year]
+    return result

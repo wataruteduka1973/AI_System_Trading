@@ -60,17 +60,17 @@ def trade_line(results: Sequence[ReplayResult]) -> str:
 
 
 def crash_line(label: str, windows: Sequence[tuple[rb.Curve, float]]) -> str:
-    changes = rb.crash_returns(rb.chain_windows(windows), rb.BTC_CRASHES)
+    changes = rb.crash_returns(rb.chain_windows(windows), rb.MARKET_CRASHES)
     cells = ("-" if c is None else f"{c:+.2%}" for c in changes.values())
     return f"{label:<34} " + " ".join(f"{cell:>9}" for cell in cells)
 
 
 def market_crash_line(candles: Sequence[Candle]) -> str:
     prices = [(c.close_time, float(c.close)) for c in candles]
-    changes = rb.crash_returns(prices, rb.BTC_CRASHES)
+    changes = rb.crash_returns(prices, rb.MARKET_CRASHES)
     cells = ("-" if c is None else f"{c:+.1%}" for c in changes.values())
     return f"{'market (BTC itself)':<34} " + " ".join(f"{cell:>9}" for cell in cells)
 
 
 def crash_header() -> str:
-    return f"{'':<34} " + " ".join(f"{name[:9]:>9}" for name in rb.BTC_CRASHES)
+    return f"{'':<34} " + " ".join(f"{name[:9]:>9}" for name in rb.MARKET_CRASHES)

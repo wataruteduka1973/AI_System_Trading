@@ -97,3 +97,29 @@ def test_hold_windows_scale_each_windows_price_move_by_the_exposure() -> None:
     )
     assert [ending for _, ending in windows] == pytest.approx([1.02, 0.98])
     assert [value for _, value in windows[0][0]] == pytest.approx([1.0, 1.02])
+
+
+# ---- equal-weight portfolio ----
+
+
+def test_portfolio_averages_the_daily_returns_of_the_assets_trading_that_day() -> None:
+    a = [(_t(0), 1.0), (_t(1), 1.1), (_t(2), 1.21)]
+    b = [(_t(1), 1.0), (_t(2), 0.9)]  # starts a day later
+    portfolio = rb.equal_weight_portfolio([a, b])
+    # day 1: only A has a return (+10%); day 2: A +10%, B -10% -> 0%
+    assert [value for _, value in portfolio] == pytest.approx([1.0, 1.1, 1.1])
+    assert [time.date() for time, _ in portfolio] == [_t(0).date(), _t(1).date(), _t(2).date()]
+
+
+def test_portfolio_uses_each_days_last_value() -> None:
+    a = [(_t(0, 1), 1.0), (_t(0, 20), 1.0), (_t(1, 3), 0.5), (_t(1, 22), 1.2)]
+    assert [v for _, v in rb.equal_weight_portfolio([a])] == pytest.approx([1.0, 1.2])
+
+
+def test_yearly_returns_compare_each_years_last_value_with_the_previous_years() -> None:
+    curve = [
+        (datetime(2024, 6, 1, tzinfo=UTC), 1.0),
+        (datetime(2024, 12, 31, tzinfo=UTC), 1.2),
+        (datetime(2025, 12, 31, tzinfo=UTC), 0.9),
+    ]
+    assert rb.yearly_returns(curve) == {2024: pytest.approx(0.2), 2025: pytest.approx(-0.25)}
