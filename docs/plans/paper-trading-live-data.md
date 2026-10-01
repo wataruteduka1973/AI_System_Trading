@@ -56,7 +56,15 @@
 
 ## 実装単位
 
-### Unit 1: 公開価格の確定足を継続的に取り込む
+### Unit 1: 公開価格の確定足を継続的に取り込む(完了 2026-10-01)
+
+実装: `public_research.refresh_public_klines`、`app/trading/application/public_price_refresh.py`、
+トレーディングWorker(`app/trading/worker/__main__.py`)の各ポーリングの前に実行。
+次の足が確定しているはずのときだけ公開APIを呼ぶ(4h足なら1本につき1回)。保存済みの最新の足から
+取り直すので、Workerが止まっていた間の欠けは次の取り込みで埋まる。品質は `complete`。
+実API・実DBで確認: 前日の取得以降の空白8本を取り込み、未確定の足は保存せず、直後の2回目はAPIを
+呼ばずに0本。
+
 - `public_research.py` に、指定instrument・時間足の直近数本を取得して確定足だけをupsertする関数を追加する。
 - 稼働中のボットのうち `binance_public` のinstrumentを使うものについて、トレーディングWorkerの各ポーリングの
   前に実行する。専用Workerは新設しない(4h足の確定を数分以内に拾えれば十分で、Workerを増やす運用コストに
