@@ -239,3 +239,92 @@ def test_rolling_walk_forward_warmup_is_bounded_by_the_history_window(
     _run_rolling(candles, spy)
 
     assert all(earliest == max(0, bar - 3) for bar, earliest in evaluated)
+
+
+def test_rolling_walk_forward_passes_the_exit_policy_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[object] = []
+    real_run_replay = wf.run_replay
+
+    def spy(*args: object, **kwargs: object) -> replay.ReplayResult:
+        seen.append(kwargs["exit_policy"])
+        return real_run_replay(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(wf, "run_replay", spy)
+    candles = [_candle(Decimal("100"), i) for i in range(25)]
+    wf.run_rolling_walk_forward(
+        candles,
+        instrument=_instrument(),
+        timeframe="1m",
+        exchange_code="oanda",
+        rules=CONSERVATIVE_V1_RULES,
+        initial_equity=Decimal("1000000"),
+        signal_generator=lambda history: "hold",
+        train_bars=10,
+        test_bars=5,
+        exit_policy="stop_loss",
+    )
+    assert seen and all(policy == "stop_loss" for policy in seen)
+
+
+# ---- run_selected_walk_forward ----
+
+
+def _run_selected(
+    candles: list[Candle], candidates: dict[str, object]
+) -> list[wf.SelectedFoldResult]:
+    return wf.run_selected_walk_forward(
+        candles,
+        candidates=candidates,  # type: ignore[arg-type]
+        instrument=_instrument(),
+        timeframe="1m",
+        exchange_code="oanda",
+        rules=CONSERVATIVE_V1_RULES,
+        initial_equity=Decimal("1000000"),
+        train_bars=10,
+        test_bars=5,
+    )
+
+
+def test_selection_scores_candidates_on_train_and_runs_only_the_winner_on_test() -> None:
+    # Close equals index, so each spy records exactly which bars it was asked about.
+    candles = [_candle(Decimal(i + 1), i) for i in range(25)]
+    seen: dict[str, list[int]] = {"a": [], "b": []}
+
+    def spy(name: str) -> object:
+        def generate(history: Sequence[Candle]) -> str:
+            seen[name].append(int(history[-1].close) - 1)
+            return "hold"
+
+        return generate
+
+    results = _run_selected(candles, {"a": spy("a"), "b": spy("b")})
+
+    # Equal (zero) scores everywhere: the first candidate wins every tie.
+    assert [r.chosen for r in results] == ["a", "a", "a"]
+    assert all(set(r.train_scores) == {"a", "b"} for r in results)
+    # "b" was only ever replayed on train windows (the last one ends at bar 19);
+    # "a" also ran on the test windows, up to bar 24.
+    assert max(seen["b"]) == 19
+    assert max(seen["a"]) == 24
+
+
+def test_selection_picks_the_candidate_with_the_best_train_score() -> None:
+    rising = [_candle(Decimal(100 + i), i) for i in range(25)]
+    results = _run_selected(rising, {"flat": lambda history: "hold", "long": lambda history: "buy"})
+    assert all(r.chosen == "long" for r in results)
+    assert all(r.train_scores["long"] > r.train_scores["flat"] == 0 for r in results)
+    assert all(r.test_result.ending_position is not None for r in results)
+
+
+def test_loss_averse_score_penalizes_drawdown_twice_as_much_as_it_rewards_return() -> None:
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    result = replay.ReplayResult(
+        trades=[],
+        ending_equity=Decimal("1100"),
+        ending_position=None,
+        equity_curve=[(t0, Decimal("1000")), (t0, Decimal("1200")), (t0, Decimal("1080"))],
+    )
+    # return +10%, max drawdown 10% (1200 -> 1080): 0.10 - 2 * 0.10
+    assert wf.loss_averse_score(result, Decimal("1000")) == pytest.approx(-0.10)

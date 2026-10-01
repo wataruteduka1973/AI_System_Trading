@@ -306,3 +306,185 @@ def test_risk_gate_sees_cash_not_equity_as_available_cash_while_holding(
     assert held > 0
     assert seen[1].available_cash == Decimal("1000000") - 100 * held
     assert seen[1].equity == Decimal("1000000") + 10 * held
+
+
+# ---- run_replay: protective exits (stop-loss / take-profit) ----
+#
+# `_stop_distance` is pinned to 5 so a long entered at 100 has its stop at 95 and
+# its take-profit at 100 + 5 * min_reward_risk (2.0) = 110.
+
+
+def _ohlc(i: int, open_: str, high: str, low: str, close: str) -> Candle:
+    t = datetime(2026, 9, 21, 0, 0, tzinfo=UTC) + timedelta(minutes=i)
+    return Candle(
+        id=uuid4(),
+        instrument_id=uuid4(),
+        timeframe="1m",
+        open_time=t,
+        close_time=t + timedelta(minutes=1),
+        open=Decimal(open_),
+        high=Decimal(high),
+        low=Decimal(low),
+        close=Decimal(close),
+        source="test",
+        is_final=True,
+    )
+
+
+def _run_with_exits(
+    candles: list[Candle],
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    entry: str = "buy",
+    exit_policy: replay.ExitPolicy = "stop_and_target",
+) -> replay.ReplayResult:
+    monkeypatch.setattr(gate, "_stop_distance", lambda *args: Decimal(5))
+
+    def scripted_signal(history: Sequence[Candle]) -> str:
+        return entry if len(history) == 1 else "hold"
+
+    return replay.run_replay(
+        candles,
+        instrument=_instrument(),
+        timeframe="1m",
+        exchange_code="oanda",  # zero fees, and shorts are allowed
+        rules=gate.CONSERVATIVE_V1_RULES,
+        initial_equity=Decimal("1000000"),
+        signal_generator=scripted_signal,  # type: ignore[arg-type]
+        exit_policy=exit_policy,
+    )
+
+
+def test_a_long_is_stopped_out_at_its_stop_price(monkeypatch: pytest.MonkeyPatch) -> None:
+    candles = [_ohlc(0, "100", "100", "100", "100"), _ohlc(1, "99", "101", "94", "96")]
+    result = _run_with_exits(candles, monkeypatch)
+
+    assert result.ending_position is None
+    [trade] = result.trades
+    assert trade.exit_price == Decimal("95")
+    assert trade.exit_reason == "stop_loss"
+    assert trade.exit_time == candles[1].close_time
+
+
+def test_a_gap_through_the_stop_fills_at_the_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    candles = [_ohlc(0, "100", "100", "100", "100"), _ohlc(1, "90", "91", "88", "89")]
+    [trade] = _run_with_exits(candles, monkeypatch).trades
+    assert trade.exit_price == Decimal("90")
+    assert trade.exit_reason == "stop_loss"
+
+
+def test_a_long_takes_profit_at_its_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    candles = [_ohlc(0, "100", "100", "100", "100"), _ohlc(1, "101", "111", "99", "108")]
+    [trade] = _run_with_exits(candles, monkeypatch).trades
+    assert trade.exit_price == Decimal("110")
+    assert trade.exit_reason == "take_profit"
+
+
+def test_when_one_bar_reaches_both_the_stop_is_assumed_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candles = [_ohlc(0, "100", "100", "100", "100"), _ohlc(1, "100", "111", "94", "100")]
+    [trade] = _run_with_exits(candles, monkeypatch).trades
+    assert trade.exit_price == Decimal("95")
+    assert trade.exit_reason == "stop_loss"
+
+
+def test_the_entry_bar_itself_never_triggers_an_exit(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The entry fills at bar 0's close; bar 0's own low happened before that.
+    candles = [_ohlc(0, "100", "100", "80", "100"), _ohlc(1, "100", "101", "99", "100")]
+    result = _run_with_exits(candles, monkeypatch)
+    assert result.trades == []
+    assert result.ending_position is not None
+
+
+def test_a_short_is_stopped_out_above_its_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    candles = [_ohlc(0, "100", "100", "100", "100"), _ohlc(1, "101", "106", "99", "104")]
+    [trade] = _run_with_exits(candles, monkeypatch, entry="sell").trades
+    assert trade.exit_price == Decimal("105")
+    assert trade.exit_reason == "stop_loss"
+
+
+def test_signal_exit_policy_ignores_stops_and_targets(monkeypatch: pytest.MonkeyPatch) -> None:
+    candles = [_ohlc(0, "100", "100", "100", "100"), _ohlc(1, "99", "101", "94", "96")]
+    result = _run_with_exits(candles, monkeypatch, exit_policy="signal")
+    assert result.trades == []
+    assert result.ending_position is not None
+
+
+def test_signal_closes_are_labelled_as_signal_exits() -> None:
+    candles = [_candle(Decimal("100"), 0), _candle(Decimal("100"), 1), _candle(Decimal("110"), 2)]
+
+    def scripted_signal(history: Sequence[Candle]) -> str:
+        return {1: "buy", 2: "hold", 3: "sell"}[len(history)]
+
+    result = replay.run_replay(
+        candles,
+        instrument=_instrument(),
+        timeframe="1m",
+        exchange_code="oanda",
+        rules=gate.CONSERVATIVE_V1_RULES,
+        initial_equity=Decimal("1000000"),
+        signal_generator=scripted_signal,  # type: ignore[arg-type]
+    )
+    [trade] = result.trades
+    assert trade.exit_reason == "signal"
+
+
+# ---- run_replay: every fee and every round trip is attributed to a trade ----
+
+
+def _binance_round_trip(
+    closes: list[str], monkeypatch: pytest.MonkeyPatch
+) -> tuple[replay.ReplayResult, Decimal]:
+    monkeypatch.setattr(gate, "_stop_distance", lambda *args: Decimal(5))
+
+    def scripted_signal(history: Sequence[Candle]) -> str:
+        return {1: "buy", len(closes): "sell"}.get(len(history), "hold")
+
+    initial = Decimal("1000000")
+    result = replay.run_replay(
+        [_candle(Decimal(c), i) for i, c in enumerate(closes)],
+        instrument=_instrument(),
+        timeframe="1m",
+        exchange_code="binance",  # 0.1% fee on both the entry and the exit
+        rules=gate.CONSERVATIVE_V1_RULES,
+        initial_equity=initial,
+        signal_generator=scripted_signal,  # type: ignore[arg-type]
+    )
+    return result, initial
+
+
+def test_a_trade_carries_both_its_entry_and_exit_fees(monkeypatch: pytest.MonkeyPatch) -> None:
+    result, initial = _binance_round_trip(["100", "105", "110"], monkeypatch)
+
+    [trade] = result.trades
+    entry_fee = Decimal("100") * trade.quantity * Decimal("0.001")
+    exit_fee = Decimal("110") * trade.quantity * Decimal("0.001")
+    assert trade.fees == entry_fee + exit_fee
+    # Flat at the end: closed trades' net P&L must account for the whole equity change.
+    assert trade.realized_pnl - trade.fees == result.ending_equity - initial
+
+
+def test_a_break_even_round_trip_is_still_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
+    result, initial = _binance_round_trip(["100", "100", "100"], monkeypatch)
+
+    [trade] = result.trades
+    assert trade.realized_pnl == 0
+    assert trade.fees > 0
+    assert -trade.fees == result.ending_equity - initial
+
+
+def test_stop_loss_policy_lets_a_winner_run_past_the_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candles = [_ohlc(0, "100", "100", "100", "100"), _ohlc(1, "101", "111", "99", "108")]
+    result = _run_with_exits(candles, monkeypatch, exit_policy="stop_loss")
+    assert result.trades == []
+    assert result.ending_position is not None
+
+
+def test_stop_loss_policy_still_stops_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    candles = [_ohlc(0, "100", "100", "100", "100"), _ohlc(1, "99", "101", "94", "96")]
+    [trade] = _run_with_exits(candles, monkeypatch, exit_policy="stop_loss").trades
+    assert trade.exit_price == Decimal("95")
+    assert trade.exit_reason == "stop_loss"

@@ -27,13 +27,13 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from app.db.session import SessionLocal
-from app.market_data.application.public_research import RESEARCH_EXCHANGE_CODE
+from app.market_data.application.public_research import (
+    RESEARCH_EXCHANGE_CODE,
+    find_public_research_instrument,
+)
 from app.market_data.application.use_cases import SUPPORTED_TIMEFRAMES
-from app.models.connections import Exchange
-from app.models.instruments import Instrument
 from app.trading.application.backtest_fill import fee_buffer
 from app.trading.application.backtest_provisioning import load_final_candles
-from sqlalchemy import select
 
 ROUND_TRIP_COST = 2 * float(fee_buffer("binance", Decimal(1), Decimal(1)))
 
@@ -58,11 +58,7 @@ def main() -> int:
     args = parser.parse_args()
 
     with SessionLocal() as db:
-        instrument = db.scalar(
-            select(Instrument)
-            .join(Exchange, Exchange.id == Instrument.exchange_id)
-            .where(Exchange.code == RESEARCH_EXCHANGE_CODE, Instrument.symbol == args.symbol)
-        )
+        instrument = find_public_research_instrument(db, args.symbol)
         if instrument is None:
             print(f"[NG] no {RESEARCH_EXCHANGE_CODE} instrument for {args.symbol}")
             return 1

@@ -38,9 +38,10 @@ candles before `test_candles[0]` are available to it) -- not a new gap Unit 6
 introduces, just the same one, now visible twice.
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
+from functools import partial
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -56,6 +57,7 @@ from app.trading.application.backtest_metrics import (
 from app.trading.application.backtest_replay import (
     _HISTORY_WINDOW,
     BacktestSignalGenerator,
+    ExitPolicy,
     ReplayResult,
     generate_dummy_signal,
     run_replay,
@@ -192,6 +194,38 @@ def split_candles_rolling(
     return folds
 
 
+def _replay_window(
+    candles: Sequence[Candle],
+    start: int,
+    end: int,
+    *,
+    signal_generator: BacktestSignalGenerator,
+    instrument: Instrument,
+    timeframe: str,
+    exchange_code: str,
+    rules: dict,
+    initial_equity: Decimal,
+    spread: Decimal,
+    exit_policy: ExitPolicy,
+) -> ReplayResult:
+    """Replay `candles[start:end]` from `initial_equity`, with up to
+    `_HISTORY_WINDOW - 1` bars before `start` as warm-up history (the history
+    window already includes the current bar)."""
+    warmup = min(start, _HISTORY_WINDOW - 1)
+    return run_replay(
+        candles[start - warmup : end],
+        instrument=instrument,
+        timeframe=timeframe,
+        exchange_code=exchange_code,
+        rules=rules,
+        initial_equity=initial_equity,
+        spread=spread,
+        signal_generator=signal_generator,
+        warmup_bars=warmup,
+        exit_policy=exit_policy,
+    )
+
+
 def run_rolling_walk_forward(
     candles: Sequence[Candle],
     *,
@@ -204,26 +238,27 @@ def run_rolling_walk_forward(
     test_bars: int,
     spread: Decimal = Decimal(0),
     signal_generator: BacktestSignalGenerator = generate_dummy_signal,
+    exit_policy: ExitPolicy = "signal",
 ) -> list[RollingFoldResult]:
     """Every window starts from `initial_equity`, as in `run_walk_forward` (and so
     `peak_drawdown_limit_hard`'s lock never carries across windows). Unlike
     `run_walk_forward`, each window is replayed with the bars just before it as
     warm-up history, so a long-lookback signal such as EMA(200) can trade from the
     window's first bar."""
-    max_warmup = _HISTORY_WINDOW - 1  # the history window already includes the current bar
 
     def _replay(start: int, end: int) -> tuple[ReplayResult, ReplayMetrics]:
-        warmup = min(start, max_warmup)
-        result = run_replay(
-            candles[start - warmup : end],
+        result = _replay_window(
+            candles,
+            start,
+            end,
+            signal_generator=signal_generator,
             instrument=instrument,
             timeframe=timeframe,
             exchange_code=exchange_code,
             rules=rules,
             initial_equity=initial_equity,
             spread=spread,
-            signal_generator=signal_generator,
-            warmup_bars=warmup,
+            exit_policy=exit_policy,
         )
         return result, compute_metrics(result, initial_equity)
 
@@ -238,6 +273,79 @@ def run_rolling_walk_forward(
                 train_metrics=train_metrics,
                 test_result=test_result,
                 test_metrics=test_metrics,
+            )
+        )
+    return results
+
+
+def loss_averse_score(result: ReplayResult, initial_equity: Decimal) -> float:
+    """Return minus twice the maximum drawdown -- the "not losing money first"
+    objective of docs/plans/confluence-filters.md: a 1% deeper drawdown has to
+    be paid for with 2% more return."""
+    metrics = compute_metrics(result, initial_equity)
+    return float(result.ending_equity / initial_equity - 1) - 2 * float(metrics.max_drawdown_pct)
+
+
+@dataclass(frozen=True)
+class SelectedFoldResult:
+    fold: RollingFold
+    chosen: str
+    """The candidate with the best train score, used on this fold's test window."""
+    train_scores: dict[str, float]
+    test_result: ReplayResult
+    test_metrics: ReplayMetrics
+
+
+def run_selected_walk_forward(
+    candles: Sequence[Candle],
+    *,
+    candidates: dict[str, BacktestSignalGenerator],
+    instrument: Instrument,
+    timeframe: str,
+    exchange_code: str,
+    rules: dict,
+    initial_equity: Decimal,
+    train_bars: int,
+    test_bars: int,
+    spread: Decimal = Decimal(0),
+    exit_policy: ExitPolicy = "signal",
+    score: Callable[[ReplayResult, Decimal], float] = loss_averse_score,
+) -> list[SelectedFoldResult]:
+    """For each rolling fold, replay every candidate on the train window, then
+    replay only the best-scoring one on the test window -- so the test result
+    never depends on a choice made with the test window's own bars. Ties go to
+    the earliest candidate in `candidates`' order."""
+    replay_window = partial(
+        _replay_window,
+        candles,
+        instrument=instrument,
+        timeframe=timeframe,
+        exchange_code=exchange_code,
+        rules=rules,
+        initial_equity=initial_equity,
+        spread=spread,
+        exit_policy=exit_policy,
+    )
+    results: list[SelectedFoldResult] = []
+    for fold in split_candles_rolling(len(candles), train_bars=train_bars, test_bars=test_bars):
+        train_scores = {
+            name: score(
+                replay_window(fold.train_start, fold.train_end, signal_generator=generator),
+                initial_equity,
+            )
+            for name, generator in candidates.items()
+        }
+        chosen = max(train_scores, key=lambda name: train_scores[name])
+        test_result = replay_window(
+            fold.train_end, fold.test_end, signal_generator=candidates[chosen]
+        )
+        results.append(
+            SelectedFoldResult(
+                fold=fold,
+                chosen=chosen,
+                train_scores=train_scores,
+                test_result=test_result,
+                test_metrics=compute_metrics(test_result, initial_equity),
             )
         )
     return results

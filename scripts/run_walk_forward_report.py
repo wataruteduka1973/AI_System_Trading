@@ -16,58 +16,33 @@ Run: python scripts/run_walk_forward_report.py [--symbol BTCJPY]
 """
 
 import argparse
+from collections import Counter
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import get_args
 
 from app.db.session import SessionLocal
 from app.exchanges.types import TIMEFRAME_SECONDS
-from app.market_data.application.public_research import RESEARCH_EXCHANGE_CODE
-from app.models.connections import Exchange
-from app.models.instruments import Instrument
+from app.market_data.application.public_research import (
+    RESEARCH_EXCHANGE_CODE,
+    find_public_research_instrument,
+)
 from app.models.market_data import Candle
 from app.trading.application.backtest_metrics import ReplayMetrics
 from app.trading.application.backtest_provisioning import (
     _exchange_code_for_instrument,
     load_final_candles,
 )
-from app.trading.application.backtest_replay import BacktestSignalGenerator
+from app.trading.application.backtest_replay import ExitPolicy
 from app.trading.application.backtest_walk_forward import (
     RollingFoldResult,
     run_rolling_walk_forward,
 )
-from app.trading.application.donchian_breakout_signal import (
-    DonchianSignalAction,
-    generate_donchian_breakout_signal,
-)
-from app.trading.application.dummy_signal import generate_dummy_signal
-from app.trading.application.ema_trend_signal import generate_ema_trend_signal
+from app.trading.application.research_strategies import RESEARCH_STRATEGIES
 from app.trading.application.risk_gate import CONSERVATIVE_V1_RULES
-from app.trading.application.rsi_mean_reversion_signal import (
-    RsiSignalAction,
-    generate_rsi_mean_reversion_signal,
-)
-from sqlalchemy import select
 
-
-def _donchian_55_20(candles: Sequence[Candle]) -> DonchianSignalAction:
-    return generate_donchian_breakout_signal(candles, entry_period=55, exit_period=20)
-
-
-def _rsi2_10_70(candles: Sequence[Candle]) -> RsiSignalAction:
-    return generate_rsi_mean_reversion_signal(
-        candles, rsi_period=2, oversold=Decimal(10), exit_level=Decimal(70)
-    )
-
-
-STRATEGIES: dict[str, BacktestSignalGenerator] = {
-    "dummy_sma5": generate_dummy_signal,
-    "ema_trend": generate_ema_trend_signal,
-    "donchian_20_10": generate_donchian_breakout_signal,
-    "donchian_55_20": _donchian_55_20,
-    "rsi14_30_70": generate_rsi_mean_reversion_signal,
-    "rsi2_10_70": _rsi2_10_70,
-}
+STRATEGIES = RESEARCH_STRATEGIES
 INITIAL_EQUITY = Decimal(1_000_000)
 
 
@@ -83,7 +58,8 @@ def _metrics_cells(metrics: ReplayMetrics, mtm: Decimal) -> str:
     pf = "-" if metrics.profit_factor is None else f"{metrics.profit_factor:.2f}"
     return (
         f"trades={metrics.trade_count:>3} win={float(metrics.win_rate):>6.1%} "
-        f"net={metrics.net_pnl:>8.0f} mtm={mtm:>8.0f} pf={pf:>5}"
+        f"net={metrics.net_pnl:>8.0f} mtm={mtm:>8.0f} pf={pf:>5} "
+        f"dd={float(metrics.max_drawdown_pct):>5.1%}"
     )
 
 
@@ -91,7 +67,9 @@ def _print_folds(candles: Sequence[Candle], results: list[RollingFoldResult]) ->
     total_net = Decimal(0)
     total_mtm = Decimal(0)
     positive_folds = 0
+    exit_reasons: Counter[str] = Counter()
     for r in results:
+        exit_reasons.update(trade.exit_reason for trade in r.test_result.trades)
         test_window = candles[r.fold.train_end : r.fold.test_end]
         mtm = r.test_result.ending_equity - INITIAL_EQUITY
         total_net += r.test_metrics.net_pnl
@@ -109,6 +87,13 @@ def _print_folds(candles: Sequence[Candle], results: list[RollingFoldResult]) ->
         f"  => test folds with mtm>0: {positive_folds}/{len(results)}, "
         f"total test net={total_net:.0f}, total test mtm={total_mtm:.0f}"
     )
+    worst_mtm = min(r.test_result.ending_equity - INITIAL_EQUITY for r in results)
+    worst_dd = max(r.test_metrics.max_drawdown_pct for r in results)
+    exits = ", ".join(f"{reason}={count}" for reason, count in sorted(exit_reasons.items()))
+    print(
+        f"  => worst test fold mtm={worst_mtm:.0f}, worst test fold dd={float(worst_dd):.1%}, "
+        f"exits: {exits or 'none'}"
+    )
 
 
 def main() -> int:
@@ -117,6 +102,13 @@ def main() -> int:
     parser.add_argument("--timeframes", default="15m,1h,4h")
     parser.add_argument("--train-days", type=int, default=90)
     parser.add_argument("--test-days", type=int, default=30)
+    parser.add_argument(
+        "--exit-policy",
+        choices=get_args(ExitPolicy),
+        default="signal",
+        help="signal: opposing signal only; stop_loss: plus the Risk Gate's ATR stop; "
+        "stop_and_target: plus a min_reward_risk take-profit",
+    )
     parser.add_argument(
         "--strategies",
         default=",".join(STRATEGIES),
@@ -128,11 +120,7 @@ def main() -> int:
         parser.error(f"unknown strategies: {', '.join(sorted(unknown))}")
 
     with SessionLocal() as db:
-        instrument = db.scalar(
-            select(Instrument)
-            .join(Exchange, Exchange.id == Instrument.exchange_id)
-            .where(Exchange.code == RESEARCH_EXCHANGE_CODE, Instrument.symbol == args.symbol)
-        )
+        instrument = find_public_research_instrument(db, args.symbol)
         if instrument is None:
             print(
                 f"[NG] no {RESEARCH_EXCHANGE_CODE} instrument for {args.symbol} -- run "
@@ -148,7 +136,8 @@ def main() -> int:
             bars_per_day = _bars_per_day(timeframe)
             print(
                 f"\n=== {args.symbol} {timeframe}: {len(candles)} candles, "
-                f"train={args.train_days}d test={args.test_days}d ==="
+                f"train={args.train_days}d test={args.test_days}d "
+                f"exit_policy={args.exit_policy} ==="
             )
             for name in args.strategies.split(","):
                 signal_generator = STRATEGIES[name]
@@ -163,6 +152,7 @@ def main() -> int:
                     train_bars=args.train_days * bars_per_day,
                     test_bars=args.test_days * bars_per_day,
                     signal_generator=signal_generator,
+                    exit_policy=args.exit_policy,
                 )
                 _print_folds(candles, results)
     return 0
