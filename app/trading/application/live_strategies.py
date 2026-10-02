@@ -18,10 +18,10 @@ for, letting winners run until the signal exits; see
 `docs/plans/paper-trading-live-data.md`). The backtest's `stop_and_target` is
 refused: a fixed take-profit was evaluated and rejected, so no live bot runs it.
 
-**`records_take_profit`**: the pipeline stores an informational take-profit
-price on the order intent (never executed). Only the dummy SMA pipeline was
-designed around one; the Donchian strategy exits on its own channel and a
-stop-loss, so recording a target for it would describe an exit it never takes.
+**Only validated strategies resolve**: `dummy_sma_crossover` (the SMA pipeline
+skeleton) was rejected in research and is refused here since 2026-10-02 (user
+decision), so a bot still stored with it cannot start. The SMA generator itself
+stays in `research_strategies.py` as a research baseline.
 """
 
 from collections.abc import Callable, Mapping, Sequence
@@ -30,7 +30,7 @@ from typing import Any, Literal
 
 from app.models.market_data import Candle
 from app.trading.application.donchian_breakout_signal import generate_donchian_breakout_signal
-from app.trading.application.dummy_signal import DummySignalAction, generate_dummy_signal
+from app.trading.application.dummy_signal import DummySignalAction
 
 
 class UnresolvableStrategyError(ValueError):
@@ -46,7 +46,6 @@ class LiveStrategy:
     kind: str
     parameters: dict[str, int]
     generate: Callable[[Sequence[Candle]], DummySignalAction]
-    records_take_profit: bool
     exit_policy: LiveExitPolicy
 
     def rationale(self, latest_candle: Candle) -> dict[str, object]:
@@ -82,15 +81,6 @@ def resolve_live_strategy(definition: Mapping[str, Any] | None) -> LiveStrategy:
         raise UnresolvableStrategyError("strategy definition is missing")
     exit_policy = _exit_policy(definition)
     kind = definition.get("kind")
-    if kind == "dummy_sma_crossover":
-        period = _positive_int(definition, "period")
-        return LiveStrategy(
-            kind=kind,
-            parameters={"period": period},
-            generate=lambda candles: generate_dummy_signal(candles, period=period),
-            records_take_profit=True,
-            exit_policy=exit_policy,
-        )
     if kind == "donchian_breakout":
         entry = _positive_int(definition, "entry_period")
         exit_ = _positive_int(definition, "exit_period")
@@ -100,7 +90,6 @@ def resolve_live_strategy(definition: Mapping[str, Any] | None) -> LiveStrategy:
             generate=lambda candles: generate_donchian_breakout_signal(
                 candles, entry_period=entry, exit_period=exit_
             ),
-            records_take_profit=False,
             exit_policy=exit_policy,
         )
     raise UnresolvableStrategyError(f"unknown strategy kind {kind!r}")

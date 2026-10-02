@@ -11,6 +11,7 @@ bots.
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -56,7 +57,8 @@ class TradingBotCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     account_id: UUID
     instrument_id: UUID
-    timeframe: str = "1m"
+    # Only the approved strategy's validated timeframe (paper_provisioning.APPROVED_TIMEFRAME).
+    timeframe: Literal["4h"] = "4h"
 
 
 class TradingBotRead(OrmModel):

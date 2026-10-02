@@ -275,8 +275,6 @@ function App() {
         onBotAccountIdChange={trading.setBotAccountId}
         botInstrumentId={trading.botInstrumentId}
         onBotInstrumentIdChange={trading.setBotInstrumentId}
-        botTimeframe={trading.botTimeframe}
-        onBotTimeframeChange={trading.setBotTimeframe}
         onCreateBot={() => void trading.createBot()}
       />
 

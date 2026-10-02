@@ -4,10 +4,10 @@ docs/architecture-alignment-and-long-term-roadmap.md, 2026-09-25 "その順で
 
 Two resources: trading-accounts (paper only -- see app/schemas/trading.py's
 module docstring) and bots. `POST .../bots` deliberately does not start the
-bot it creates -- see `dummy_pipeline.ensure_dummy_bot`'s module docstring
-for why provisioning and starting were split into separate actions, matching
-how `bot_lifecycle.py`'s four commands (start/pause/resume/stop) are already
-independent of each other.
+bot it creates, matching how `bot_lifecycle.py`'s four commands
+(start/pause/resume/stop) are already independent of each other. It always
+creates the approved strategy on the approved timeframe
+(`paper_provisioning.create_approved_bot`); the caller picks neither.
 
 `docs/concept/FXtrading_rebuild/04_API再設計.md` sketches a similar Bot/口座
 API shape (single `POST /bots/{id}/commands` instead of four verb endpoints,
@@ -52,7 +52,7 @@ from app.schemas.trading import (
 from app.security.rbac import require_operator_role, require_viewer_role
 from app.trading.application import account_funding, bot_lifecycle
 from app.trading.application.bot_lifecycle import BotLifecycleError, BotStateConflictError
-from app.trading.application.dummy_pipeline import ensure_dummy_bot
+from app.trading.application.paper_provisioning import ProvisioningError, create_approved_bot
 
 router = APIRouter()
 DatabaseSession = Annotated[Session, Depends(get_db)]
@@ -202,9 +202,13 @@ def create_trading_bot(
     instrument = db.get(Instrument, payload.instrument_id)
     if instrument is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Instrument not found")
-    return ensure_dummy_bot(
-        db, workspace_id, account, instrument, bot_name=payload.name, timeframe=payload.timeframe
-    )
+    try:
+        return create_approved_bot(db, workspace_id, account, instrument, bot_name=payload.name)
+    except ProvisioningError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
 
 
 @router.get("/workspaces/{workspace_id}/bots", response_model=list[TradingBotRead], tags=["bots"])

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiBaseUrl, apiErrorMessage, apiFetch } from '../../lib/api'
-import type { Timeframe } from '../market-data/types'
 import type { BotRunSummary, TradingAccount, TradingBot } from './types'
 
 /** `selectedWorkspaceId` is shared across features (see useWorkspaces); this hook
@@ -27,7 +26,6 @@ export function useTrading(selectedWorkspaceId: string) {
   const [botName, setBotName] = useState('')
   const [botAccountId, setBotAccountId] = useState('')
   const [botInstrumentId, setBotInstrumentId] = useState('')
-  const [botTimeframe, setBotTimeframe] = useState<Timeframe>('1m')
 
   const generation = useRef(0)
 
@@ -140,7 +138,6 @@ export function useTrading(selectedWorkspaceId: string) {
           name: botName.trim(),
           account_id: botAccountId,
           instrument_id: botInstrumentId,
-          timeframe: botTimeframe,
         }),
       })
       setTradingMessage(response.ok ? 'Botを作成しました。' : await apiErrorMessage(response, 'Botの作成に失敗しました'))
@@ -191,8 +188,6 @@ export function useTrading(selectedWorkspaceId: string) {
     setBotAccountId,
     botInstrumentId,
     setBotInstrumentId,
-    botTimeframe,
-    setBotTimeframe,
     load,
     createTradingAccount,
     createDeposit,

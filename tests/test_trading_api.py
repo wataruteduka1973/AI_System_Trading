@@ -1,8 +1,8 @@
 """Bot management API (app/api/routes/trading.py): trading-accounts and bots
 resources. Mirrors tests/test_trading_halts_api.py's MagicMock-session,
-dependency-override style. `ensure_dummy_bot`'s own logic is covered in
-tests/test_dummy_pipeline.py; these tests are about the HTTP layer (role
-gating, 404/409 mapping, request/response shapes) wired on top of it.
+dependency-override style. `create_approved_bot`'s own logic is covered in
+tests/test_paper_provisioning.py; these tests are about the HTTP layer (role
+gating, 404/409/422 mapping, request/response shapes) wired on top of it.
 """
 
 from datetime import UTC, datetime
@@ -14,12 +14,13 @@ from app.db.session import get_db
 from app.main import app
 from app.models.connections import ExchangeConnection
 from app.models.instruments import Instrument
-from app.models.strategy import BotRun, Signal, TradingBot
+from app.models.strategy import BotRun, Signal, StrategyVersion, TradingBot
 from app.models.trading import LedgerTransaction, TradingAccount
 from app.models.workspace import AppUser
 from app.security.rbac import require_operator_role, require_viewer_role
 from app.trading.application import bot_lifecycle
 from app.trading.application.bot_lifecycle import BotLifecycleError, BotStateConflictError
+from app.trading.application.paper_provisioning import APPROVED_STRATEGY_DEFINITION
 from fastapi.testclient import TestClient
 
 client = TestClient(app)
@@ -244,10 +245,8 @@ def test_create_trading_bot_404_for_account_in_another_workspace() -> None:
     assert response.status_code == 404
 
 
-def test_create_trading_bot() -> None:
-    workspace_id = uuid4()
-    account = _account(workspace_id=workspace_id)
-    instrument = Instrument(
+def _instrument() -> Instrument:
+    return Instrument(
         id=uuid4(),
         exchange_id=uuid4(),
         market_id=uuid4(),
@@ -259,11 +258,17 @@ def test_create_trading_bot() -> None:
         tick_size=Decimal("0.01"),
         step_size=Decimal("0.000001"),
     )
+
+
+def test_create_trading_bot_creates_the_approved_strategy_on_4h() -> None:
+    workspace_id = uuid4()
+    account = _account(workspace_id=workspace_id)
+    instrument = _instrument()
     session = MagicMock()
     # 1) route's own duplicate-name pre-check, 2) _get_account, then
-    # ensure_dummy_bot's own 5 lookups (Strategy/StrategyVersion/RiskProfile/
-    # RiskProfileVersion/TradingBot-by-name), all missing.
-    session.scalar.side_effect = [None, account, None, None, None, None, None]
+    # create_approved_bot's lookups: Strategy (missing), the instrument's market
+    # asset class, RiskProfile (missing).
+    session.scalar.side_effect = [None, account, None, "crypto", None]
     session.get.return_value = instrument
 
     def set_generated(bot: TradingBot) -> None:
@@ -291,7 +296,58 @@ def test_create_trading_bot() -> None:
     assert response.status_code == 201
     body = response.json()
     assert body["name"] == "bot-1"
+    assert body["timeframe"] == "4h"
     assert body["desired_state"] == "stopped"  # created, not started
+    [strategy_version] = [
+        c.args[0] for c in session.add.call_args_list if isinstance(c.args[0], StrategyVersion)
+    ]
+    assert strategy_version.definition == APPROVED_STRATEGY_DEFINITION
+
+
+def test_create_trading_bot_refuses_a_timeframe_other_than_4h() -> None:
+    session = MagicMock()
+    _override_database(session)
+    try:
+        response = client.post(
+            f"/api/v1/workspaces/{uuid4()}/bots",
+            json={
+                "name": "bot-1",
+                "account_id": str(uuid4()),
+                "instrument_id": str(uuid4()),
+                "timeframe": "1m",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 422
+    session.add.assert_not_called()
+
+
+def test_create_trading_bot_refuses_a_market_the_approved_strategy_does_not_support() -> None:
+    workspace_id = uuid4()
+    account = _account(workspace_id=workspace_id)
+    instrument = _instrument()
+    session = MagicMock()
+    session.scalar.side_effect = [None, account, None, "foreign_fx"]
+    session.get.return_value = instrument
+    _override_database(session)
+    try:
+        response = client.post(
+            f"/api/v1/workspaces/{workspace_id}/bots",
+            json={
+                "name": "bot-1",
+                "account_id": str(account.id),
+                "instrument_id": str(instrument.id),
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 422
+    assert "foreign_fx" in response.json()["detail"]
+    session.rollback.assert_called_once()
+    session.commit.assert_not_called()
 
 
 def test_list_trading_bots() -> None:

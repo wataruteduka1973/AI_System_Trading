@@ -1,11 +1,4 @@
-"""`ensure_dummy_bot` had zero callers and zero test coverage before the Bot
-management API task (`app/api/routes/trading.py`) started calling it
-directly. See `dummy_pipeline.py`'s module docstring for the
-provisioning-vs-starting split these tests cover -- the old version of this
-function auto-started the bot it created via `bot_lifecycle.start_bot`; the
-new version never touches `desired_state`/`actual_state` at all.
-
-`run_dummy_pipeline_once` likewise had zero callers/coverage before the
+"""`run_dummy_pipeline_once` had zero callers/coverage before the
 execution loop/Worker task (`app/trading/application/bot_execution_loop.py`)
 gave it its first real caller. The tests below cover the gating branches and,
 in particular, the idempotency guard added for that task -- see that
@@ -24,28 +17,13 @@ from app.models.instruments import Instrument
 from app.models.market_data import Candle
 from app.models.strategy import (
     BotRun,
-    RiskProfile,
     RiskProfileVersion,
     Signal,
-    Strategy,
     StrategyVersion,
     TradingBot,
 )
 from app.models.trading import TradingAccount, TradingPosition
-from app.trading.application.dummy_pipeline import ensure_dummy_bot, run_dummy_pipeline_once
-
-
-def _account(**overrides: object) -> TradingAccount:
-    defaults: dict[str, object] = dict(
-        id=uuid4(),
-        workspace_id=uuid4(),
-        connection_id=uuid4(),
-        mode="paper",
-        base_currency="JPY",
-        status="active",
-    )
-    defaults.update(overrides)
-    return TradingAccount(**defaults)
+from app.trading.application.dummy_pipeline import run_dummy_pipeline_once
 
 
 def _instrument(**overrides: object) -> Instrument:
@@ -63,85 +41,6 @@ def _instrument(**overrides: object) -> Instrument:
     )
     defaults.update(overrides)
     return Instrument(**defaults)
-
-
-def test_ensure_dummy_bot_creates_everything_when_nothing_exists() -> None:
-    db = MagicMock()
-    # db.scalar call order: Strategy, StrategyVersion, RiskProfile,
-    # RiskProfileVersion, TradingBot -- all missing.
-    db.scalar.side_effect = [None, None, None, None, None]
-    workspace_id = uuid4()
-    account = _account(workspace_id=workspace_id)
-    instrument = _instrument()
-
-    bot = ensure_dummy_bot(db, workspace_id, account, instrument, bot_name="bot-1")
-
-    assert isinstance(bot, TradingBot)
-    assert bot.name == "bot-1"
-    assert bot.account_id == account.id
-    assert bot.instrument_id == instrument.id
-    assert bot.connection_id == account.connection_id
-    # Never touched: the old version set these via bot_lifecycle.start_bot.
-    # Leaving them unset here (server_default applies only at DB insert time)
-    # is the regression signal that auto-start was removed.
-    assert bot.desired_state is None
-    assert bot.actual_state is None
-    db.commit.assert_called_once()
-    db.refresh.assert_called_once_with(bot)
-
-
-def test_ensure_dummy_bot_reuses_existing_rows_and_does_not_touch_bot_state() -> None:
-    db = MagicMock()
-    workspace_id = uuid4()
-    account = _account(workspace_id=workspace_id)
-    instrument = _instrument()
-    strategy = Strategy(id=uuid4(), workspace_id=workspace_id, name="s", mode="technical")
-    strategy_version = StrategyVersion(
-        id=uuid4(), strategy_id=strategy.id, version=1, lifecycle_status="paper_approved"
-    )
-    risk_profile = RiskProfile(id=uuid4(), workspace_id=workspace_id, name="r")
-    risk_profile_version = RiskProfileVersion(
-        id=uuid4(), risk_profile_id=risk_profile.id, version=1, status="approved"
-    )
-    existing_bot = TradingBot(
-        id=uuid4(),
-        workspace_id=workspace_id,
-        name="bot-1",
-        execution_mode="paper",
-        strategy_mode="technical",
-        connection_id=account.connection_id,
-        account_id=account.id,
-        instrument_id=instrument.id,
-        timeframe="1m",
-        strategy_version_id=strategy_version.id,
-        risk_profile_version_id=risk_profile_version.id,
-        desired_state="running",
-        actual_state="running",
-    )
-    db.scalar.side_effect = [
-        strategy,
-        strategy_version,
-        risk_profile,
-        risk_profile_version,
-        existing_bot,
-    ]
-
-    bot = ensure_dummy_bot(db, workspace_id, account, instrument, bot_name="bot-1")
-
-    assert bot is existing_bot
-    assert bot.desired_state == "running"  # untouched -- not reset or re-started
-    db.add.assert_not_called()  # nothing new created
-
-
-def test_ensure_dummy_bot_raises_if_account_has_no_connection() -> None:
-    db = MagicMock()
-    db.scalar.side_effect = [None, None, None, None, None]
-    workspace_id = uuid4()
-    account = _account(workspace_id=workspace_id, connection_id=None)
-    instrument = _instrument()
-
-    with pytest.raises(ValueError, match="connection_id"):
-        ensure_dummy_bot(db, workspace_id, account, instrument, bot_name="bot-1")
 
 
 # ---- run_dummy_pipeline_once ----
@@ -318,25 +217,6 @@ def test_an_unresolvable_strategy_definition_stops_the_evaluation() -> None:
 
     with pytest.raises(UnresolvableStrategyError):
         _evaluate_with({"kind": "unknown"}, _flat_candles(5))
-
-
-@pytest.mark.parametrize(
-    ("records", "side", "expected"),
-    [(True, "buy", Decimal("120")), (True, "sell", Decimal("80")), (False, "buy", None)],
-)
-def test_take_profit_is_recorded_only_for_strategies_designed_around_one(
-    records: bool, side: str, expected: Decimal | None
-) -> None:
-    from app.trading.application.dummy_pipeline import _informational_take_profit
-    from app.trading.application.live_strategies import resolve_live_strategy
-
-    definition = (
-        {"kind": "dummy_sma_crossover", "period": 5}
-        if records
-        else {"kind": "donchian_breakout", "entry_period": 55, "exit_period": 20}
-    )
-    strategy = resolve_live_strategy(definition)
-    assert _informational_take_profit(strategy, side, Decimal(100), Decimal(10)) == expected
 
 
 # ---- stop-loss (docs/plans/paper-trading-live-data.md Unit 3) ----

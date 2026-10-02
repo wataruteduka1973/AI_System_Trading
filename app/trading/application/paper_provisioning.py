@@ -17,6 +17,12 @@ name (or a new version, which this module does not create).
 **One account per bot**: each bot's equity, risk budget and drawdown locks are
 computed from its own account, so splitting capital across assets
 (1/6 each, see the plan) means one account per asset.
+
+**The approved strategy is the only one a new bot gets** (2026-10-02, user
+decision): 4h Donchian(55/20) with a stop-loss, under `conservative-v1`. The
+script and the Bot management API (`create_approved_bot`) both create bots from
+`APPROVED_*` below, so neither can start a strategy or timeframe that was not
+validated -- the SMA pipeline skeleton bots used to run was rejected in research.
 """
 
 import hashlib
@@ -28,6 +34,8 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.connections import Market
+from app.models.instruments import Instrument
 from app.models.strategy import (
     RiskProfile,
     RiskProfileVersion,
@@ -37,6 +45,18 @@ from app.models.strategy import (
 )
 from app.models.trading import TradingAccount
 from app.trading.application.account_funding import seed_paper_deposit
+from app.trading.application.risk_gate import CONSERVATIVE_V1_RULES
+
+APPROVED_TIMEFRAME = "4h"
+APPROVED_STRATEGY_NAME = "donchian-55-20-stop-loss"
+APPROVED_STRATEGY_DEFINITION: dict[str, Any] = {
+    "kind": "donchian_breakout",
+    "entry_period": 55,
+    "exit_period": 20,
+    "exit_policy": "stop_loss",
+}
+APPROVED_RISK_PROFILE_NAME = "conservative-v1"
+APPROVED_RISK_RULES: dict[str, Any] = CONSERVATIVE_V1_RULES
 
 
 class ProvisioningError(Exception):
@@ -187,6 +207,53 @@ def provision_paper_bot(db: Session, spec: PaperBotSpec) -> TradingBot:
         account_id=account.id,
         instrument_id=spec.instrument_id,
         timeframe=spec.timeframe,
+        strategy_version_id=strategy_version.id,
+        risk_profile_version_id=risk_profile_version.id,
+    )
+    db.add(bot)
+    db.commit()
+    db.refresh(bot)
+    return bot
+
+
+def create_approved_bot(
+    db: Session,
+    workspace_id: UUID,
+    account: TradingAccount,
+    instrument: Instrument,
+    *,
+    bot_name: str,
+) -> TradingBot:
+    """A paper bot on an existing account (the Bot management API's create), running
+    the approved strategy on the approved timeframe. Refuses an instrument whose
+    market the strategy version does not support. The bot is left stopped.
+    Commits once, at the end -- nothing is stored if any check fails."""
+    if account.connection_id is None:
+        raise ProvisioningError("account_without_connection", "account has no connection_id")
+
+    strategy_version = _ensure_strategy_version(
+        db, workspace_id, APPROVED_STRATEGY_NAME, APPROVED_STRATEGY_DEFINITION
+    )
+    asset_class = db.scalar(select(Market.asset_class).where(Market.id == instrument.market_id))
+    if asset_class not in strategy_version.supported_market_types:
+        raise ProvisioningError(
+            "unsupported_market",
+            f"the approved strategy supports {strategy_version.supported_market_types}, "
+            f"not '{asset_class}'",
+        )
+    risk_profile_version = _ensure_risk_profile_version(
+        db, workspace_id, APPROVED_RISK_PROFILE_NAME, APPROVED_RISK_RULES
+    )
+
+    bot = TradingBot(
+        workspace_id=workspace_id,
+        name=bot_name,
+        execution_mode="paper",
+        strategy_mode="technical",
+        connection_id=account.connection_id,
+        account_id=account.id,
+        instrument_id=instrument.id,
+        timeframe=APPROVED_TIMEFRAME,
         strategy_version_id=strategy_version.id,
         risk_profile_version_id=risk_profile_version.id,
     )
