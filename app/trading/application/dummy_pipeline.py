@@ -78,9 +78,10 @@ from app.models.strategy import (
     StrategyVersion,
     TradingBot,
 )
-from app.models.trading import TradingAccount, TradingPosition
+from app.models.trading import Fill, TradeOrder, TradingAccount, TradingPosition
 from app.trading.application import order_flow
-from app.trading.application.backtest_replay import _HISTORY_WINDOW
+from app.trading.application.backtest_fill import BacktestPosition
+from app.trading.application.backtest_replay import _HISTORY_WINDOW, _protective_exit
 from app.trading.application.live_strategies import LiveStrategy, resolve_live_strategy
 from app.trading.application.risk_gate import CONSERVATIVE_V1_RULES, evaluate_signal
 
@@ -252,6 +253,107 @@ def _informational_take_profit(
     return close + target if side == "buy" else close - target
 
 
+def _stop_exit_price(candles: list[Candle], position: TradingPosition) -> Decimal | None:
+    """Where `position`'s stop-loss filled, or None if it has not been hit. Only
+    bars that closed after the position was opened are checked -- the entry bar's
+    own range happened before the entry filled at its close -- and the first bar
+    that reaches the stop wins, so bars missed while the worker was down are not
+    skipped. Uses the backtest's own rule (`backtest_replay._protective_exit`):
+    the stop price, or a gapped bar's open."""
+    if position.stop_price is None or position.opened_at is None:
+        return None
+    if position.average_entry_price is None or position.side not in ("long", "short"):
+        return None
+    held = BacktestPosition(
+        side="long" if position.side == "long" else "short",
+        quantity=position.quantity,
+        average_entry_price=position.average_entry_price,
+    )
+    for candle in candles:
+        if candle.close_time <= position.opened_at:
+            continue
+        hit = _protective_exit(candle, held, position.stop_price, None)
+        if hit is not None:
+            return hit[0]
+    return None
+
+
+def _entry_stop_price(side: str, fill_price: Decimal, stop_distance: Decimal) -> Decimal | None:
+    """The stop for a position opened from flat: `stop_distance` (the distance the
+    Risk Gate sized the entry for) away from the fill, as in the backtest. None if
+    that would not be a positive price."""
+    stop = fill_price - stop_distance if side == "buy" else fill_price + stop_distance
+    return stop if stop > 0 else None
+
+
+def _close_at_stop(
+    db: Session,
+    bot: TradingBot,
+    account: TradingAccount,
+    instrument: Instrument,
+    candles: list[Candle],
+) -> None:
+    """Closes the whole open position at its stop if a bar since entry reached it
+    (docs/plans/paper-trading-live-data.md Unit 3). Runs before the signal, as the
+    backtest checks stops before evaluating a bar's signal; a paused bot still
+    closes (closing is always allowed), a stopped bot never gets here."""
+    position = _open_position(db, account, instrument)
+    if position is None:
+        return
+    exit_price = _stop_exit_price(candles, position)
+    if exit_price is None:
+        return
+    order_flow.place_order(
+        db,
+        order_flow.PlaceOrderCommand(
+            workspace_id=bot.workspace_id,
+            account_id=account.id,
+            instrument_id=instrument.id,
+            side="sell" if position.side == "long" else "buy",
+            order_type="market",
+            quantity=position.quantity,
+            client_order_id=f"stop-{uuid4().hex[:12]}",
+            stop_price=position.stop_price,
+            stop_fill_price=exit_price,
+            bot_id=bot.id,
+        ),
+    )
+    db.add(
+        AuditLog(
+            workspace_id=bot.workspace_id,
+            actor_id=None,
+            action="protective_exit.stop_loss",
+            resource_type="trading_position",
+            resource_id=position.id,
+            before_data=None,
+            after_data={"stop_price": str(position.stop_price), "fill_price": str(exit_price)},
+            correlation_id=uuid4(),
+            ip_address=None,
+            user_agent=None,
+        )
+    )
+    db.commit()
+
+
+def _set_entry_stop(
+    db: Session,
+    account: TradingAccount,
+    instrument: Instrument,
+    order: TradeOrder,
+    side: str,
+    stop_distance: Decimal,
+) -> None:
+    """Records the stop on a position this bot just opened from flat. An entry
+    that adds to an existing position keeps the original stop (the caller only
+    calls this from flat), as in the backtest."""
+    fill = db.scalar(select(Fill).where(Fill.order_id == order.id))
+    position = _open_position(db, account, instrument)
+    if fill is None or position is None:
+        return
+    position.stop_price = _entry_stop_price(side, fill.price, stop_distance)
+    db.commit()
+
+
 def run_dummy_pipeline_once(db: Session, bot: TradingBot, bot_run: BotRun) -> dict:
     """Runs one evaluation cycle for `bot`. Returns a small dict describing what
     happened (`action`: "hold" | "already_processed" | "close_only" | "denied" |
@@ -307,6 +409,7 @@ def run_dummy_pipeline_once(db: Session, bot: TradingBot, bot_run: BotRun) -> di
     if strategy_version is None:
         raise ValueError("bot's strategy_version no longer exists")
     strategy = resolve_live_strategy(strategy_version.definition)
+    _close_at_stop(db, bot, account, instrument, candles)
     signal_action = strategy.generate(candles)
     input_checksum = _checksum(
         {"bot_run_id": str(bot_run.id), "candle_id": str(latest_candle.id), "action": signal_action}
@@ -420,6 +523,8 @@ def run_dummy_pipeline_once(db: Session, bot: TradingBot, bot_run: BotRun) -> di
             bot_id=bot.id,
         ),
     )
+    if strategy.exit_policy == "stop_loss" and existing is None:
+        _set_entry_stop(db, account, instrument, order, signal_action, stop_distance)
     return {
         "action": "opened",
         "signal_id": signal.id,
