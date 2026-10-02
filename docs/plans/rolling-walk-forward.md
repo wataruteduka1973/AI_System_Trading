@@ -15,7 +15,7 @@
 - `app/trading/application/backtest_walk_forward.py`: 固定幅ローリング分割
   `split_candles_rolling` と、全foldを評価する `run_rolling_walk_forward` を追加。
   既存の70/30 API・永続化(`run_and_persist_walk_forward`)は変更しない。
-- `scripts/run_walk_forward_report.py`: DB上の実データに対して戦略×時間足で
+- `scripts/research/run_walk_forward_report.py`: DB上の実データに対して戦略×時間足で
   ローリング検証を実行し、fold別の結果を表示するCLI(研究用、API/UIは対象外)。
 
 ## データフロー
@@ -53,7 +53,7 @@ candles(全期間) → `split_candles_rolling(train_bars, test_bars)` → fold�
 
 ## 検証結果 (2026-09-30, BTCJPY 1年, train=90日 / test=30日, 9 fold)
 
-`python scripts/run_walk_forward_report.py` の結果(equity修正と、注文上限をcashで判定する修正の後。
+`python scripts/research/run_walk_forward_report.py` の結果(equity修正と、注文上限をcashで判定する修正の後。
 docs/knowledge/backtest-equity-omits-position-cost-basis.md)。netは決済済み取引のみ、
 mtmは区間末に保有中のポジションも時価で含めた損益。
 
@@ -158,7 +158,7 @@ mtmは区間末に保有中のポジションも時価で含めた損益。
 ローリングwalk-forward(上と同じ条件、mtmで評価)の両面から調べた。1mは実行に約10時間
 かかる見込みで、(1)の結果からも手数料を上回るのは構造的に困難なため、(2)からは外した。
 
-### (1) 市場構造 (`python scripts/analyze_timeframes.py`)
+### (1) 市場構造 (`python scripts/research/analyze_timeframes.py`)
 
 | 時間足 | 1本の値動き(中央値) | 往復手数料0.2%に対する倍率 | 自己相関(全期間) | 前半 | 後半 | 有意水準 |
 |---|---|---|---|---|---|---|
@@ -209,7 +209,7 @@ mtmは区間末に保有中のポジションも時価で含めた損益。
 BTCJPYはBinance上場が2024-03-12で、履歴が約2.5年しか無い。そこで、同じ公開API(キー不要)から
 BTCUSDTの1h/4h/1dを上場(2017-08-17)から取得し、**戦略・パラメータ・評価方法をすべて変えずに**
 検証した(`python scripts/fetch_binance_public_history.py --symbol BTCUSDT --days 3400
---timeframes 1d,4h,1h`、`python scripts/run_walk_forward_report.py --symbol BTCUSDT
+--timeframes 1d,4h,1h`、`python scripts/research/run_walk_forward_report.py --symbol BTCUSDT
 --timeframes 1d,4h,1h`)。約107 fold。金額の単位はUSDT(初期資金1,000,000)。
 データ品質: 不正値なし。取引所メンテナンスによる欠損(4hで17本、1hで129本、最大34時間)あり。
 極端な値動きは実在の事象(2020-03のコロナショック、2017-09の中国規制)。
@@ -291,7 +291,7 @@ BTCUSDTの1h/4h/1dを上場(2017-08-17)から取得し、**戦略・パラメー
 
 ## 決済方針の比較: 稼ぎ続けられるか・暴落に耐えられるか (2026-09-30)
 
-`python scripts/compare_exit_policies.py --timeframe 4h`(と `--timeframe 1d`)。BTCUSDT、各foldの損益を
+`python scripts/research/compare_exit_policies.py --timeframe 4h`(と `--timeframe 1d`)。BTCUSDT、各foldの損益を
 複利でつないだ通しの成績(foldを「月次の見直しでロックを解除する運用」とみなす。
 `app/trading/application/backtest_robustness.py` 参照)。ベンチマークは資金の10%を買い持ち。
 

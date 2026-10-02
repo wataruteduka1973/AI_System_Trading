@@ -1,5 +1,5 @@
 """The candidate signal generators compared by the research scripts
-(`scripts/run_walk_forward_report.py`, `scripts/compare_exit_policies.py`),
+(`scripts/research/run_walk_forward_report.py`, `scripts/research/compare_exit_policies.py`),
 keyed by the name those scripts print. Each entry fixes its parameters up
 front -- see each module's docstring for why they are textbook values chosen
 before looking at results, not tuned ones.
