@@ -20,6 +20,7 @@ from app.exchanges.binance_public import BinancePublicClient
 from app.exchanges.types import timeframe_delta
 from app.models.connections import Exchange, Market
 from app.models.instruments import Instrument
+from app.models.market_data import Candle
 from app.services.market_data import upsert_candle_points
 
 RESEARCH_EXCHANGE_CODE = "binance_public"
@@ -91,22 +92,20 @@ async def ensure_public_research_instrument(
     return instrument
 
 
-async def backfill_public_klines(
+async def _fetch_and_upsert(
     db: Session,
     client: BinancePublicClient,
     instrument: Instrument,
     timeframe: str,
-    days: int,
+    *,
+    start: datetime,
+    end: datetime,
+    quality_status: str,
 ) -> tuple[int, int]:
-    """Fetches `[now - days, now)` in `_PAGE_SIZE_CANDLES`-sized pages and
-    upserts + commits each page as it arrives, rather than holding one huge
-    uncommitted transaction for a full year of 1m data (~526 pages). Returns
-    (total_inserted, total_updated). Caller is responsible for pacing between
-    calls (see `scripts/fetch_binance_public_history.py`) -- this function
-    makes no attempt at its own rate limiting."""
+    """Fetch `[start, end)` in `_PAGE_SIZE_CANDLES`-sized pages and upsert + commit
+    each page's final candles as it arrives. Returns (inserted, updated)."""
     delta = timeframe_delta(timeframe)
-    end = datetime.now(UTC)
-    cursor = end - timedelta(days=days)
+    cursor = start
     total_inserted = 0
     total_updated = 0
     while cursor < end:
@@ -115,10 +114,74 @@ async def backfill_public_klines(
         final_points = [point for point in points if point.is_final and point.close_time <= end]
         if final_points:
             inserted, updated = upsert_candle_points(
-                db, instrument.id, timeframe, RESEARCH_EXCHANGE_CODE, "backfilled", final_points
+                db, instrument.id, timeframe, RESEARCH_EXCHANGE_CODE, quality_status, final_points
             )
             total_inserted += inserted
             total_updated += updated
             db.commit()
         cursor = page_end
     return total_inserted, total_updated
+
+
+async def backfill_public_klines(
+    db: Session,
+    client: BinancePublicClient,
+    instrument: Instrument,
+    timeframe: str,
+    days: int,
+) -> tuple[int, int]:
+    """Fetches `[now - days, now)` page by page, committing each page rather than
+    holding one huge uncommitted transaction for a full year of 1m data (~526
+    pages). Returns (total_inserted, total_updated). Caller is responsible for
+    pacing between calls (see `scripts/fetch_binance_public_history.py`) -- this
+    function makes no attempt at its own rate limiting."""
+    end = datetime.now(UTC)
+    return await _fetch_and_upsert(
+        db,
+        client,
+        instrument,
+        timeframe,
+        start=end - timedelta(days=days),
+        end=end,
+        quality_status="backfilled",
+    )
+
+
+async def refresh_public_klines(
+    db: Session,
+    client: BinancePublicClient,
+    instrument: Instrument,
+    timeframe: str,
+    *,
+    initial_bars: int,
+    now: datetime,
+) -> int:
+    """Keep a paper-trading bot's public price series current
+    (docs/plans/paper-trading-live-data.md Unit 1). Returns the number of new
+    candles stored.
+
+    Calls Binance only once the bar after the latest stored one should have
+    closed -- the trading worker polls every few seconds, and a 4h series needs
+    one request per bar, not one per poll. Fetching restarts at the latest
+    stored bar, so a gap left while the worker was stopped is filled on the
+    next refresh. With no stored bars it fetches the last `initial_bars` bars,
+    enough history for the strategy's lookback. Stored as `complete`: these
+    are ordinary closed bars, not a historical backfill."""
+    delta = timeframe_delta(timeframe)
+    latest = db.scalar(
+        select(Candle)
+        .where(
+            Candle.instrument_id == instrument.id,
+            Candle.timeframe == timeframe,
+            Candle.is_final.is_(True),
+        )
+        .order_by(Candle.open_time.desc())
+        .limit(1)
+    )
+    if latest is not None and latest.close_time + delta > now:
+        return 0
+    start = latest.open_time if latest is not None else now - delta * initial_bars
+    inserted, _ = await _fetch_and_upsert(
+        db, client, instrument, timeframe, start=start, end=now, quality_status="complete"
+    )
+    return inserted

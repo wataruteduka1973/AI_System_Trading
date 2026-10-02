@@ -10,6 +10,10 @@ docstring for why. Unlike the Notification Worker, this one has no external
 configuration prerequisite to gate on (no SMTP-equivalent): it only needs the
 normal `DATABASE_URL`, so it starts unconditionally and is included in
 `scripts/start_local.py`.
+
+Before each pass it refreshes the public production prices that paper-trading
+bots on `binance_public` instruments need (docs/plans/paper-trading-live-data.md
+Unit 1) -- read-only, keyless requests; no order is ever sent anywhere.
 """
 
 import asyncio
@@ -17,18 +21,35 @@ import contextlib
 import logging
 import signal
 import sys
+from datetime import UTC, datetime
+
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.db.session import SessionLocal
+from app.exchanges.binance_public import BinancePublicClient, get_binance_public_client
 from app.trading.application.bot_execution_loop import run_active_bots_once
+from app.trading.application.public_price_refresh import refresh_public_prices_for_active_bots
 
 logger = logging.getLogger(__name__)
 
 
+async def _refresh_public_prices(db: Session, client: BinancePublicClient) -> None:
+    """Never lets a pricing problem stop the evaluation pass: a bot without a
+    fresh candle just has nothing new to evaluate this time."""
+    try:
+        await refresh_public_prices_for_active_bots(db, client, now=datetime.now(UTC))
+    except Exception as exc:
+        db.rollback()
+        logger.warning("trading.worker: public price refresh failed (%s)", type(exc).__name__)
+
+
 async def _run(stop: asyncio.Event) -> None:
+    client = get_binance_public_client()
     while not stop.is_set():
         with SessionLocal() as db:
+            await _refresh_public_prices(db, client)
             evaluated = run_active_bots_once(db)
         if evaluated:
             logger.info("trading.worker: evaluated %d active bot(s)", evaluated)

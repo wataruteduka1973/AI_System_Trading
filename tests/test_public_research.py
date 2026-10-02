@@ -177,3 +177,93 @@ async def test_backfill_public_klines_pages_across_a_multi_day_range(
     assert (inserted, updated) == (0, 0)
     assert client.get_candles.call_count == 3  # 3 days * 24h / 24-candle pages
     db.commit.assert_not_called()  # no final points on any page
+
+
+# ---- refresh_public_klines ----
+
+
+def _stored(open_time: datetime, hours: int = 4) -> MagicMock:
+    latest = MagicMock()
+    latest.open_time = open_time
+    latest.close_time = open_time + timedelta(hours=hours)
+    return latest
+
+
+@pytest.mark.anyio
+async def test_refresh_does_nothing_until_the_next_bar_has_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instrument = Instrument(id=uuid4(), symbol="BTCUSDT")
+    db = MagicMock()
+    # Latest stored 4h bar closed at 04:00; the next one closes at 08:00.
+    db.scalar.return_value = _stored(datetime(2026, 10, 1, 0, tzinfo=UTC))
+    client = MagicMock()
+    client.get_candles = AsyncMock()
+    upsert = MagicMock()
+    monkeypatch.setattr(public_research, "upsert_candle_points", upsert)
+
+    inserted = await public_research.refresh_public_klines(
+        db, client, instrument, "4h", initial_bars=300, now=datetime(2026, 10, 1, 7, 59, tzinfo=UTC)
+    )
+
+    assert inserted == 0
+    client.get_candles.assert_not_called()
+    upsert.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_refresh_fetches_from_the_latest_stored_bar_once_a_new_one_is_due(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instrument = Instrument(id=uuid4(), symbol="BTCUSDT")
+    db = MagicMock()
+    latest_open = datetime(2026, 10, 1, 0, tzinfo=UTC)
+    db.scalar.return_value = _stored(latest_open)
+    now = datetime(2026, 10, 1, 8, 0, 5, tzinfo=UTC)
+    fresh = CandlePoint(
+        open_time=datetime(2026, 10, 1, 4, tzinfo=UTC),
+        close_time=datetime(2026, 10, 1, 8, tzinfo=UTC),
+        open=Decimal(100), high=Decimal(101), low=Decimal(99), close=Decimal(100),
+        volume=Decimal(10), trade_count=5, is_final=True,
+    )  # fmt: skip
+    forming = CandlePoint(
+        open_time=datetime(2026, 10, 1, 8, tzinfo=UTC),
+        close_time=datetime(2026, 10, 1, 12, tzinfo=UTC),
+        open=Decimal(100), high=Decimal(100), low=Decimal(100), close=Decimal(100),
+        volume=Decimal(1), trade_count=1, is_final=False,
+    )  # fmt: skip
+    client = MagicMock()
+    client.get_candles = AsyncMock(return_value=[fresh, forming])
+    upsert = MagicMock(return_value=(1, 0))
+    monkeypatch.setattr(public_research, "upsert_candle_points", upsert)
+
+    inserted = await public_research.refresh_public_klines(
+        db, client, instrument, "4h", initial_bars=300, now=now
+    )
+
+    assert inserted == 1
+    symbol, timeframe, start, end = client.get_candles.call_args[0]
+    assert (symbol, timeframe, start, end) == ("BTCUSDT", "4h", latest_open, now)
+    args = upsert.call_args[0]
+    assert args[2:5] == ("4h", "binance_public", "complete")  # live, not a backfill
+    assert args[5] == [fresh]  # the still-forming bar is never stored
+
+
+@pytest.mark.anyio
+async def test_refresh_with_no_stored_bars_fetches_initial_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instrument = Instrument(id=uuid4(), symbol="BTCUSDT")
+    db = MagicMock()
+    db.scalar.return_value = None
+    now = datetime(2026, 10, 1, 8, tzinfo=UTC)
+    client = MagicMock()
+    client.get_candles = AsyncMock(return_value=[])
+    monkeypatch.setattr(public_research, "upsert_candle_points", MagicMock())
+
+    await public_research.refresh_public_klines(
+        db, client, instrument, "4h", initial_bars=300, now=now
+    )
+
+    first_start = client.get_candles.call_args_list[0][0][2]
+    assert first_start == now - timedelta(hours=4 * 300)
