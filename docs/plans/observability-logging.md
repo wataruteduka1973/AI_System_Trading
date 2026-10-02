@@ -1,6 +1,6 @@
 # 手動テスト向けログ基盤の導入
 
-状態: `[x]` 実装完了(ブランチ`feat/observability-logging`、PR未作成・CI未確認)。
+状態: `[x]` 実装完了(PR #24, main反映済み)。
 1〜3全てコミット済み。frontend側はサンドボックスで`npx tsc --noEmit`/`npx eslint`のみ確認
 (`npm run test`はサンドボックスのネイティブバイナリ不整合で未実行)。backend/workerは
 `py_compile`のみ(NOT VERIFIED)。実際のpytest/vitest実行結果はGitHub Actions CIで確認予定。

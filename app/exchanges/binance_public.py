@@ -10,7 +10,7 @@ for validating whether a trading strategy would actually work. Production
 BTCJPY, confirmed live and liquid via `GET /api/v3/exchangeInfo`, does not have
 this problem. This client never places orders, never needs credentials (klines
 is a public endpoint), and is never wired into live/paper execution -- see
-`docs/architecture-alignment-and-long-term-roadmap.md`'s 承認ゲート
+`docs/architecture/architecture-alignment-and-long-term-roadmap.md`'s 承認ゲート
 "Binance Public履歴の併用" for the approved scope, and
 `app/market_data/application/public_research.py` for the one caller.
 """

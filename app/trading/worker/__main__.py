@@ -1,5 +1,5 @@
 """Standalone Bot execution Worker process (Horizon 3 execution loop --
-docs/architecture-alignment-and-long-term-roadmap.md, 2026-09-25 "Bot管理API ->
+docs/architecture/architecture-alignment-and-long-term-roadmap.md, 2026-09-25 "Bot管理API ->
 実行ループ/Worker -> 最低限のUI"順, second step).
 
 Run with `python -m app.trading.worker`. Mirrors

@@ -252,7 +252,7 @@ Worker単独再起動の作り分け、Worker停止猶予の45秒化。
 これでHorizon 1「Application境界とDurable Worker」のうちWorker関連の作業単位（①〜⑤）は
 実装・専用DB検証・利用者環境での実DB切替まで完了した。`catalog.py`のモジュール分割、
 frontendのfeature単位分割、`app`/`src`パッケージ統一はHorizon 1の別課題として残る
-（詳細は`docs/architecture-alignment-and-long-term-roadmap.md`のHorizon 1節）。
+（詳細は`docs/architecture/architecture-alignment-and-long-term-roadmap.md`のHorizon 1節）。
 
 ### 品質チェックの追補（2026-08-31）
 

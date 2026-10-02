@@ -6,7 +6,7 @@ real BTCJPY data before deciding what to develop further -- see
 baseline is and why it exists).
 
 **Real backtest evidence against the SMA5 baseline** (real production BTCJPY,
-1 year, 15m/1h/4h/1d -- see `docs/architecture-alignment-and-long-term-roadmap.md`
+1 year, 15m/1h/4h/1d -- see `docs/architecture/architecture-alignment-and-long-term-roadmap.md`
 for the full comparison) showed SMA5 losing money even before fees on every
 timeframe tested: not a fee/frequency problem, a negative-edge-per-trade
 problem. This signal targets a larger, trend-confirmed move per trade instead

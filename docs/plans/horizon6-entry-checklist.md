@@ -1,7 +1,7 @@
 # Horizon 6(AI Model Lab)着手前タスク一覧
 
-対象: `docs/architecture-alignment-and-long-term-roadmap.md`
-[Horizon 6: AI Model Lab](../architecture-alignment-and-long-term-roadmap.md)節、
+対象: `docs/architecture/architecture-alignment-and-long-term-roadmap.md`
+[Horizon 6: AI Model Lab](../architecture/architecture-alignment-and-long-term-roadmap.md)節、
 `docs/decisions/0001-defer-realtime-stream-soak-test.md`、
 `docs/decisions/0003-horizon4-lite-backtest-before-chronos.md`
 

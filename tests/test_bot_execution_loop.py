@@ -1,5 +1,5 @@
 """`run_active_bots_once` (execution loop/Worker task,
-docs/architecture-alignment-and-long-term-roadmap.md 2026-09-25 "Bot管理API ->
+docs/architecture/architecture-alignment-and-long-term-roadmap.md 2026-09-25 "Bot管理API ->
 実行ループ/Worker -> 最低限のUI"順). Covers bot discovery, the missing-BotRun
 skip path, and that one bot's failure does not stop the rest of the batch --
 `run_dummy_pipeline_once` itself is covered separately in

@@ -205,7 +205,7 @@
   Ruff lint/format、mypy（該当3ファイル）はいずれもクリーン。24時間soak testの
   再実行によるこの修正自体の実地確認はNOT VERIFIED（次回soak testで確認する）。
 - 設計: [Module](../design/modules/realtime-market-data-stream.md)
-- 対象: `docs/architecture-alignment-and-long-term-roadmap.md` の Horizon 2
+- 対象: `docs/architecture/architecture-alignment-and-long-term-roadmap.md` の Horizon 2
   「リアルタイム観測と運用可視性」。開始条件（Durable Workerの安定稼働、履歴RESTの
   ギャップ補完の信頼性）は `durable-market-data-worker.md` の実装・実地確認により充足済み。
 
