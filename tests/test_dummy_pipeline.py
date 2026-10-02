@@ -251,3 +251,87 @@ def test_run_dummy_pipeline_once_is_idempotent_for_an_already_processed_candle()
     assert result == {"action": "already_processed", "signal_id": existing_signal.id}
     db.add.assert_not_called()  # no second Signal row attempted
     db.commit.assert_not_called()
+
+
+# ---- strategy selection (docs/plans/paper-trading-live-data.md Unit 2) ----
+
+
+def _evaluate_with(definition: object, candles: list[Candle]) -> tuple[MagicMock, TradingBot, dict]:
+    """Runs one evaluation through the signal write. Each case here ends in
+    "hold", so the Risk Gate/order path is never reached."""
+    db = MagicMock()
+    bot = _bot()
+    db.get.side_effect = [
+        TradingAccount(
+            id=uuid4(), workspace_id=bot.workspace_id, mode="paper", base_currency="JPY"
+        ),
+        _instrument(id=bot.instrument_id),
+        StrategyVersion(id=bot.strategy_version_id, definition=definition),
+    ]
+    # db.scalar call order: _exchange_code_for_connection, already-processed guard.
+    db.scalar.side_effect = ["binance", None]
+    db.scalars.return_value = candles
+    result = run_dummy_pipeline_once(db, bot, _bot_run(bot_id=bot.id))
+    return db, bot, result
+
+
+def _flat_candles(count: int) -> list[Candle]:
+    start = datetime.now(UTC) - timedelta(hours=4 * count)
+    return [
+        _candle(
+            open_time=start + timedelta(hours=4 * i),
+            close_time=start + timedelta(hours=4 * (i + 1)),
+        )
+        for i in range(count)
+    ]
+
+
+def test_the_signal_comes_from_the_bots_strategy_version_and_records_it() -> None:
+    db, _, result = _evaluate_with(
+        {"kind": "donchian_breakout", "entry_period": 3, "exit_period": 2}, _flat_candles(5)
+    )
+
+    assert result["action"] == "hold"
+    [signal] = [c.args[0] for c in db.add.call_args_list if isinstance(c.args[0], Signal)]
+    assert signal.rationale == {
+        "kind": "donchian_breakout",
+        "parameters": {"entry_period": 3, "exit_period": 2},
+        "close": "100",
+    }
+
+
+def test_the_pipeline_reads_the_same_history_window_as_the_backtest() -> None:
+    from app.trading.application.backtest_replay import _HISTORY_WINDOW
+
+    db, _, _ = _evaluate_with(
+        {"kind": "donchian_breakout", "entry_period": 3, "exit_period": 2}, _flat_candles(5)
+    )
+
+    statement = db.scalars.call_args.args[0]
+    assert statement._limit == _HISTORY_WINDOW
+
+
+def test_an_unresolvable_strategy_definition_stops_the_evaluation() -> None:
+    from app.trading.application.live_strategies import UnresolvableStrategyError
+
+    with pytest.raises(UnresolvableStrategyError):
+        _evaluate_with({"kind": "unknown"}, _flat_candles(5))
+
+
+@pytest.mark.parametrize(
+    ("records", "side", "expected"),
+    [(True, "buy", Decimal("120")), (True, "sell", Decimal("80")), (False, "buy", None)],
+)
+def test_take_profit_is_recorded_only_for_strategies_designed_around_one(
+    records: bool, side: str, expected: Decimal | None
+) -> None:
+    from app.trading.application.dummy_pipeline import _informational_take_profit
+    from app.trading.application.live_strategies import resolve_live_strategy
+
+    definition = (
+        {"kind": "dummy_sma_crossover", "period": 5}
+        if records
+        else {"kind": "donchian_breakout", "entry_period": 55, "exit_period": 20}
+    )
+    strategy = resolve_live_strategy(definition)
+    assert _informational_take_profit(strategy, side, Decimal(100), Decimal(10)) == expected

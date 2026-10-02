@@ -50,9 +50,10 @@
 2. 戦略が固定。`dummy_pipeline.run_dummy_pipeline_once` は `generate_dummy_signal` を直接呼び、読み込む足は
    直近30本だけ(donchian_55_20には最低57本、ATRの計算には260本が必要)。
 3. ライブに損切りが無い。損切り価格を保存する場所が無く、`order_flow` の約定は常に直近の終値。
-4. ボットのexchange_codeは接続(connection)から決まる。公開データのinstrument(`binance_public`)を使うと、
-   接続の取引所とinstrumentの取引所が一致しない。バックテストと同じく `binance_public` → `binance` に
-   正規化する必要がある。
+4. ~~ボットのexchange_codeの正規化が必要~~ → 不要と判明(2026-10-02)。ボット・口座は既存のBinance Testnetの
+   接続を使い、Risk Gate・`order_flow` は取引所を接続から決めるので、既に `binance`(手数料0.1%、空売りなし、
+   注文上限)になる。代わりに、`binance_public` の銘柄を使うボットは接続の取引所が `binance` でなければ
+   起動を拒否する(ルールの合わない組み合わせを防ぐ)。
 
 ## 実装単位
 
@@ -70,11 +71,22 @@
   前に実行する。専用Workerは新設しない(4h足の確定を数分以内に拾えれば十分で、Workerを増やす運用コストに
   見合わない)。
 
-### Unit 2: 戦略をボットごとに選べるようにする
-- `StrategyVersion.definition` の `generator` キーでシグナル関数を選ぶ。未知の値はエラー。既存の `dummy_sma` は
-  従来どおり動く。
-- ライブで読み込む足を `_HISTORY_WINDOW`(260本)にする。
-- exchange_codeはinstrumentの取引所を正規化して決める(`binance_public` → `binance`)。
+### Unit 2: 戦略をボットごとに選べるようにする(仕様は2026-10-02 利用者承認)
+
+完了(2026-10-02)。実装: `live_strategies.py`、`dummy_pipeline.run_dummy_pipeline_once`、
+`bot_lifecycle.validate_bot_startup`。実DBの既存の戦略バージョン(`dummy_sma_crossover`)が新しい起動前チェックを
+通ることを確認した。
+- `StrategyVersion.definition` の `kind` でシグナル関数を選ぶ(`app/trading/application/live_strategies.py`)。
+  `dummy_sma_crossover`(`period`)→ `generate_dummy_signal`(従来どおり)、`donchian_breakout`
+  (`entry_period`/`exit_period`)→ `generate_donchian_breakout_signal`。研究用の一覧(`research_strategies.py`、
+  スクリプトの表示名で引く)は使わない。ライブは、DBに保存され変更されない戦略バージョンの定義から決める。
+- 未知の `kind`・不正なパラメータは、ボットの起動時(起動前チェック)と評価時の両方でエラーにする。
+- ライブで読み込む足を `_HISTORY_WINDOW`(260本)にする(バックテストでシグナル関数に渡す本数と同じ)。
+- シグナルの記録(`rationale`)に、実際に使った `kind`・パラメータ・終値を残す。
+- 注文意図の利確価格(記録のみで実行はされない)は、利確を前提にする戦略(`dummy_sma_crossover`)だけに記録する。
+- `binance_public` の銘柄 × Binance以外の接続は、起動時に拒否する(上記4)。
+- 変えないもの: 保有中の買いシグナルはRisk Gateを通して買い増す、フラット時の売りは `binance_no_short` が拒否、
+  一時停止中の動き、同じ足の二重評価の防止、反対シグナルでの決済。
 
 ### Unit 3: ライブの損切り
 - `trading_position` に損切り価格の列を追加する(migration、既存行はNULL = 損切りなし)。
