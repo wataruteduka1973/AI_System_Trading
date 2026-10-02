@@ -107,9 +107,28 @@
 - 変えないもの: Risk Gateの既存リスクの計算(含み損による近似のまま)。損切りの損失は、連敗数・日次/週次の
   損失・ドローダウンに従来どおり計上される。
 
-### Unit 4: BTCUSDTのペーパートレードを開始する
-- 口座・strategy version(`paper_approved`)・ボットを用意する。
-- 同じ期間の足でバックテストを実行し、ライブのシグナル・エントリー・損切りと一致することを確認する。
+### Unit 4: BTCUSDTのペーパートレードを開始する(開始 2026-10-02 13:13 UTC、仕様は利用者承認)
+- `scripts/provision_paper_bot.py --symbol BTCUSDT`(`app/trading/application/paper_provisioning.py`)で用意した。
+  何度実行しても同じ結果になる(ボット名で判断し、口座・入金を二重に作らない。保存済みの戦略・リスクの
+  バージョンと内容が違えば、上書きせず止まる)。
+  - ワークスペース: Local Test Workspace。接続: 既存のBinance Testnet接続(起動時の認証チェックのみ)
+  - ペーパー口座: USDT建て、166,667 USDT(資金の1/6)
+  - 戦略: `donchian-55-20-stop-loss` v1(`donchian_breakout` 55/20、`exit_policy: stop_loss`、`paper_approved`)
+  - リスク: `conservative-v1` v1(`CONSERVATIVE_V1_RULES` と同じ)
+  - ボット: `btcusdt-4h-donchian`(ペーパー、4h、公開価格のBTCUSDT)
+- 起動の直前に、スクリプトが公開価格を取り込む(Workerは稼働中のボットの価格しか更新しないが、起動前チェックは
+  新しい価格を要求するため)。
+- 判断の一致の確認: `scripts/check_paper_parity.py`(`paper_parity.py`)。記録したシグナルを同じ足で計算し直して
+  比べる、稼働中に評価されなかった足(PCの停止など)を報告する、同じ期間のバックテストの取引と並べる。
+  開始時点: シグナル1件一致、取りこぼし0件、取引なし。
+
+**運用**
+- トレーディングWorkerを動かし続ける(`python scripts/start_local.py` または `python -m app.trading.worker`)。
+  **PCは常時起動にする**(利用者決定 2026-10-02)。エントリーはブレイクアウトが起きた足でしか発生しないので、
+  その足の確定時にWorkerが止まっていると、そのエントリーは発生しない(損切りは再開時にさかのぼって判定する)。
+- Workerは、Unit 1〜3を含むコードで動かす。
+- 確認スクリプトを定期的に実行する(シグナルは1日6件、取引は1銘柄あたり月1回程度)。
+- 連敗・DDロックは月次で見直して解除する。ボットを停止する前にポジションが無いことを確認する。
 
 ### Unit 5: 残り5銘柄を追加する
 
