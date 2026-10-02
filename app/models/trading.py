@@ -231,6 +231,9 @@ class TradingPosition(Base):
     average_entry_price: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
     realized_pnl: Mapped[Decimal] = mapped_column(Numeric(38, 18), server_default="0")
     unrealized_pnl: Mapped[Decimal] = mapped_column(Numeric(38, 18), server_default="0")
+    stop_price: Mapped[Decimal | None] = mapped_column(Numeric(38, 18))
+    """Stop-loss level set by a `stop_loss` paper bot on entry; NULL = no stop
+    (migration 20261002_0010)."""
     status: Mapped[str] = mapped_column(Text)
     version: Mapped[int] = mapped_column(BigInteger, server_default="1")
     opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

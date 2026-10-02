@@ -12,6 +12,12 @@ the wrong type raises `UnresolvableStrategyError`. Bot startup checks this
 before a bot can run (`bot_lifecycle.validate_bot_startup`), and evaluation
 raises it again if a definition ever stops resolving.
 
+**`exit_policy`** (Unit 3): `signal` (the default -- exit only on an opposing
+signal) or `stop_loss` (also exit at the stop the Risk Gate sized the entry
+for, letting winners run until the signal exits; see
+`docs/plans/paper-trading-live-data.md`). The backtest's `stop_and_target` is
+refused: a fixed take-profit was evaluated and rejected, so no live bot runs it.
+
 **`records_take_profit`**: the pipeline stores an informational take-profit
 price on the order intent (never executed). Only the dummy SMA pipeline was
 designed around one; the Donchian strategy exits on its own channel and a
@@ -20,7 +26,7 @@ stop-loss, so recording a target for it would describe an exit it never takes.
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from app.models.market_data import Candle
 from app.trading.application.donchian_breakout_signal import generate_donchian_breakout_signal
@@ -31,18 +37,24 @@ class UnresolvableStrategyError(ValueError):
     pass
 
 
+LiveExitPolicy = Literal["signal", "stop_loss"]
+_LIVE_EXIT_POLICIES: tuple[LiveExitPolicy, ...] = ("signal", "stop_loss")
+
+
 @dataclass(frozen=True)
 class LiveStrategy:
     kind: str
     parameters: dict[str, int]
     generate: Callable[[Sequence[Candle]], DummySignalAction]
     records_take_profit: bool
+    exit_policy: LiveExitPolicy
 
     def rationale(self, latest_candle: Candle) -> dict[str, object]:
         """What a `Signal` row records about how it was produced."""
         return {
             "kind": self.kind,
             "parameters": dict(self.parameters),
+            "exit_policy": self.exit_policy,
             "close": str(latest_candle.close),
         }
 
@@ -55,9 +67,20 @@ def _positive_int(definition: Mapping[str, Any], key: str) -> int:
     return value
 
 
+def _exit_policy(definition: Mapping[str, Any]) -> LiveExitPolicy:
+    if "exit_policy" not in definition:
+        return "signal"
+    value = definition["exit_policy"]
+    for policy in _LIVE_EXIT_POLICIES:
+        if value == policy:
+            return policy
+    raise UnresolvableStrategyError(f"exit_policy {value!r} is not supported for live bots")
+
+
 def resolve_live_strategy(definition: Mapping[str, Any] | None) -> LiveStrategy:
     if not isinstance(definition, Mapping):
         raise UnresolvableStrategyError("strategy definition is missing")
+    exit_policy = _exit_policy(definition)
     kind = definition.get("kind")
     if kind == "dummy_sma_crossover":
         period = _positive_int(definition, "period")
@@ -66,6 +89,7 @@ def resolve_live_strategy(definition: Mapping[str, Any] | None) -> LiveStrategy:
             parameters={"period": period},
             generate=lambda candles: generate_dummy_signal(candles, period=period),
             records_take_profit=True,
+            exit_policy=exit_policy,
         )
     if kind == "donchian_breakout":
         entry = _positive_int(definition, "entry_period")
@@ -77,5 +101,6 @@ def resolve_live_strategy(definition: Mapping[str, Any] | None) -> LiveStrategy:
                 candles, entry_period=entry, exit_period=exit_
             ),
             records_take_profit=False,
+            exit_policy=exit_policy,
         )
     raise UnresolvableStrategyError(f"unknown strategy kind {kind!r}")

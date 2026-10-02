@@ -44,6 +44,7 @@ def test_the_existing_dummy_definition_keeps_its_behaviour_and_take_profit() -> 
     assert strategy.rationale(candles[-1]) == {
         "kind": "dummy_sma_crossover",
         "parameters": {"period": 5},
+        "exit_policy": "signal",
         "close": "110",
     }
 
@@ -79,3 +80,37 @@ def test_a_donchian_definition_uses_its_own_periods_and_no_take_profit() -> None
 def test_anything_unresolvable_is_refused(definition: object) -> None:
     with pytest.raises(ls.UnresolvableStrategyError):
         ls.resolve_live_strategy(definition)  # type: ignore[arg-type]
+
+
+# ---- exit_policy (docs/plans/paper-trading-live-data.md Unit 3) ----
+
+
+def test_exit_policy_defaults_to_signal_only() -> None:
+    strategy = ls.resolve_live_strategy({"kind": "dummy_sma_crossover", "period": 5})
+    assert strategy.exit_policy == "signal"
+
+
+def test_a_stop_loss_exit_policy_is_carried_and_recorded() -> None:
+    strategy = ls.resolve_live_strategy(
+        {
+            "kind": "donchian_breakout",
+            "entry_period": 55,
+            "exit_period": 20,
+            "exit_policy": "stop_loss",
+        }
+    )
+    assert strategy.exit_policy == "stop_loss"
+    assert strategy.rationale(_candles([100])[-1])["exit_policy"] == "stop_loss"
+
+
+@pytest.mark.parametrize("exit_policy", ["stop_and_target", "trailing", 1, None])
+def test_exit_policies_not_supported_live_are_refused(exit_policy: object) -> None:
+    with pytest.raises(ls.UnresolvableStrategyError):
+        ls.resolve_live_strategy(
+            {
+                "kind": "donchian_breakout",
+                "entry_period": 55,
+                "exit_period": 20,
+                "exit_policy": exit_policy,
+            }
+        )

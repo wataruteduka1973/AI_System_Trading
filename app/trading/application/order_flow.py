@@ -157,6 +157,11 @@ class PlaceOrderCommand:
     `place_order` also check a bot-scoped `trading_halt` (data-delay), on top of the
     account-scoped one it always checks. A manual/direct order with no bot behind it
     leaves this `None` and only the account-scoped check applies."""
+    stop_fill_price: Decimal | None = None
+    """Paper simulation of a triggered stop-loss (docs/plans/paper-trading-live-data.md
+    Unit 3): fill at this price -- the stop level, or a gapped bar's open -- instead
+    of the latest close. Accepted only for a market order that closes the whole
+    open position, so it can never open or grow a position at an arbitrary price."""
 
 
 def _validate_order_type_price(order_type: OrderTypeLiteral, limit_price: Decimal | None) -> None:
@@ -252,6 +257,22 @@ def place_order(db: Session, command: PlaceOrderCommand) -> TradeOrder:
             (command.side == "sell" and existing_position.side == "long")
             or (command.side == "buy" and existing_position.side == "short")
         )
+        if command.stop_fill_price is not None:
+            closes_whole_position = (
+                is_closing_or_reducing
+                and existing_position is not None
+                and command.quantity == existing_position.quantity
+            )
+            if (
+                command.order_type != "market"
+                or command.stop_fill_price <= 0
+                or not closes_whole_position
+            ):
+                raise OrderFlowError(
+                    "invalid_input",
+                    "stop_fill_price is only for a positive-price market order that closes "
+                    "the whole open position",
+                )
         if not is_closing_or_reducing:
             account_scope = trading_halt.HaltScope(
                 workspace_id=command.workspace_id, scope_type="account", scope_id=account.id
@@ -308,7 +329,9 @@ def place_order(db: Session, command: PlaceOrderCommand) -> TradeOrder:
             },
         )
 
-        fill = _simulate_fill(db, order, instrument, exchange_code)
+        fill = _simulate_fill(
+            db, order, instrument, exchange_code, base_price=command.stop_fill_price
+        )
         _, realized_pnl = _apply_fill_to_position(
             db, account, instrument, fill, command.side, exchange_code
         )
@@ -365,8 +388,16 @@ def cancel_order(db: Session, order: TradeOrder, *, reason_code: str) -> TradeOr
 
 
 def _simulate_fill(
-    db: Session, order: TradeOrder, instrument: Instrument, exchange_code: str
+    db: Session,
+    order: TradeOrder,
+    instrument: Instrument,
+    exchange_code: str,
+    *,
+    base_price: Decimal | None = None,
 ) -> Fill:
+    """Fills at the latest final close, or at `base_price` when given (a stop that
+    triggered there -- see `PlaceOrderCommand.stop_fill_price`). Fee and slippage
+    are applied to whichever price is used, as the backtest does."""
     candle = db.scalar(
         select(Candle)
         .where(Candle.instrument_id == order.instrument_id, Candle.is_final.is_(True))
@@ -378,13 +409,10 @@ def _simulate_fill(
             "market_price_unavailable",
             "No final candle available for this instrument; cannot simulate a fill",
         )
-    fee_amount = _fee_buffer(exchange_code, candle.close, order.quantity)
+    price = base_price if base_price is not None else candle.close
+    fee_amount = _fee_buffer(exchange_code, price, order.quantity)
     expected_slippage = _expected_slippage(db, exchange_code, order.instrument_id)
-    fill_price = (
-        candle.close + expected_slippage
-        if order.side == "buy"
-        else candle.close - expected_slippage
-    )
+    fill_price = price + expected_slippage if order.side == "buy" else price - expected_slippage
     if fill_price <= 0:
         raise OrderFlowError("invalid_fill_price", "Simulated fill price is not positive")
 

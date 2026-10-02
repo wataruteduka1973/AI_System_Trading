@@ -794,3 +794,79 @@ def test_cancel_order_rejects_terminal_states(status: str) -> None:
     assert exc.value.code == "invalid_status_transition"
     assert order.status == status  # not mutated
     db.rollback.assert_called_once()
+
+
+# ---- place_order: stop_fill_price (docs/plans/paper-trading-live-data.md Unit 3) ----
+
+
+def _long(account: TradingAccount, instrument: Instrument) -> TradingPosition:
+    return _position(
+        account_id=account.id,
+        instrument_id=instrument.id,
+        side="long",
+        quantity=Decimal("1"),
+        average_entry_price=Decimal("100"),
+    )
+
+
+def _stop_close(account: TradingAccount, instrument: Instrument, **overrides: object):  # type: ignore[no-untyped-def]
+    values: dict[str, object] = dict(
+        workspace_id=account.workspace_id,
+        account_id=account.id,
+        instrument_id=instrument.id,
+        side="sell",
+        order_type="market",
+        quantity=Decimal("1"),
+        client_order_id="stop-1",
+        stop_price=Decimal("95"),
+        stop_fill_price=Decimal("95"),
+    )
+    values.update(overrides)
+    return flow.PlaceOrderCommand(**values)  # type: ignore[arg-type]
+
+
+def test_a_stop_close_fills_at_the_given_price_not_the_latest_close() -> None:
+    db = MagicMock()
+    account, instrument = _account(), _instrument()
+    position = _long(account, instrument)
+    # account, exchange_code, _open_position, candle, _apply_fill_to_position's
+    # position lookup, snapshot-shaped calls.
+    db.scalar.side_effect = [
+        account, "binance", position, _candle(Decimal("120"), instrument_id=instrument.id),
+        position, None, Decimal("0"),
+    ]  # fmt: skip
+    db.get.side_effect = lambda model, _id: instrument if model is Instrument else None
+
+    order = flow.place_order(db, _stop_close(account, instrument))
+
+    [fill] = [c.args[0] for c in db.add.call_args_list if isinstance(c.args[0], Fill)]
+    assert fill.price == Decimal("95")
+    assert fill.fee_amount == Decimal("95") * Decimal("0.001")
+    assert position.status == "closed"
+    assert position.realized_pnl == Decimal("-5")
+    assert order.stop_price == Decimal("95")
+
+
+@pytest.mark.parametrize(
+    ("overrides", "position_exists"),
+    [
+        ({}, False),  # nothing to close
+        ({"quantity": Decimal("0.5")}, True),  # a partial close
+        ({"side": "buy"}, True),  # would add to the long, not close it
+        ({"stop_fill_price": Decimal("0")}, True),
+        ({"order_type": "limit", "limit_price": Decimal("95")}, True),
+    ],
+)
+def test_a_stop_fill_price_is_only_accepted_for_closing_a_whole_position(
+    overrides: dict[str, object], position_exists: bool
+) -> None:
+    db = MagicMock()
+    account, instrument = _account(), _instrument()
+    position = _long(account, instrument) if position_exists else None
+    db.scalar.side_effect = [account, "binance", position]
+    db.get.side_effect = lambda model, _id: instrument if model is Instrument else None
+
+    with pytest.raises(flow.OrderFlowError) as exc:
+        flow.place_order(db, _stop_close(account, instrument, **overrides))
+    assert exc.value.code == "invalid_input"
+    assert not [c for c in db.add.call_args_list if isinstance(c.args[0], Fill)]
