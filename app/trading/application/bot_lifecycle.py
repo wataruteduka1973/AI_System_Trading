@@ -52,12 +52,18 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.exchanges.types import TIMEFRAME_SECONDS
+from app.market_data.application.public_research import RESEARCH_EXCHANGE_CODE
 from app.models.audit import AuditLog
-from app.models.connections import ExchangeConnection
+from app.models.connections import Exchange, ExchangeConnection
+from app.models.instruments import Instrument
 from app.models.market_data import Candle
 from app.models.strategy import BotRun, RiskProfileVersion, StrategyVersion, TradingBot
 from app.models.trading import TradeOrder, TradingAccount
 from app.trading.application import order_flow
+from app.trading.application.live_strategies import (
+    UnresolvableStrategyError,
+    resolve_live_strategy,
+)
 
 _CANCELLABLE_STATUSES = ("pending", "submitted", "partially_filled")
 _MAX_DATA_DELAY_BARS = 5  # matches risk_gate.CONSERVATIVE_V1_RULES's hard limit
@@ -91,6 +97,11 @@ def validate_bot_startup(db: Session, bot: TradingBot) -> None:
       codebase yet, so a live bot always fails this check rather than being silently
       approved.
     - 口座照合: the bot's `TradingAccount` exists and `status == "active"`.
+    - 戦略: the strategy version is approved for paper and its `definition`
+      resolves to a signal generator (`live_strategies.resolve_live_strategy`).
+    - 銘柄: a `binance_public` instrument (public production prices, approved
+      for paper signals 2026-09-30) runs only on a Binance connection, whose
+      fee/no-short/order-size rules match that market.
     - 時刻同期: **not implemented** -- no data source for exchange server time exists
       in this paper simulator (found, not fabricated; same category of gap as
       risk_gate.py's omitted OANDA marginCallPercent/marginCloseoutPercent checks)."""
@@ -122,12 +133,33 @@ def validate_bot_startup(db: Session, bot: TradingBot) -> None:
             "startup_validation_failed_strategy",
             "strategy_version.lifecycle_status must be paper_approved or later",
         )
+    try:
+        resolve_live_strategy(strategy_version.definition)
+    except UnresolvableStrategyError as exc:
+        raise BotLifecycleError(
+            "startup_validation_failed_strategy",
+            f"strategy_version.definition cannot be run: {exc}",
+        ) from exc
 
     risk_profile_version = db.get(RiskProfileVersion, bot.risk_profile_version_id)
     if risk_profile_version is None or risk_profile_version.status != "approved":
         raise BotLifecycleError(
             "startup_validation_failed_risk_profile", "risk_profile_version.status must be approved"
         )
+
+    instrument_exchange_code = db.scalar(
+        select(Exchange.code)
+        .join(Instrument, Instrument.exchange_id == Exchange.id)
+        .where(Instrument.id == bot.instrument_id)
+    )
+    if instrument_exchange_code == RESEARCH_EXCHANGE_CODE:
+        connection_exchange = db.get(Exchange, connection.exchange_id)
+        if connection_exchange is None or connection_exchange.code != "binance":
+            raise BotLifecycleError(
+                "startup_validation_failed_instrument",
+                "A binance_public instrument needs a Binance connection: its fee, "
+                "no-short and order-size rules are Binance spot's",
+            )
 
     latest_candle = db.scalar(
         select(Candle)

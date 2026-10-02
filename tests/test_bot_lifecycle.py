@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
-from app.models.connections import ExchangeConnection
+from app.models.connections import Exchange, ExchangeConnection
 from app.models.market_data import Candle
 from app.models.strategy import BotRun, RiskProfileVersion, StrategyVersion, TradingBot
 from app.models.trading import TradeOrder, TradingAccount
@@ -56,7 +56,11 @@ def _account(**overrides: object) -> TradingAccount:
 
 def _strategy_version(**overrides: object) -> StrategyVersion:
     defaults: dict[str, object] = dict(
-        id=uuid4(), strategy_id=uuid4(), version=1, lifecycle_status="paper_approved"
+        id=uuid4(),
+        strategy_id=uuid4(),
+        version=1,
+        lifecycle_status="paper_approved",
+        definition={"kind": "dummy_sma_crossover", "period": 5},
     )
     defaults.update(overrides)
     return StrategyVersion(**defaults)
@@ -278,9 +282,9 @@ def test_resume_bot_reuses_the_paused_bot_run_and_revalidates() -> None:
     db = MagicMock()
     bot = _bot(desired_state="paused", actual_state="paused")
     paused_run = BotRun(id=uuid4(), bot_id=bot.id, status="paused", code_version="x")
-    # db.scalar call order in resume_bot: 1) paused BotRun lookup, 2) (inside
-    # validate_bot_startup) the latest-candle lookup.
-    db.scalar.side_effect = [paused_run, _candle()]
+    # db.scalar call order in resume_bot: 1) paused BotRun lookup, then inside
+    # validate_bot_startup 2) the instrument's exchange code, 3) the latest candle.
+    db.scalar.side_effect = [paused_run, "binance", _candle()]
     db.get.side_effect = [_connection(), _account(), _strategy_version(), _risk_profile_version()]
 
     result = lifecycle.resume_bot(db, bot)
@@ -304,3 +308,49 @@ def test_resume_bot_validation_failure_leaves_state_untouched() -> None:
     assert bot.actual_state == "paused"
     assert paused_run.status == "paused"  # untouched
     db.commit.assert_not_called()
+
+
+# ---- validate_bot_startup: strategy definition and public-price instruments ----
+# (docs/plans/paper-trading-live-data.md Unit 2)
+
+
+def test_validate_bot_startup_fails_on_an_unresolvable_strategy_definition() -> None:
+    db = MagicMock()
+    db.get.side_effect = [
+        _connection(),
+        _account(),
+        _strategy_version(definition={"kind": "not-a-strategy"}),
+    ]
+    with pytest.raises(lifecycle.BotLifecycleError) as exc:
+        lifecycle.validate_bot_startup(db, _bot())
+    assert exc.value.code == "startup_validation_failed_strategy"
+
+
+def test_validate_bot_startup_refuses_a_public_price_instrument_on_a_non_binance_connection() -> (
+    None
+):
+    db = MagicMock()
+    db.get.side_effect = [
+        _connection(),
+        _account(),
+        _strategy_version(),
+        _risk_profile_version(),
+        Exchange(id=uuid4(), code="oanda", name="OANDA"),  # the connection's exchange
+    ]
+    db.scalar.side_effect = ["binance_public"]  # the instrument's exchange
+    with pytest.raises(lifecycle.BotLifecycleError) as exc:
+        lifecycle.validate_bot_startup(db, _bot())
+    assert exc.value.code == "startup_validation_failed_instrument"
+
+
+def test_validate_bot_startup_accepts_a_public_price_instrument_on_a_binance_connection() -> None:
+    db = MagicMock()
+    db.get.side_effect = [
+        _connection(),
+        _account(),
+        _strategy_version(),
+        _risk_profile_version(),
+        Exchange(id=uuid4(), code="binance", name="Binance"),
+    ]
+    db.scalar.side_effect = ["binance_public", _candle()]
+    lifecycle.validate_bot_startup(db, _bot())  # does not raise

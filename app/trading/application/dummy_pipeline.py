@@ -80,7 +80,8 @@ from app.models.strategy import (
 )
 from app.models.trading import TradingAccount, TradingPosition
 from app.trading.application import order_flow
-from app.trading.application.dummy_signal import generate_dummy_signal
+from app.trading.application.backtest_replay import _HISTORY_WINDOW
+from app.trading.application.live_strategies import LiveStrategy, resolve_live_strategy
 from app.trading.application.risk_gate import CONSERVATIVE_V1_RULES, evaluate_signal
 
 
@@ -234,6 +235,23 @@ def _open_position(
     )
 
 
+_TAKE_PROFIT_REWARD_MULTIPLE = Decimal("2.0")
+"""Matches `risk_gate.py`'s fixed reward/risk ratio (which the gate does not
+actually evaluate -- see docs/plans/paper-trading-live-data.md)."""
+
+
+def _informational_take_profit(
+    strategy: LiveStrategy, side: str, close: Decimal, stop_distance: Decimal
+) -> Decimal | None:
+    """The take-profit price stored on the order intent -- recorded only, never
+    executed. None for strategies that do not exit at a fixed target (see
+    `live_strategies.LiveStrategy.records_take_profit`)."""
+    if not strategy.records_take_profit:
+        return None
+    target = stop_distance * _TAKE_PROFIT_REWARD_MULTIPLE
+    return close + target if side == "buy" else close - target
+
+
 def run_dummy_pipeline_once(db: Session, bot: TradingBot, bot_run: BotRun) -> dict:
     """Runs one evaluation cycle for `bot`. Returns a small dict describing what
     happened (`action`: "hold" | "already_processed" | "close_only" | "denied" |
@@ -248,7 +266,7 @@ def run_dummy_pipeline_once(db: Session, bot: TradingBot, bot_run: BotRun) -> di
     loop/Worker task): the Worker calling this repeatedly on a poll interval will
     often see the same still-latest final candle more than once before a new one
     closes. Without a guard, a second call for the same candle would call
-    `generate_dummy_signal` again (deterministic, same result) and then fail on
+    the strategy's signal generator again (deterministic, same result) and then fail on
     `db.commit()` below with an uncaught `IntegrityError` against
     `uq_signal_idempotency` -- this function had no callers before the Worker, so
     that path was never exercised. Returning "already_processed" early makes
@@ -271,7 +289,7 @@ def run_dummy_pipeline_once(db: Session, bot: TradingBot, bot_run: BotRun) -> di
                 Candle.is_final.is_(True),
             )
             .order_by(Candle.open_time.desc())
-            .limit(30)
+            .limit(_HISTORY_WINDOW)
         )
     )
     candles.reverse()
@@ -285,7 +303,11 @@ def run_dummy_pipeline_once(db: Session, bot: TradingBot, bot_run: BotRun) -> di
     if already_processed is not None:
         return {"action": "already_processed", "signal_id": already_processed.id}
 
-    signal_action = generate_dummy_signal(candles)
+    strategy_version = db.get(StrategyVersion, bot.strategy_version_id)
+    if strategy_version is None:
+        raise ValueError("bot's strategy_version no longer exists")
+    strategy = resolve_live_strategy(strategy_version.definition)
+    signal_action = strategy.generate(candles)
     input_checksum = _checksum(
         {"bot_run_id": str(bot_run.id), "candle_id": str(latest_candle.id), "action": signal_action}
     )
@@ -295,7 +317,7 @@ def run_dummy_pipeline_once(db: Session, bot: TradingBot, bot_run: BotRun) -> di
         candle_id=latest_candle.id,
         strategy_version_id=bot.strategy_version_id,
         action=signal_action,
-        rationale={"generator": "dummy_sma", "period": 5, "close": str(latest_candle.close)},
+        rationale=strategy.rationale(latest_candle),
         input_checksum=input_checksum,
     )
     db.add(signal)
@@ -369,11 +391,8 @@ def run_dummy_pipeline_once(db: Session, bot: TradingBot, bot_run: BotRun) -> di
 
     assert result.approved_quantity is not None
     stop_distance = Decimal(result.decision.rule_results["quantity_calculation"]["stop_distance"])
-    reward_multiple = Decimal("2.0")  # matches risk_gate.py's hardcoded reward/risk check
-    take_profit_price = (
-        latest_candle.close + stop_distance * reward_multiple
-        if signal_action == "buy"
-        else latest_candle.close - stop_distance * reward_multiple
+    take_profit_price = _informational_take_profit(
+        strategy, signal_action, latest_candle.close, stop_distance
     )
 
     intent = order_flow.create_order_intent(
