@@ -26,7 +26,7 @@ export type TradingBot = {
   created_at: string
 }
 
-export type LatestSignal = {
+type LatestSignal = {
   id: string
   action: string
   created_at: string

@@ -8,8 +8,6 @@ from sqlalchemy import Boolean, func, literal_column, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from app.exchanges.binance import BinanceSpotTestnetClient
-from app.exchanges.oanda import OandaPracticeClient
 from app.exchanges.types import CandlePoint, timeframe_delta
 from app.models.connections import (
     Exchange,
@@ -452,13 +450,9 @@ class CandleIngestionService:
         self,
         db: Session,
         secret_store: LocalEncryptedSecretStore,
-        oanda_client: OandaPracticeClient | None = None,
-        binance_client: BinanceSpotTestnetClient | None = None,
     ) -> None:
         self.db = db
         self.secret_store = secret_store
-        self.oanda_client = oanda_client or OandaPracticeClient()
-        self.binance_client = binance_client or BinanceSpotTestnetClient()
 
     def validate_configuration(self, workspace_id: UUID, instrument_id: UUID) -> None:
         """Check local access and decryptability without sending any exchange request."""
@@ -469,55 +463,6 @@ class CandleIngestionService:
             raise MarketDataAccessError(
                 "Exchange credentials are incomplete", "credentials_missing"
             )
-
-    async def sync(
-        self,
-        workspace_id: UUID,
-        instrument_id: UUID,
-        timeframe: str,
-        start: datetime,
-        end: datetime,
-        quality_status: str,
-    ) -> IngestionReport:
-        instrument, exchange, connection = self._resolve_access(workspace_id, instrument_id)
-        credentials = self._load_credentials(connection)
-        cursor = start.astimezone(UTC)
-        end = end.astimezone(UTC)
-        page_size = 4900 if exchange.code == "oanda" else 950
-        delta = timeframe_delta(timeframe)
-        report = IngestionReport(requested_from=cursor, requested_to=end)
-        while cursor < end:
-            page_end = min(end, cursor + delta * page_size)
-            points = await self._fetch_page(
-                exchange.code,
-                connection,
-                credentials,
-                instrument.symbol,
-                timeframe,
-                cursor,
-                page_end,
-            )
-            report.source_rows_received += len(points)
-            if not points:
-                report.record_empty_window(cursor, page_end)
-            final_points = [point for point in points if point.is_final and point.close_time <= end]
-            if final_points:
-                report.record_candles(final_points)
-                inserted, updated = self._upsert_points(
-                    instrument.id, timeframe, exchange.code, quality_status, final_points
-                )
-                report.rows_inserted += inserted
-                report.rows_updated += updated
-            cursor = page_end
-        return report
-
-    def latest_close_time(self, instrument_id: UUID, timeframe: str) -> datetime | None:
-        return self.db.scalar(
-            select(Candle.close_time)
-            .where(Candle.instrument_id == instrument_id, Candle.timeframe == timeframe)
-            .order_by(Candle.close_time.desc())
-            .limit(1)
-        )
 
     def _resolve_access(
         self, workspace_id: UUID, instrument_id: UUID
@@ -561,37 +506,6 @@ class CandleIngestionService:
             raise MarketDataAccessError(
                 "Selected connection credentials cannot be loaded", "credentials_unreadable"
             ) from exc
-
-    async def _fetch_page(
-        self,
-        exchange_code: str,
-        connection: ExchangeConnection,
-        credentials: dict[str, str],
-        symbol: str,
-        timeframe: str,
-        start: datetime,
-        end: datetime,
-    ) -> list[CandlePoint]:
-        if exchange_code == "oanda":
-            token = credentials.get("token")
-            if not token:
-                raise MarketDataAccessError("OANDA token is missing")
-            return await self.oanda_client.get_candles(
-                connection.api_base_url, token, symbol, timeframe, start, end
-            )
-        api_key = credentials.get("api_key")
-        secret_key = credentials.get("secret_key")
-        if not api_key or not secret_key:
-            raise MarketDataAccessError("Binance API credentials are missing")
-        return await self.binance_client.get_candles(
-            connection.api_base_url,
-            api_key,
-            secret_key,
-            symbol,
-            timeframe,
-            start,
-            end,
-        )
 
     def _upsert_points(
         self,

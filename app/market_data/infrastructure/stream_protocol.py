@@ -114,14 +114,10 @@ def encode_stream_state(feed_started_at: datetime, mode: ResumeMode) -> dict[str
 class ResumeRequest:
     """A reconnecting client's remembered state from its previous
     connection. Either field being None means "no previous state" (treated
-    as a fresh connect) -- see `is_present`."""
+    as a fresh connect) -- see `decide_resume`."""
 
     last_sequence: int | None
     feed_started_at: datetime | None
-
-    @property
-    def is_present(self) -> bool:
-        return self.last_sequence is not None and self.feed_started_at is not None
 
 
 @dataclass(frozen=True)

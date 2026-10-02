@@ -45,8 +45,7 @@ class BinancePublicClient:
         """One page, up to `MAX_KLINES_PER_REQUEST` candles -- mirrors
         `BinanceSpotTestnetClient.get_candles`'s own single-page contract; the
         caller (`public_research.py`) is responsible for paging across a
-        larger [start, end) range, exactly as `CandleIngestionService.sync`
-        already does for the Testnet client."""
+        larger [start, end) range."""
         try:
             async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
                 response = await client.get(

@@ -148,10 +148,10 @@ timeframeを扱う単位が出てきた際に、ブローカー日境界への�
 
 ## 9. 技術根拠・依存関係
 
-- `websockets`, `tenacity`, `orjson`は`requirements.txt`に将来利用を見越して既に記載済み
-  （本機能で実装・import後に`pyproject.toml`へ追加する）。`tenacity`は取引所再接続の
-  指数バックオフに使う。`orjson`はevent shapeが単純なJSONのため、標準`json`との比較で
-  導入要否を③実装時に判断する（過剰導入を避ける）。
+- 当初は`websockets`, `tenacity`, `orjson`の導入を検討したが、実装では`tenacity`と`orjson`は
+  使わなかった（標準ライブラリで足りた）。`websockets`は`scripts/stream_soak_monitor.py`の
+  クライアントだけが使い、dev依存として`pyproject.toml`に宣言している。依存の正は
+  `pyproject.toml`のみ（`requirements.txt`は2026-10-02に削除）。
 - `PyJWT[crypto]`をticket署名に採用する。将来のOIDC導入時にも同じライブラリを継続利用できる。
 - `python-binance`のAsync/WebSocket機能は`aiohttp`（python-binanceの`Requires-Dist`に含まれる
   transitive依存）を必要とするが、`app/exchanges/binance.py`が既に`from binance import
