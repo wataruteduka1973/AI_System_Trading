@@ -39,6 +39,7 @@ from app.models.instruments import Instrument
 from app.models.market_data import Candle
 from app.trading.application.backtest_replay import (
     BacktestSignalGenerator,
+    ExitPolicy,
     ReplayResult,
     generate_dummy_signal,
     run_replay,
@@ -255,6 +256,7 @@ def run_and_persist_backtest(
     spread: Decimal = Decimal(0),
     signal_generator: BacktestSignalGenerator = generate_dummy_signal,
     baseline_signal_generator: BacktestSignalGenerator | None = None,
+    exit_policy: ExitPolicy = "signal",
 ) -> BacktestRun:
     """The single entry point that ties Units 4-5 together: replay `candles` once
     with `signal_generator`, optionally replay them a second time with
@@ -274,6 +276,7 @@ def run_and_persist_backtest(
         initial_equity=initial_equity,
         spread=spread,
         signal_generator=signal_generator,
+        exit_policy=exit_policy,
     )
     metrics = compute_metrics(result, initial_equity)
 
@@ -288,6 +291,7 @@ def run_and_persist_backtest(
             initial_equity=initial_equity,
             spread=spread,
             signal_generator=baseline_signal_generator,
+            exit_policy=exit_policy,
         )
         baseline_metrics = compute_metrics(baseline_result, initial_equity)
         baseline_comparison = compare_to_baseline(metrics, baseline_metrics)
@@ -298,6 +302,7 @@ def run_and_persist_backtest(
         "initial_equity": str(initial_equity),
         "spread": str(spread),
         "signal_generator": getattr(signal_generator, "__name__", repr(signal_generator)),
+        "exit_policy": exit_policy,
     }
     return persist_backtest_run(
         db,

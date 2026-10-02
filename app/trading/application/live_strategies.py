@@ -84,12 +84,15 @@ def resolve_live_strategy(definition: Mapping[str, Any] | None) -> LiveStrategy:
     if kind == "donchian_breakout":
         entry = _positive_int(definition, "entry_period")
         exit_ = _positive_int(definition, "exit_period")
+
+        # Named, not a lambda: a backtest stores the generator's __name__ in its parameters.
+        def donchian_breakout(candles: Sequence[Candle]) -> DummySignalAction:
+            return generate_donchian_breakout_signal(candles, entry_period=entry, exit_period=exit_)
+
         return LiveStrategy(
             kind=kind,
             parameters={"entry_period": entry, "exit_period": exit_},
-            generate=lambda candles: generate_donchian_breakout_signal(
-                candles, entry_period=entry, exit_period=exit_
-            ),
+            generate=donchian_breakout,
             exit_policy=exit_policy,
         )
     raise UnresolvableStrategyError(f"unknown strategy kind {kind!r}")

@@ -26,8 +26,12 @@ from app.models.instruments import Instrument
 from app.models.market_data import Candle, MarketDataGap
 from app.trading.application.backtest_metrics import run_and_persist_backtest
 from app.trading.application.backtest_walk_forward import run_and_persist_walk_forward
-from app.trading.application.dummy_pipeline import ensure_dummy_strategy_and_risk_profile
-from app.trading.application.risk_gate import CONSERVATIVE_V1_RULES
+from app.trading.application.live_strategies import resolve_live_strategy
+from app.trading.application.paper_provisioning import ensure_approved_versions
+
+_CODE_VERSION = "approved-strategy-0.1"
+"""Recorded on each `BacktestRun`. Runs stored as "dummy-pipeline-0.1" were
+computed with the SMA pipeline skeleton before 2026-10-02."""
 
 
 class BacktestProvisioningError(Exception):
@@ -162,9 +166,11 @@ def run_backtest_for_workspace(
     walk_forward: bool = False,
     train_ratio: Decimal = Decimal("0.7"),
 ) -> list[BacktestRun]:
-    """The one entry point the API route calls: resolves the workspace's shared
-    dummy `StrategyVersion`/`RiskProfileVersion` (same one `ensure_dummy_bot` uses
-    -- there is only one real strategy implementation in this codebase), loads the
+    """The one entry point the API route calls: resolves the workspace's approved
+    `StrategyVersion`/`RiskProfileVersion` (`paper_provisioning.ensure_approved_versions`
+    -- the same ones a new bot gets) and turns the strategy definition into a signal
+    generator and exit policy exactly as a live bot does (`resolve_live_strategy`),
+    so the backtest evaluates what would actually be traded. Then loads the
     requested candle range, provisions a `DatasetSnapshot`, and runs+persists either
     a single backtest or a walk-forward train/test pair. Returns one `BacktestRun`
     for `walk_forward=False`, two (`[train, test]`) for `walk_forward=True`. Runs
@@ -177,9 +183,8 @@ def run_backtest_for_workspace(
             "no_candles", "No final candles are available for this instrument/timeframe/range"
         )
 
-    strategy_version, risk_profile_version = ensure_dummy_strategy_and_risk_profile(
-        db, workspace_id
-    )
+    strategy_version, risk_profile_version = ensure_approved_versions(db, workspace_id)
+    strategy = resolve_live_strategy(strategy_version.definition)
     exchange_code = _exchange_code_for_instrument(db, instrument)
     dataset_snapshot = ensure_dataset_snapshot(
         db,
@@ -202,10 +207,12 @@ def run_backtest_for_workspace(
             instrument=instrument,
             timeframe=timeframe,
             exchange_code=exchange_code,
-            rules=CONSERVATIVE_V1_RULES,
+            rules=risk_profile_version.rules,
             initial_equity=initial_equity,
-            code_version="dummy-pipeline-0.1",
+            code_version=_CODE_VERSION,
             spread=spread,
+            signal_generator=strategy.generate,
+            exit_policy=strategy.exit_policy,
             train_ratio=train_ratio,
         )
         db.commit()
@@ -221,10 +228,12 @@ def run_backtest_for_workspace(
         instrument=instrument,
         timeframe=timeframe,
         exchange_code=exchange_code,
-        rules=CONSERVATIVE_V1_RULES,
+        rules=risk_profile_version.rules,
         initial_equity=initial_equity,
-        code_version="dummy-pipeline-0.1",
+        code_version=_CODE_VERSION,
         spread=spread,
+        signal_generator=strategy.generate,
+        exit_policy=strategy.exit_policy,
     )
     db.commit()
     return [run]

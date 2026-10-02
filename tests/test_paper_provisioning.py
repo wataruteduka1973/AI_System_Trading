@@ -135,8 +135,8 @@ def _instrument() -> Instrument:
 
 def test_the_api_bot_runs_the_approved_strategy_on_the_approved_timeframe() -> None:
     db = MagicMock()
-    # strategy (missing), the instrument's market asset class, risk profile (missing).
-    db.scalar.side_effect = [None, "crypto", None]
+    # strategy (missing), risk profile (missing), the instrument's market asset class.
+    db.scalar.side_effect = [None, None, "crypto"]
     account = _account()
     instrument = _instrument()
 
@@ -165,7 +165,7 @@ def test_the_api_bot_reuses_the_stored_approved_versions() -> None:
     )
     profile = RiskProfile(id=uuid4(), name=pp.APPROVED_RISK_PROFILE_NAME)
     stored_rules = RiskProfileVersion(id=uuid4(), version=1, rules=pp.APPROVED_RISK_RULES)
-    db.scalar.side_effect = [strategy, stored, "crypto", profile, stored_rules]
+    db.scalar.side_effect = [strategy, stored, profile, stored_rules, "crypto"]
     account = _account()
 
     bot = pp.create_approved_bot(db, account.workspace_id, account, _instrument(), bot_name="b")
@@ -177,7 +177,7 @@ def test_the_api_bot_reuses_the_stored_approved_versions() -> None:
 
 def test_the_api_bot_is_refused_on_a_market_the_strategy_was_not_validated_on() -> None:
     db = MagicMock()
-    db.scalar.side_effect = [None, "foreign_fx"]
+    db.scalar.side_effect = [None, None, "foreign_fx"]
     account = _account()
 
     with pytest.raises(pp.ProvisioningError) as exc:

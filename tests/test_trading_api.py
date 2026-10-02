@@ -266,9 +266,9 @@ def test_create_trading_bot_creates_the_approved_strategy_on_4h() -> None:
     instrument = _instrument()
     session = MagicMock()
     # 1) route's own duplicate-name pre-check, 2) _get_account, then
-    # create_approved_bot's lookups: Strategy (missing), the instrument's market
-    # asset class, RiskProfile (missing).
-    session.scalar.side_effect = [None, account, None, "crypto", None]
+    # create_approved_bot's lookups: Strategy (missing), RiskProfile (missing),
+    # then the instrument's market asset class.
+    session.scalar.side_effect = [None, account, None, None, "crypto"]
     session.get.return_value = instrument
 
     def set_generated(bot: TradingBot) -> None:
@@ -329,7 +329,7 @@ def test_create_trading_bot_refuses_a_market_the_approved_strategy_does_not_supp
     account = _account(workspace_id=workspace_id)
     instrument = _instrument()
     session = MagicMock()
-    session.scalar.side_effect = [None, account, None, "foreign_fx"]
+    session.scalar.side_effect = [None, account, None, None, "foreign_fx"]
     session.get.return_value = instrument
     _override_database(session)
     try:

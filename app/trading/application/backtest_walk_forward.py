@@ -113,6 +113,7 @@ def run_walk_forward(
     spread: Decimal = Decimal(0),
     signal_generator: BacktestSignalGenerator = generate_dummy_signal,
     train_ratio: Decimal = Decimal("0.7"),
+    exit_policy: ExitPolicy = "signal",
 ) -> WalkForwardResult:
     train_candles, test_candles = split_candles_for_walk_forward(candles, train_ratio=train_ratio)
 
@@ -126,6 +127,7 @@ def run_walk_forward(
             initial_equity=initial_equity,
             spread=spread,
             signal_generator=signal_generator,
+            exit_policy=exit_policy,
         )
         return result, compute_metrics(result, initial_equity)
 
@@ -368,6 +370,7 @@ def run_and_persist_walk_forward(
     spread: Decimal = Decimal(0),
     signal_generator: BacktestSignalGenerator = generate_dummy_signal,
     train_ratio: Decimal = Decimal("0.7"),
+    exit_policy: ExitPolicy = "signal",
 ) -> tuple[BacktestRun, BacktestRun]:
     """Persists the train and test windows as two separate `BacktestRun` rows
     (each with its own `BacktestTrade` rows and `summary_metrics`), linked to each
@@ -385,6 +388,7 @@ def run_and_persist_walk_forward(
         spread=spread,
         signal_generator=signal_generator,
         train_ratio=train_ratio,
+        exit_policy=exit_policy,
     )
 
     base_parameters: dict[str, object] = {
@@ -393,6 +397,7 @@ def run_and_persist_walk_forward(
         "initial_equity": str(initial_equity),
         "spread": str(spread),
         "signal_generator": getattr(signal_generator, "__name__", repr(signal_generator)),
+        "exit_policy": exit_policy,
         "walk_forward_train_ratio": str(train_ratio),
         "walk_forward_split_index": wf_result.split_index,
     }

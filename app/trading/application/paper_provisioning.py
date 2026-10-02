@@ -216,6 +216,22 @@ def provision_paper_bot(db: Session, spec: PaperBotSpec) -> TradingBot:
     return bot
 
 
+def ensure_approved_versions(
+    db: Session, workspace_id: UUID
+) -> tuple[StrategyVersion, RiskProfileVersion]:
+    """The workspace's approved strategy version and risk profile version, created
+    on first use. Also what the backtest API runs, so a backtest evaluates exactly
+    what a new bot would trade. Caller commits."""
+    return (
+        _ensure_strategy_version(
+            db, workspace_id, APPROVED_STRATEGY_NAME, APPROVED_STRATEGY_DEFINITION
+        ),
+        _ensure_risk_profile_version(
+            db, workspace_id, APPROVED_RISK_PROFILE_NAME, APPROVED_RISK_RULES
+        ),
+    )
+
+
 def create_approved_bot(
     db: Session,
     workspace_id: UUID,
@@ -231,9 +247,7 @@ def create_approved_bot(
     if account.connection_id is None:
         raise ProvisioningError("account_without_connection", "account has no connection_id")
 
-    strategy_version = _ensure_strategy_version(
-        db, workspace_id, APPROVED_STRATEGY_NAME, APPROVED_STRATEGY_DEFINITION
-    )
+    strategy_version, risk_profile_version = ensure_approved_versions(db, workspace_id)
     asset_class = db.scalar(select(Market.asset_class).where(Market.id == instrument.market_id))
     if asset_class not in strategy_version.supported_market_types:
         raise ProvisioningError(
@@ -241,9 +255,6 @@ def create_approved_bot(
             f"the approved strategy supports {strategy_version.supported_market_types}, "
             f"not '{asset_class}'",
         )
-    risk_profile_version = _ensure_risk_profile_version(
-        db, workspace_id, APPROVED_RISK_PROFILE_NAME, APPROVED_RISK_RULES
-    )
 
     bot = TradingBot(
         workspace_id=workspace_id,

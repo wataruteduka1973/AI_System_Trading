@@ -147,8 +147,8 @@ export function BacktestForm({
         <p className="eyebrow">BACKTESTS</p>
         <h2>バックテストを実行</h2>
         <p className="panel-description">
-          過去の確定済みローソク足に対して、Botと同じシグナル・リスク判定ロジックを再生します。
-          このリクエストの応答が返るまで同期的に実行されます。
+          過去の確定済みローソク足に対して、Botと同じ承認済みの戦略(Donchian 55/20＋損切り)と
+          リスク判定ロジックを再生します。このリクエストの応答が返るまで同期的に実行されます。
         </p>
       </div>
       <div className="registration-grid">
