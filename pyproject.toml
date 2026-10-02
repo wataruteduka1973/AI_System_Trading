@@ -20,6 +20,7 @@ dependencies = [
   "psycopg[binary,pool]>=3.3.4,<4",
   "PyJWT[crypto]>=2.10,<3",
   "python-binance>=1.0.37,<2",
+  "requests>=2.32,<3",
   "SQLAlchemy>=2.0.51,<2.1",
   "structlog>=26.1.0,<27",
   "uvicorn[standard]>=0.51,<0.54",
@@ -34,6 +35,10 @@ dependencies = [
 # 50.0.0. Verified via `python -m pip_audit` against 50.0.1 before pinning. This
 # project's only use of cryptography is Fernet symmetric encryption
 # (app/services/secrets.py) -- a narrow, stable API untouched by this jump.
+#
+# requests is imported directly (exception types caught around the OANDA SDK calls in
+# app/exchanges/oanda.py and app/market_data/infrastructure/), so it is declared here
+# rather than relied on as a transitive dependency of oandapyV20 / python-binance.
 
 [project.optional-dependencies]
 dev = [
@@ -46,6 +51,8 @@ dev = [
   "mypy>=2.3,<3",
   "types-requests>=2.32,<3",
   "pip-audit>=2.10,<3",
+  # scripts/stream_soak_monitor.py's WebSocket client.
+  "websockets>=16.1,<17",
 ]
 
 [tool.hatch.build.targets.wheel]

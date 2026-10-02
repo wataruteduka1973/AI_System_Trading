@@ -1,6 +1,6 @@
 /** Mirrors `app.schemas.backtests` (app/api/routes/backtests.py). */
 
-export type BacktestMetrics = {
+type BacktestMetrics = {
   trade_count: number
   win_count: number
   loss_count: number
@@ -14,7 +14,7 @@ export type BacktestMetrics = {
   max_drawdown_pct: string
 }
 
-export type BacktestSummaryMetrics = {
+type BacktestSummaryMetrics = {
   metrics?: BacktestMetrics
   baseline_comparison?: unknown
 }

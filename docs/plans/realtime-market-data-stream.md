@@ -115,8 +115,8 @@
   reason_codeの日本語ラベル化（未知のcodeはそのまま表示しフェイルセーフとする）、
   heartbeat無音検知（既定30秒間隔の1.5倍=45秒を閾値としたMVP簡略化。実際の
   `market_stream_heartbeat_interval_seconds`設定値は現時点でブラウザへ渡していない）、
-  WS URL構築（`resume_last_sequence`/`resume_feed_started_at`はサーバ側`ResumeRequest.
-  is_present`と同じく両方揃った時のみ付与）、close code判定（サーバ側`stream_session.py`の
+  WS URL構築（`resume_last_sequence`/`resume_feed_started_at`はサーバ側`decide_resume`
+  と同じく両方揃った時のみ付与）、close code判定（サーバ側`stream_session.py`の
   `CLOSE_TICKET_REJECTED=4401`/`CLOSE_ACCESS_DENIED=4403`のみ再試行しない。それ以外
   （`CLOSE_FEED_START_FAILED=1011`含む）は通常の切断と同様に再接続する）を実装。
   `frontend/src/features/market-data/useMarketStream.ts`（新規）: 実際のWebSocketの

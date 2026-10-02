@@ -4,8 +4,9 @@ keyed by the name those scripts print. Each entry fixes its parameters up
 front -- see each module's docstring for why they are textbook values chosen
 before looking at results, not tuned ones.
 
-None of these is wired into live/paper execution (`dummy_pipeline.py` still
-uses `generate_dummy_signal`).
+This list only drives the research scripts. Which strategies a live/paper bot
+can run is decided separately, from its stored strategy definition, by
+`live_strategies.resolve_live_strategy`.
 """
 
 from collections.abc import Sequence

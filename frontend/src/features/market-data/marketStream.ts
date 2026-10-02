@@ -11,13 +11,13 @@ import type { ChartCandle } from '../../components/marketData'
  * The actual WebSocket wiring lives in useMarketStream.ts.
  */
 
-export type StreamEventType =
+type StreamEventType =
   | 'provisional_update'
   | 'candle_finalized'
   | 'heartbeat'
   | 'gap_notice'
 
-export type StreamOhlcv = {
+type StreamOhlcv = {
   open: string
   high: string
   low: string
@@ -40,7 +40,7 @@ export type StreamEventMessage = {
   reason_code: string | null
 }
 
-export type ResumeMode = 'fresh' | 'replayed' | 'gap_fill_required'
+type ResumeMode = 'fresh' | 'replayed' | 'gap_fill_required'
 
 export type StreamStateMessage = {
   type: 'stream_state'
