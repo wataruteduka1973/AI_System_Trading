@@ -33,7 +33,10 @@ from test_worker_leases_postgres import (  # noqa: F401  (reused as pytest fixtu
 )
 
 TEST_URL = os.environ.get("WORKER_TEST_DATABASE_URL")
-pytestmark = pytest.mark.skipif(not TEST_URL, reason="Requires dedicated WORKER_TEST_DATABASE_URL")
+pytestmark = [
+    pytest.mark.postgres,
+    pytest.mark.skipif(not TEST_URL, reason="Requires dedicated WORKER_TEST_DATABASE_URL"),
+]
 
 
 @pytest.fixture

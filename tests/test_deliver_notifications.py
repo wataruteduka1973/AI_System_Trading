@@ -33,6 +33,8 @@ TEST_URL = os.environ.get("WORKER_TEST_DATABASE_URL")
 _requires_postgres = pytest.mark.skipif(
     not TEST_URL, reason="Requires dedicated WORKER_TEST_DATABASE_URL"
 )
+# The whole module runs in CI's PostgreSQL job (selected by marker, see .github/workflows/ci.yml).
+pytestmark = pytest.mark.postgres
 ROOT = Path(__file__).resolve().parents[1]
 
 

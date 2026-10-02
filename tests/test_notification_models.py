@@ -20,7 +20,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 TEST_URL = os.environ.get("WORKER_TEST_DATABASE_URL")
-pytestmark = pytest.mark.skipif(not TEST_URL, reason="Requires dedicated WORKER_TEST_DATABASE_URL")
+pytestmark = [
+    pytest.mark.postgres,
+    pytest.mark.skipif(not TEST_URL, reason="Requires dedicated WORKER_TEST_DATABASE_URL"),
+]
 ROOT = Path(__file__).resolve().parents[1]
 
 
