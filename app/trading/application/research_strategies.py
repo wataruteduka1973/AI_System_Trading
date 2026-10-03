@@ -14,23 +14,18 @@ from decimal import Decimal
 
 from app.models.market_data import Candle
 from app.trading.application.backtest_replay import BacktestSignalGenerator
-from app.trading.application.donchian_breakout_signal import (
-    DonchianSignalAction,
-    generate_donchian_breakout_signal,
-)
+from app.trading.application.donchian_breakout_signal import generate_donchian_breakout_signal
 from app.trading.application.dummy_signal import generate_dummy_signal
 from app.trading.application.ema_trend_signal import generate_ema_trend_signal
-from app.trading.application.rsi_mean_reversion_signal import (
-    RsiSignalAction,
-    generate_rsi_mean_reversion_signal,
-)
+from app.trading.application.rsi_mean_reversion_signal import generate_rsi_mean_reversion_signal
+from app.trading.application.signal_action import SignalAction
 
 
-def _donchian_55_20(candles: Sequence[Candle]) -> DonchianSignalAction:
+def _donchian_55_20(candles: Sequence[Candle]) -> SignalAction:
     return generate_donchian_breakout_signal(candles, entry_period=55, exit_period=20)
 
 
-def _rsi2_10_70(candles: Sequence[Candle]) -> RsiSignalAction:
+def _rsi2_10_70(candles: Sequence[Candle]) -> SignalAction:
     return generate_rsi_mean_reversion_signal(
         candles, rsi_period=2, oversold=Decimal(10), exit_level=Decimal(70)
     )
