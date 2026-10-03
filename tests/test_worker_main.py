@@ -1,6 +1,7 @@
 import asyncio
 import signal
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -29,12 +30,41 @@ def _fake_migration_context(heads):
     return _MC
 
 
-def test_check_schema_revision_accepts_the_required_revision(monkeypatch):
+def _code_head() -> str:
+    # The newest migration in alembic/versions, read independently of the worker.
+    revisions = {
+        path.name.split("_", 2)[0] + "_" + path.name.split("_", 2)[1]
+        for path in (Path(__file__).resolve().parents[1] / "alembic" / "versions").glob("*.py")
+    }
+    return max(revisions)
+
+
+def test_check_schema_revision_accepts_a_database_at_the_codes_latest_migration(monkeypatch):
+    # Regression: the required revision was hard-coded to 20260831_0005, so every later
+    # migration (0006 on 2026-09-20 onward) made the worker refuse to start against a
+    # correctly migrated database.
+    monkeypatch.setattr(worker_main, "engine", _FakeEngine())
+    monkeypatch.setattr(worker_main, "MigrationContext", _fake_migration_context((_code_head(),)))
+    worker_main._check_schema_revision()
+
+
+def test_check_schema_revision_rejects_a_database_behind_the_code(monkeypatch):
     monkeypatch.setattr(worker_main, "engine", _FakeEngine())
     monkeypatch.setattr(
         worker_main, "MigrationContext", _fake_migration_context(("20260831_0005",))
     )
-    worker_main._check_schema_revision()
+    with pytest.raises(RuntimeError, match="20260831_0005"):
+        worker_main._check_schema_revision()
+
+
+def test_check_schema_revision_rejects_a_database_ahead_of_the_code(monkeypatch):
+    # A newer schema than this code knows (e.g. an older checkout against a migrated DB).
+    monkeypatch.setattr(worker_main, "engine", _FakeEngine())
+    monkeypatch.setattr(
+        worker_main, "MigrationContext", _fake_migration_context(("29991231_9999",))
+    )
+    with pytest.raises(RuntimeError, match="29991231_9999"):
+        worker_main._check_schema_revision()
 
 
 def test_check_schema_revision_rejects_an_older_revision(monkeypatch):

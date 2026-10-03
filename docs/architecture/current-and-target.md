@@ -197,7 +197,8 @@ Design docs `docs/design/modules/durable-market-data-worker.md` and
 `docs/plans/durable-market-data-worker.md`, describe the feed-scoped leases, fenced commits, page
 checkpoints, candidate discovery, fair round-robin scheduling, and the legacy cutover as
 implemented and verified (dedicated PostgreSQL plus the local-user database). The Worker refuses
-to start unless the database is at the required Alembic revision (`20260831_0005`). Fair scheduling
+to start unless the database is exactly at the latest migration in `alembic/versions` (read at
+startup, not hard-coded; see `docs/knowledge/market-data-worker-revision-check.md`). Fair scheduling
 means a long backfill never starves a polling subscription on the same or other feeds
 (`app/market_data/worker/runner.py`). `scripts/start_local.py` starts the Worker as a third,
 non-critical process; `[R]` restarts only the API/frontend, `[A]` restarts everything including the
