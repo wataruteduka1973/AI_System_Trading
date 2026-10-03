@@ -328,3 +328,30 @@ def test_loss_averse_score_penalizes_drawdown_twice_as_much_as_it_rewards_return
     )
     # return +10%, max drawdown 10% (1200 -> 1080): 0.10 - 2 * 0.10
     assert wf.loss_averse_score(result, Decimal("1000")) == pytest.approx(-0.10)
+
+
+def test_rolling_walk_forward_passes_stop_slippage_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[object] = []
+    real_run_replay = wf.run_replay
+
+    def spy(*args: object, **kwargs: object) -> replay.ReplayResult:
+        seen.append(kwargs["stop_slippage"])
+        return real_run_replay(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(wf, "run_replay", spy)
+    wf.run_rolling_walk_forward(
+        [_candle(Decimal("100"), i) for i in range(25)],
+        instrument=_instrument(),
+        timeframe="1m",
+        exchange_code="oanda",
+        rules=CONSERVATIVE_V1_RULES,
+        initial_equity=Decimal("1000000"),
+        signal_generator=lambda history: "hold",
+        train_bars=10,
+        test_bars=5,
+        exit_policy="stop_loss",
+        stop_slippage=Decimal("0.005"),
+    )
+    assert seen and all(value == Decimal("0.005") for value in seen)

@@ -285,6 +285,18 @@ def _protective_exit(
     return None
 
 
+def _slipped_stop_price(
+    price: Decimal, side: fill_sim.PositionSide, stop_slippage: Decimal
+) -> Decimal:
+    """A stop that triggers in a fast market fills past its level: `stop_slippage`
+    (a fraction of the price) worse than the stop -- or than a gapped bar's open --
+    for the position being closed. Take-profits are not slipped: they are limit
+    orders, which never fill worse than their price."""
+    if side == "long":
+        return price * (1 - stop_slippage)
+    return price * (1 + stop_slippage)
+
+
 def run_replay(
     candles: Sequence[Candle],
     *,
@@ -297,6 +309,7 @@ def run_replay(
     signal_generator: BacktestSignalGenerator = generate_dummy_signal,
     warmup_bars: int = 0,
     exit_policy: ExitPolicy = "signal",
+    stop_slippage: Decimal = Decimal(0),
 ) -> ReplayResult:
     """Replay `candles` (ascending by `open_time`, final bars only -- the caller is
     responsible for that, matching `_recent_final_candles`'s live-path filter) bar by
@@ -320,9 +333,15 @@ def run_replay(
     bar's high/low is checked against them before the signal is evaluated
     (see `_protective_exit`). Adding to a position keeps the original levels.
     The default `signal` keeps existing callers (the backtest API) on the
-    signal-only exit behaviour."""
+    signal-only exit behaviour.
+
+    `stop_slippage` fills a triggered stop that fraction worse than its level
+    (see `_slipped_stop_price`); the default 0 fills exactly at the stop, which
+    flatters results in fast crashes."""
     if warmup_bars < 0:
         raise ValueError("warmup_bars must be non-negative")
+    if stop_slippage < 0:
+        raise ValueError("stop_slippage must be non-negative")
     if len(candles) <= warmup_bars:
         return ReplayResult(
             trades=[], ending_equity=initial_equity, ending_position=None, equity_curve=[]
@@ -345,6 +364,8 @@ def run_replay(
                 exit_price, reason = hit
                 held = state.position
                 exit_side: fill_sim.OrderSide = "sell" if held.side == "long" else "buy"
+                if reason == "stop_loss":
+                    exit_price = _slipped_stop_price(exit_price, held.side, stop_slippage)
                 exit_fill = fill_sim.simulate_fill(
                     exchange_code=exchange_code,
                     side=exit_side,
