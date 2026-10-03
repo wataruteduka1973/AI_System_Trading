@@ -4,8 +4,8 @@
 1. signals -- every signal the bot recorded vs. the strategy recomputed on the
    same bars (must match exactly),
 2. missed bars -- bars that closed while the bot was running but were never
-   evaluated (e.g. the machine was asleep); a breakout on such a bar is an
-   entry the live bot never took,
+   evaluated (e.g. the machine was asleep). Flagged only when the signal would have
+   become an order given what the bot held then (entry, addition or exit),
 3. trades -- the bot's fills next to a backtest replay of the same period
    (quantities may differ slightly: the live Risk Gate's daily/weekly baselines
    come from real snapshots, the replay's from its own bars).
@@ -30,7 +30,12 @@ from app.models.trading import Fill, LedgerEntry, TradeOrder
 from app.trading.application.backtest_provisioning import load_final_candles
 from app.trading.application.backtest_replay import _HISTORY_WINDOW, run_replay
 from app.trading.application.live_strategies import resolve_live_strategy
-from app.trading.application.paper_parity import compare_signals, find_unevaluated_bars
+from app.trading.application.paper_parity import (
+    compare_signals,
+    find_unevaluated_bars,
+    held_quantity_at,
+    missed_bar_effect,
+)
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -78,6 +83,14 @@ def _check_bot(db: Session, bot: TradingBot) -> int:
             f"{mismatch.recorded} recomputed={mismatch.recomputed}"
         )
 
+    fills = db.execute(
+        select(TradeOrder.side, Fill.price, Fill.quantity, Fill.executed_at)
+        .join(Fill, Fill.order_id == TradeOrder.id)
+        .where(TradeOrder.account_id == bot.account_id)
+        .order_by(Fill.executed_at)
+    ).all()
+    held_by_fill = [(side, quantity, executed_at) for side, _price, quantity, executed_at in fills]
+
     missed: list[Candle] = []
     for run in runs:
         ended = run.stopped_at or datetime.now(UTC)
@@ -88,8 +101,15 @@ def _check_bot(db: Session, bot: TradingBot) -> int:
         action = strategy.generate(
             [c for c in candles if c.open_time <= candle.open_time][-_HISTORY_WINDOW:]
         )
-        flag = "  <- an entry/exit the bot never took" if action != "hold" else ""
-        print(f"   {candle.open_time:%Y-%m-%d %H:%M} would have been {action}{flag}")
+        held = held_quantity_at(held_by_fill, candle.close_time)
+        effect = missed_bar_effect(action, held)
+        if effect is not None:
+            note = f"  <- a missed {effect} (held {held})"
+        elif action == "sell":
+            note = "  (nothing held; spot cannot short, so no order)"
+        else:
+            note = ""
+        print(f"   {candle.open_time:%Y-%m-%d %H:%M} would have been {action}{note}")
 
     initial_equity = db.scalar(
         select(func.coalesce(func.sum(LedgerEntry.amount), 0)).where(
@@ -108,12 +128,6 @@ def _check_bot(db: Session, bot: TradingBot) -> int:
         warmup_bars=warmup,
         exit_policy=strategy.exit_policy,
     )
-    fills = db.execute(
-        select(TradeOrder.side, Fill.price, Fill.quantity, Fill.executed_at)
-        .join(Fill, Fill.order_id == TradeOrder.id)
-        .where(TradeOrder.account_id == bot.account_id)
-        .order_by(Fill.executed_at)
-    ).all()
     print(f"3. live fills: {len(fills)} / backtest closed trades: {len(replay.trades)}")
     for side, price, quantity, executed_at in fills:
         print(f"   live     {executed_at:%Y-%m-%d %H:%M} {side:<4} {quantity} @ {price}")
