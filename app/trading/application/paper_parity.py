@@ -10,11 +10,16 @@
   no signal. The pipeline evaluates only the latest bar, so a bar missed while
   the worker was down never produces its entry (stops are still caught later);
   these are the places live results can drift from the backtest.
+- `missed_bar_effect`: whether a missed bar's signal would actually have become an
+  order, given what the bot held then. Only those are worth flagging; a spot sell
+  with nothing held would have been refused anyway.
 """
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from app.models.market_data import Candle
@@ -62,3 +67,30 @@ def find_unevaluated_bars(
 ) -> list[Candle]:
     """Bars that closed after `running_since` with no recorded signal."""
     return [c for c in candles if c.close_time > running_since and c.id not in evaluated]
+
+
+MissedEffect = Literal["entry", "addition", "exit"]
+
+
+def held_quantity_at(fills: Sequence[tuple[str, Decimal, datetime]], at: datetime) -> Decimal:
+    """The long quantity a spot bot held at `at`, from its (side, quantity, executed_at)
+    fills up to and including `at`."""
+    return sum(
+        (
+            quantity if side == "buy" else -quantity
+            for side, quantity, executed in fills
+            if executed <= at
+        ),
+        Decimal(0),
+    )
+
+
+def missed_bar_effect(action: str, held_quantity: Decimal) -> MissedEffect | None:
+    """What a signal on a missed bar would have done to a spot (long-only) position, or
+    None if it would not have become an order. A sell with nothing held is refused by
+    the Risk Gate (`binance_no_short`), so missing it changes nothing."""
+    if action == "buy":
+        return "addition" if held_quantity > 0 else "entry"
+    if action == "sell" and held_quantity > 0:
+        return "exit"
+    return None

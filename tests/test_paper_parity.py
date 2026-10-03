@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
+import pytest
 from app.models.market_data import Candle
 from app.trading.application import paper_parity as pp
 
@@ -73,3 +74,39 @@ def test_bars_closed_while_running_but_never_evaluated_are_reported() -> None:
     missed = pp.find_unevaluated_bars(candles, evaluated, running_since=running_since)
 
     assert [c.open_time for c in missed] == [candles[3].open_time]
+
+
+# ---- missed-bar effect (spot, long-only) ----
+
+
+@pytest.mark.parametrize(
+    ("action", "held", "effect"),
+    [
+        ("buy", Decimal(0), "entry"),
+        ("buy", Decimal("0.5"), "addition"),
+        ("sell", Decimal("0.5"), "exit"),
+        # Regression: a sell with nothing held was flagged as "an entry/exit the bot
+        # never took", though the Risk Gate refuses it on spot (binance_no_short).
+        ("sell", Decimal(0), None),
+        ("hold", Decimal(0), None),
+        ("hold", Decimal("0.5"), None),
+    ],
+)
+def test_a_missed_signal_counts_only_if_it_would_have_become_an_order(
+    action: str, held: Decimal, effect: str | None
+) -> None:
+    assert pp.missed_bar_effect(action, held) == effect
+
+
+def test_the_held_quantity_is_rebuilt_from_fills_up_to_that_time() -> None:
+    start = datetime(2026, 10, 1, tzinfo=UTC)
+    fills = [
+        ("buy", Decimal("1.0"), start),
+        ("sell", Decimal("0.4"), start + timedelta(hours=8)),
+        ("sell", Decimal("0.6"), start + timedelta(hours=16)),
+    ]
+
+    assert pp.held_quantity_at(fills, start - timedelta(hours=1)) == 0
+    assert pp.held_quantity_at(fills, start) == Decimal("1.0")
+    assert pp.held_quantity_at(fills, start + timedelta(hours=8)) == Decimal("0.6")
+    assert pp.held_quantity_at(fills, start + timedelta(hours=20)) == 0
