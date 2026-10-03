@@ -1,14 +1,18 @@
 import hashlib
-from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import Boolean, func, literal_column, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.exchanges.types import CandlePoint, timeframe_delta
+from app.market_data.domain.coverage import (
+    GapWindow,
+    classify_candle_coverage,
+    find_internal_gaps,
+    is_expected_market_time,
+)
 from app.models.connections import (
     Exchange,
     ExchangeConnection,
@@ -28,87 +32,6 @@ class MarketDataAccessError(RuntimeError):
 
 class DuplicateBackfillError(RuntimeError):
     pass
-
-
-@dataclass(frozen=True)
-class GapWindow:
-    from_time: datetime
-    to_time: datetime
-    expected_count: int
-    missing_count: int
-    reason_code: str = "internal_missing_candles"
-
-    def as_dict(self) -> dict[str, object]:
-        values = asdict(self)
-        values["from_time"] = self.from_time.isoformat()
-        values["to_time"] = self.to_time.isoformat()
-        return values
-
-
-@dataclass
-class IngestionReport:
-    requested_from: datetime
-    requested_to: datetime
-    actual_first_candle_time: datetime | None = None
-    actual_last_candle_time: datetime | None = None
-    source_rows_received: int = 0
-    rows_inserted: int = 0
-    rows_updated: int = 0
-    empty_source_window_count: int = 0
-    empty_source_window_samples: list[dict[str, str]] = field(default_factory=list)
-
-    @property
-    def rows_written(self) -> int:
-        return self.rows_inserted + self.rows_updated
-
-    def record_empty_window(self, start: datetime, end: datetime) -> None:
-        self.empty_source_window_count += 1
-        if len(self.empty_source_window_samples) < 20:
-            self.empty_source_window_samples.append(
-                {"from_time": start.isoformat(), "to_time": end.isoformat()}
-            )
-
-    def record_candles(self, points: list[CandlePoint]) -> None:
-        if not points:
-            return
-        first = min(point.open_time for point in points)
-        last = max(point.open_time for point in points)
-        if self.actual_first_candle_time is None or first < self.actual_first_candle_time:
-            self.actual_first_candle_time = first
-        if self.actual_last_candle_time is None or last > self.actual_last_candle_time:
-            self.actual_last_candle_time = last
-
-    def as_validation_result(
-        self, coverage: dict[str, object], gaps: list[GapWindow]
-    ) -> dict[str, object]:
-        coverage_status = coverage.get("coverage_status")
-        safe_reason_code = coverage.get("source_limitation")
-        if safe_reason_code is None and coverage_status == "partial_gaps":
-            safe_reason_code = "internal_missing_candles"
-        elif safe_reason_code is None and coverage_status == "empty":
-            safe_reason_code = "empty_source_response"
-        return {
-            "requested_from": self.requested_from.isoformat(),
-            "requested_to": self.requested_to.isoformat(),
-            "actual_first_candle_time": (
-                self.actual_first_candle_time.isoformat() if self.actual_first_candle_time else None
-            ),
-            "actual_last_candle_time": (
-                self.actual_last_candle_time.isoformat() if self.actual_last_candle_time else None
-            ),
-            "source_rows_received": self.source_rows_received,
-            "rows_inserted": self.rows_inserted,
-            "rows_updated": self.rows_updated,
-            "rows_written": self.rows_written,
-            "empty_source_window_count": self.empty_source_window_count,
-            "empty_source_window_samples": self.empty_source_window_samples,
-            "final_candles_only": True,
-            "duplicates": "upserted",
-            "internal_gap_count": len(gaps),
-            "internal_gap_samples": [gap.as_dict() for gap in gaps[:20]],
-            "safe_reason_code": safe_reason_code,
-            **coverage,
-        }
 
 
 def ensure_no_overlapping_backfill(
@@ -134,48 +57,6 @@ def ensure_no_overlapping_backfill(
     )
     if duplicate_id is not None:
         raise DuplicateBackfillError("An overlapping backfill is already queued or running")
-
-
-def find_internal_gaps(
-    open_times: list[datetime], timeframe: str, exchange_code: str
-) -> list[GapWindow]:
-    delta = timeframe_delta(timeframe)
-    ordered = sorted(set(open_times))
-    gaps: list[GapWindow] = []
-    for previous, current in zip(ordered, ordered[1:], strict=False):
-        missing_times: list[datetime] = []
-        candidate = previous + delta
-        while candidate < current:
-            if _is_expected_market_time(exchange_code, candidate):
-                missing_times.append(candidate)
-            candidate += delta
-        if not missing_times:
-            continue
-        segment_start = missing_times[0]
-        segment_count = 1
-        for prior_missing, missing in zip(missing_times, missing_times[1:], strict=False):
-            if missing != prior_missing + delta:
-                gaps.append(
-                    GapWindow(
-                        from_time=segment_start,
-                        to_time=prior_missing + delta,
-                        expected_count=segment_count,
-                        missing_count=segment_count,
-                    )
-                )
-                segment_start = missing
-                segment_count = 1
-            else:
-                segment_count += 1
-        gaps.append(
-            GapWindow(
-                from_time=segment_start,
-                to_time=missing_times[-1] + delta,
-                expected_count=segment_count,
-                missing_count=segment_count,
-            )
-        )
-    return gaps
 
 
 def persist_internal_gaps(
@@ -262,18 +143,6 @@ def persist_internal_gaps(
     return gaps
 
 
-def _is_expected_market_time(exchange_code: str, candle_open_time: datetime) -> bool:
-    if exchange_code != "oanda":
-        return True
-    new_york_time = candle_open_time.astimezone(ZoneInfo("America/New_York"))
-    weekday = new_york_time.weekday()
-    if weekday == 5:
-        return False
-    if weekday == 4 and new_york_time.hour >= 17:
-        return False
-    return not (weekday == 6 and new_york_time.hour < 17)
-
-
 def _gap_is_filled(
     gap: MarketDataGap,
     stored_open_times: set[datetime],
@@ -284,7 +153,7 @@ def _gap_is_filled(
     candidate = gap.from_time
     expected = 0
     while candidate < gap.to_time:
-        if _is_expected_market_time(exchange_code, candidate):
+        if is_expected_market_time(exchange_code, candidate):
             expected += 1
             if candidate not in stored_open_times:
                 return False
@@ -295,54 +164,6 @@ def _gap_is_filled(
 def _advisory_lock_key(namespace: str, *parts: object) -> int:
     lock_material = ":".join((namespace, *(str(part) for part in parts))).encode()
     return int.from_bytes(hashlib.blake2b(lock_material, digest_size=8).digest(), signed=True)
-
-
-def classify_candle_coverage(
-    *,
-    exchange_code: str | None,
-    timeframe: str,
-    requested_from: datetime | None,
-    requested_to: datetime | None,
-    stored_count: int,
-    actual_from: datetime | None,
-    actual_to: datetime | None,
-    internal_missing_count: int | None = None,
-) -> dict[str, object]:
-    delta = timeframe_delta(timeframe)
-    expected_count: int | None = None
-    missing_count: int | None = None
-    coverage_status = "empty"
-    if stored_count and actual_from is not None and actual_to is not None:
-        missing_count = internal_missing_count
-        if exchange_code == "binance":
-            if requested_from is not None and requested_to is not None:
-                expected_count = max(0, int((requested_to - requested_from) / delta))
-            if missing_count is None:
-                actual_expected = max(1, int((actual_to - actual_from) / delta))
-                missing_count = max(0, actual_expected - stored_count)
-        starts_in_range = requested_from is None or actual_from <= requested_from + delta
-        ends_in_range = requested_to is None or actual_to >= requested_to - delta
-        if starts_in_range and ends_in_range and (missing_count in {None, 0}):
-            coverage_status = "complete"
-        elif missing_count not in {None, 0}:
-            coverage_status = "partial_gaps"
-        else:
-            coverage_status = "partial_source_limit"
-    return {
-        "requested_from": requested_from.isoformat() if requested_from else None,
-        "requested_to": requested_to.isoformat() if requested_to else None,
-        "actual_from": actual_from.isoformat() if actual_from else None,
-        "actual_to": actual_to.isoformat() if actual_to else None,
-        "stored_count": stored_count,
-        "expected_count": expected_count,
-        "missing_count": missing_count,
-        "coverage_status": coverage_status,
-        "source_limitation": (
-            "binance_testnet_periodic_reset"
-            if exchange_code == "binance" and coverage_status == "partial_source_limit"
-            else None
-        ),
-    }
 
 
 def build_candle_coverage(
