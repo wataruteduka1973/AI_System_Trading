@@ -24,7 +24,7 @@
 
 | 計画書 | 内容 |
 |---|---|
-| [market-data-services-consolidation.md](market-data-services-consolidation.md) | 市場データの旧サービス層を app/market_data/ に統合(閲覧系の認可クエリの扱いは別判断として残る) |
+| [market-data-services-consolidation.md](market-data-services-consolidation.md) | 市場データの旧サービス層を app/market_data/ に統合(閲覧系の認可も同じ条件に揃えた) |
 | [horizon4-lite-backtest.md](horizon4-lite-backtest.md) | バックテスト基盤(Unit 1〜6) |
 | [trading-halt-mvp.md](trading-halt-mvp.md) | trading_haltの発動・解除(MVP) |
 | [durable-market-data-worker.md](durable-market-data-worker.md) | 市場データのDurable Worker(Horizon 1) |

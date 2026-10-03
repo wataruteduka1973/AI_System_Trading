@@ -44,14 +44,14 @@ class StoredSecrets(Protocol):
     def get(self, secret_ref: str) -> dict[str, str]: ...
 
 
-def selected_account_statement(
-    workspace_id: UUID,
-) -> Select[tuple[Exchange, ExchangeConnection, ExternalAccount, WorkspaceAccountSelection]]:
-    """Rows of (exchange, connection, account, selection) the workspace may use; callers
-    narrow it to one exchange or one instrument."""
+def _restrict_to_selected_account[T: tuple[object, ...]](
+    statement: Select[T], workspace_id: UUID
+) -> Select[T]:
+    """Joins `statement` (whose FROM already has `Exchange`) to the workspace's selected,
+    active account on a verified connection of that exchange in the account's own
+    environment. Every access decision in this module goes through these conditions."""
     return (
-        select(Exchange, ExchangeConnection, ExternalAccount, WorkspaceAccountSelection)
-        .join(
+        statement.join(
             WorkspaceAccountSelection,
             (WorkspaceAccountSelection.workspace_id == workspace_id)
             & (WorkspaceAccountSelection.exchange_id == Exchange.id),
@@ -68,8 +68,31 @@ def selected_account_statement(
             ExchangeConnection.status == "verified",
             ExternalAccount.environment == ExchangeConnection.environment,
         )
-        .with_for_update(read=True)
     )
+
+
+def selected_account_statement(
+    workspace_id: UUID,
+) -> Select[tuple[Exchange, ExchangeConnection, ExternalAccount, WorkspaceAccountSelection]]:
+    """Rows of (exchange, connection, account, selection) the workspace may use, under a
+    shared lock that holds the decision until the caller commits; callers narrow it to
+    one exchange or one instrument."""
+    return _restrict_to_selected_account(
+        select(Exchange, ExchangeConnection, ExternalAccount, WorkspaceAccountSelection),
+        workspace_id,
+    ).with_for_update(read=True)
+
+
+def instrument_is_readable(db: Session, workspace_id: UUID, instrument_id: UUID) -> bool:
+    """Whether the workspace may read stored market data for `instrument_id`: the same
+    account conditions as every other decision here, without the lock (nothing is
+    written on the strength of it) and without the endpoint or credential checks
+    (reading stored candles never contacts the exchange)."""
+    statement = _restrict_to_selected_account(
+        select(Instrument.id).join(Exchange, Instrument.exchange_id == Exchange.id),
+        workspace_id,
+    ).where(Instrument.id == instrument_id, Instrument.status == "active")
+    return db.scalar(statement) is not None
 
 
 def ensure_sandbox_endpoint(exchange_code: str, connection: ExchangeConnection) -> None:
