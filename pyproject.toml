@@ -61,6 +61,9 @@ packages = ["app"]
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers"
 testpaths = ["tests"]
+markers = [
+  "postgres: needs a dedicated PostgreSQL via WORKER_TEST_DATABASE_URL; CI's worker-storage job runs exactly these (-m postgres)",
+]
 
 [tool.ruff]
 target-version = "py313"
