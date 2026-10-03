@@ -1,7 +1,7 @@
 """Standalone durable market-data worker process.
 
 Run with `python -m app.market_data.worker`. Requires the database to already be at the
-worker's required Alembic revision; the API's lifespan no longer starts any collection.
+latest migration this code ships with; the API's lifespan no longer starts any collection.
 """
 
 import argparse
@@ -9,8 +9,10 @@ import asyncio
 import logging
 import signal
 import sys
+from pathlib import Path
 
 from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 
 from app.core.config import settings
 from app.core.logging import configure_logging
@@ -25,17 +27,28 @@ from app.market_data.worker.runner import WorkerRunner
 from app.security.secret_store import get_secret_store
 
 logger = logging.getLogger(__name__)
-REQUIRED_REVISIONS = frozenset({"20260831_0005"})
+MIGRATIONS_DIRECTORY = Path(__file__).resolve().parents[3] / "alembic"
+
+
+def _required_revisions() -> frozenset[str]:
+    """The migration head(s) this code ships with. The worker runs only against exactly
+    this schema -- neither older nor newer -- and the requirement moves with every new
+    migration. It used to be a hard-coded revision (`20260831_0005`), which made the
+    worker refuse a correctly migrated database from the next migration on (2026-09-20
+    to 2026-10-03, unnoticed because the launcher treats the worker as non-critical)."""
+    return frozenset(ScriptDirectory(str(MIGRATIONS_DIRECTORY)).get_heads())
 
 
 def _check_schema_revision() -> None:
+    required = _required_revisions()
     with engine.connect() as connection:
         heads = frozenset(MigrationContext.configure(connection).get_current_heads())
-    if heads != REQUIRED_REVISIONS:
+    if heads != required:
         raise RuntimeError(
             "Database schema is at revision(s) "
-            f"{sorted(heads) or ['<none>']}, but the worker requires exactly "
-            f"{sorted(REQUIRED_REVISIONS)}. Run `alembic upgrade head`, then restart the worker."
+            f"{sorted(heads) or ['<none>']}, but this code's migrations end at "
+            f"{sorted(required)}. If the database is behind, run `alembic upgrade head`; "
+            "if it is ahead, update this checkout. Then restart the worker."
         )
 
 
