@@ -64,12 +64,12 @@ def application_errors() -> Iterator[None]:
 
 def _require_workspace(db: Session, workspace_id: UUID) -> None:
     with application_errors():
-        market_data_application._require_workspace(db, workspace_id)
+        market_data_application.require_workspace(db, workspace_id)
 
 
 def _require_instrument_access(db: Session, workspace_id: UUID, instrument_id: UUID) -> None:
     with application_errors():
-        market_data_application._require_instrument_access(db, workspace_id, instrument_id)
+        market_data_application.require_instrument_access(db, workspace_id, instrument_id)
 
 
 @router.post(

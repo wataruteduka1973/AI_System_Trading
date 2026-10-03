@@ -68,19 +68,19 @@ def _require_instrument_access(db: Session, workspace_id: UUID, instrument_id: U
     """Mirrors `market_data.py`'s own wrapper around the same application-layer
     checks -- an instrument only counts as usable once the workspace has an
     active, verified connection selected for its exchange (see
-    `use_cases._require_instrument_access`) -- **except** a `binance_public`
+    `use_cases.require_instrument_access`) -- **except** a `binance_public`
     research instrument (2026-09-26), which has no `ExchangeConnection`/
     `WorkspaceAccountSelection` at all by design (it is public, read-only
     market data, not a tradeable account): only workspace existence is
     checked for it."""
     try:
-        market_data_application._require_workspace(db, workspace_id)
+        market_data_application.require_workspace(db, workspace_id)
     except market_data_application.MarketDataApplicationError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     if _is_research_instrument(db, instrument_id):
         return
     try:
-        market_data_application._require_instrument_access(db, workspace_id, instrument_id)
+        market_data_application.require_instrument_access(db, workspace_id, instrument_id)
     except market_data_application.MarketDataApplicationError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 

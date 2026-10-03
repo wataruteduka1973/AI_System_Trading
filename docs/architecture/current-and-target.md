@@ -153,9 +153,10 @@ Coverage range validation and latest-job fallback moved out of the route; calcul
   data through a connection (selected active account, verified connection, matching environment,
   Practice/Testnet endpoint, shared lock until commit). The Worker, the realtime stream and the
   API's pre-check all resolve access through it, so the API refuses (409) what the Worker would.
-  `use_cases._require_instrument_access` (view authorization for read endpoints and backtests)
-  still has its own looser query; tightening it changes read behavior and needs a separate
-  decision.
+  Read authorization for stored data (`use_cases.require_instrument_access`: candle listing,
+  coverage, backtests) uses the same account conditions via `access.instrument_is_readable`,
+  without the lock and without endpoint/credential checks (reading never contacts the
+  exchange). Since 2026-10-03; before that it had its own looser query.
 
 SQLAlchemy sessions are an intentional transitional dependency of the use cases, as with
 connection verification. Read-only candle/job/subscription listing still lives in the route. Backfill execution and polling

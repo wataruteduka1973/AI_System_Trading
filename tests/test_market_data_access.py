@@ -55,24 +55,51 @@ class _Secrets:
         return self.values
 
 
+ACCOUNT_CONDITIONS = (
+    "instrument.id =",
+    "instrument.status =",
+    "exchange.status =",
+    "workspace.status =",
+    "external_account.status =",
+    "exchange_connection.status =",
+    "exchange_connection.workspace_id =",
+    "exchange_connection.exchange_id = fx.exchange.id",
+    "external_account.environment = fx.exchange_connection.environment",
+)
+
+
+def _sql(statement: object) -> str:
+    return str(statement.compile(dialect=postgresql.dialect()))  # type: ignore[attr-defined]
+
+
 def test_the_instrument_query_carries_every_condition_the_worker_applies() -> None:
     db = _db_returning(_row())
     access.resolve_instrument_access(db, uuid4(), uuid4())
 
-    sql = str(db.execute.call_args.args[0].compile(dialect=postgresql.dialect()))
-    for condition in (
-        "instrument.id =",
-        "instrument.status =",
-        "exchange.status =",
-        "workspace.status =",
-        "external_account.status =",
-        "exchange_connection.status =",
-        "exchange_connection.workspace_id =",
-        "exchange_connection.exchange_id = fx.exchange.id",
-        "external_account.environment = fx.exchange_connection.environment",
-    ):
+    sql = _sql(db.execute.call_args.args[0])
+    for condition in ACCOUNT_CONDITIONS:
         assert condition in sql, condition
     assert sql.rstrip().endswith("FOR SHARE")
+
+
+def test_reading_stored_data_uses_the_same_conditions_without_a_lock() -> None:
+    # Before 2026-10-03 the read check skipped the exchange/workspace status and the
+    # environment match, so an inactive workspace could still list candles.
+    db = MagicMock()
+    db.scalar.return_value = None
+
+    assert access.instrument_is_readable(db, uuid4(), uuid4()) is False
+    sql = _sql(db.scalar.call_args.args[0])
+    for condition in ACCOUNT_CONDITIONS:
+        assert condition in sql, condition
+    assert "FOR SHARE" not in sql
+
+
+def test_reading_is_allowed_when_a_row_matches() -> None:
+    db = MagicMock()
+    db.scalar.return_value = uuid4()
+
+    assert access.instrument_is_readable(db, uuid4(), uuid4()) is True
 
 
 def test_no_matching_row_is_access_unavailable() -> None:
@@ -137,15 +164,15 @@ def test_complete_credentials_on_a_sandbox_connection_pass() -> None:
     )
 
 
-def test_market_data_infrastructure_resolves_account_selection_only_in_access_module() -> None:
-    # The three copies of this query drifted apart before; keep it in one place.
-    infrastructure = APP / "market_data" / "infrastructure"
+def test_market_data_resolves_account_selection_only_in_access_module() -> None:
+    # Four copies of this query drifted apart before (three on the write side, one on
+    # the read side); keep it in one place across the whole market-data package.
     referencing = sorted(
-        path.name
-        for path in infrastructure.glob("*.py")
+        path.relative_to(APP / "market_data").as_posix()
+        for path in (APP / "market_data").rglob("*.py")
         if any(
             isinstance(node, ast.Name) and node.id == "WorkspaceAccountSelection"
             for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
         )
     )
-    assert referencing == ["access.py"]
+    assert referencing == ["infrastructure/access.py"]

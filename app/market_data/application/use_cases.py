@@ -9,7 +9,11 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.market_data.infrastructure.access import ACCESS_ERROR_CODES, MarketDataAccessError
+from app.market_data.infrastructure.access import (
+    ACCESS_ERROR_CODES,
+    MarketDataAccessError,
+    instrument_is_readable,
+)
 from app.market_data.infrastructure.backfill_locks import (
     DuplicateBackfillError,
     advisory_lock_key,
@@ -17,13 +21,6 @@ from app.market_data.infrastructure.backfill_locks import (
 )
 from app.market_data.infrastructure.candle_store import build_candle_coverage
 from app.models.audit import AuditLog
-from app.models.connections import (
-    Exchange,
-    ExchangeConnection,
-    ExternalAccount,
-    WorkspaceAccountSelection,
-)
-from app.models.instruments import Instrument
 from app.models.market_data import BackfillJob, MarketDataSubscription
 from app.models.workspace import Workspace
 
@@ -103,34 +100,16 @@ def _lock_collection(db: Session, workspace_id: UUID, instrument_id: UUID) -> No
     )
 
 
-def _require_workspace(db: Session, workspace_id: UUID) -> None:
+def require_workspace(db: Session, workspace_id: UUID) -> None:
     if db.get(Workspace, workspace_id) is None:
         raise MarketDataApplicationError("workspace_not_found", "Workspace not found")
 
 
-def _require_instrument_access(db: Session, workspace_id: UUID, instrument_id: UUID) -> None:
-    accessible = db.scalar(
-        select(Instrument.id)
-        .join(Exchange, Instrument.exchange_id == Exchange.id)
-        .join(
-            WorkspaceAccountSelection,
-            (WorkspaceAccountSelection.workspace_id == workspace_id)
-            & (WorkspaceAccountSelection.exchange_id == Exchange.id),
-        )
-        .join(
-            ExternalAccount,
-            ExternalAccount.id == WorkspaceAccountSelection.external_account_id,
-        )
-        .join(ExchangeConnection, ExchangeConnection.id == ExternalAccount.connection_id)
-        .where(
-            Instrument.id == instrument_id,
-            Instrument.status == "active",
-            ExternalAccount.status == "active",
-            ExchangeConnection.workspace_id == workspace_id,
-            ExchangeConnection.status == "verified",
-        )
-    )
-    if accessible is None:
+def require_instrument_access(db: Session, workspace_id: UUID, instrument_id: UUID) -> None:
+    """Read authorization for an instrument's stored market data (candles, coverage,
+    backtests), under the same account conditions as the write-side check
+    (`access.instrument_is_readable`, 2026-10-03)."""
+    if not instrument_is_readable(db, workspace_id, instrument_id):
         raise MarketDataApplicationError(
             "instrument_unavailable",
             "Select an active account with a verified connection for this instrument",
@@ -155,8 +134,8 @@ def enqueue_backfill(
         _validate_timeframe(payload.timeframe)
         if not 1 <= payload.days <= 365:
             raise MarketDataApplicationError("invalid_input", "days must be between 1 and 365")
-        _require_workspace(db, workspace_id)
-        _require_instrument_access(db, workspace_id, payload.instrument_id)
+        require_workspace(db, workspace_id)
+        require_instrument_access(db, workspace_id, payload.instrument_id)
         now = datetime.now(UTC)
         requested_from = now - timedelta(days=payload.days)
         try:
@@ -209,8 +188,8 @@ def get_coverage(
     requested_to: datetime | None = None,
 ) -> dict[str, object]:
     _validate_timeframe(timeframe)
-    _require_workspace(db, workspace_id)
-    _require_instrument_access(db, workspace_id, instrument_id)
+    require_workspace(db, workspace_id)
+    require_instrument_access(db, workspace_id, instrument_id)
     if (requested_from is None) != (requested_to is None):
         raise MarketDataApplicationError(
             "invalid_input", "requested_from and requested_to must be provided together"
@@ -261,8 +240,8 @@ def update_subscriptions(
         frames = SUPPORTED_TIMEFRAMES if timeframe is None else (timeframe,)
         for frame in frames:
             _validate_timeframe(frame)
-        _require_workspace(db, workspace_id)
-        _require_instrument_access(db, workspace_id, instrument_id)
+        require_workspace(db, workspace_id)
+        require_instrument_access(db, workspace_id, instrument_id)
         if enabled:
             _check_access(validate_configuration, db, workspace_id, instrument_id)
         _lock_collection(db, workspace_id, instrument_id)
