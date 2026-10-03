@@ -18,10 +18,10 @@ from sqlalchemy.orm import Session
 
 from app.exchanges.binance_public import BinancePublicClient
 from app.exchanges.types import timeframe_delta
+from app.market_data.infrastructure.candle_store import upsert_candle_points
 from app.models.connections import Exchange, Market
 from app.models.instruments import Instrument
 from app.models.market_data import Candle
-from app.services.market_data import upsert_candle_points
 
 RESEARCH_EXCHANGE_CODE = "binance_public"
 _PAGE_SIZE_CANDLES = 1000  # matches Binance's own per-request cap (MAX_KLINES_PER_REQUEST)

@@ -30,19 +30,15 @@ from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.exchanges.binance import BinanceSpotTestnetClient
-from app.exchanges.oanda import OandaPracticeClient
-from app.models.connections import (
-    Exchange,
-    ExchangeConnection,
-    ExternalAccount,
-    WorkspaceAccountSelection,
+from app.market_data.infrastructure.access import (
+    MarketDataAccessError,
+    ensure_sandbox_endpoint,
+    load_credentials,
+    selected_account_statement,
 )
-from app.models.workspace import Workspace
-from app.services.market_data import MarketDataAccessError
+from app.models.connections import Exchange, ExchangeConnection, ExternalAccount
 
 _SUPPORTED_EXCHANGES = ("oanda", "binance")
 
@@ -94,34 +90,13 @@ def resolve_stream_connection_credentials(
 def _fetch_row(
     db: Session, workspace_id: UUID, exchange: str
 ) -> tuple[ExchangeConnection, ExternalAccount] | None:
-    # Shared lock mirrors PageAccess.resolve: holds the authorization
-    # decision stable through commit.
     row = db.execute(
-        select(ExchangeConnection, ExternalAccount)
-        .join(Exchange, ExchangeConnection.exchange_id == Exchange.id)
-        .join(
-            WorkspaceAccountSelection,
-            (WorkspaceAccountSelection.workspace_id == workspace_id)
-            & (WorkspaceAccountSelection.exchange_id == Exchange.id),
-        )
-        .join(Workspace, Workspace.id == WorkspaceAccountSelection.workspace_id)
-        .join(ExternalAccount, ExternalAccount.id == WorkspaceAccountSelection.external_account_id)
-        .where(
-            Exchange.code == exchange,
-            Exchange.status == "active",
-            Workspace.id == workspace_id,
-            Workspace.status == "active",
-            ExternalAccount.status == "active",
-            ExchangeConnection.id == ExternalAccount.connection_id,
-            ExchangeConnection.workspace_id == workspace_id,
-            ExchangeConnection.status == "verified",
-            ExternalAccount.environment == ExchangeConnection.environment,
-        )
-        .with_for_update(read=True)
+        selected_account_statement(workspace_id).where(Exchange.code == exchange)
     ).one_or_none()
     if row is None:
         return None
-    return (row[0], row[1])
+    _exchange, connection, account, _selection = row
+    return (connection, account)
 
 
 def _credentials_from_row(
@@ -130,36 +105,22 @@ def _credentials_from_row(
     secrets: SecretReader,
     exchange: str,
 ) -> StreamConnectionCredentials:
-    if exchange == "binance" and connection.environment == "testnet":
-        BinanceSpotTestnetClient._validate_testnet_url(connection.api_base_url)
-    elif exchange == "oanda" and connection.environment == "practice":
-        OandaPracticeClient._validate_practice_url(connection.api_base_url)
-    else:
-        raise MarketDataAccessError("Unsupported environment", "access_unavailable")
-    if not connection.secret_ref:
-        raise MarketDataAccessError("Credentials missing", "credentials_missing")
-    try:
-        credentials = secrets.get(connection.secret_ref)
-    except (KeyError, ValueError, OSError) as exc:
-        raise MarketDataAccessError("Credentials unreadable", "credentials_unreadable") from exc
+    ensure_sandbox_endpoint(exchange, connection)
+    credentials = load_credentials(secrets, connection.secret_ref, exchange)
     if exchange == "oanda":
-        token = credentials.get("token")
-        if not token:
-            raise MarketDataAccessError("Credentials missing", "credentials_missing")
         try:
             account_id = secrets.decrypt_text(account.external_account_ref_encrypted)
         except ValueError as exc:
             raise MarketDataAccessError("Credentials unreadable", "credentials_unreadable") from exc
         return StreamConnectionCredentials(
-            exchange="oanda", base_url=connection.api_base_url, token=token, account_id=account_id
+            exchange="oanda",
+            base_url=connection.api_base_url,
+            token=credentials["token"],
+            account_id=account_id,
         )
-    api_key = credentials.get("api_key")
-    secret_key = credentials.get("secret_key")
-    if not api_key or not secret_key:
-        raise MarketDataAccessError("Credentials missing", "credentials_missing")
     return StreamConnectionCredentials(
         exchange="binance",
         base_url=connection.api_base_url,
-        api_key=api_key,
-        secret_key=secret_key,
+        api_key=credentials["api_key"],
+        secret_key=credentials["secret_key"],
     )

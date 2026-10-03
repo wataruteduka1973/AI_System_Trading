@@ -343,7 +343,7 @@ from app.market_data.infrastructure.leases import FeedKey, WorkRef, LeaseStore
 from app.market_data.infrastructure.page_access import PageAccess
 from app.market_data.infrastructure.pages import PageStore
 from app.market_data.application.execute_page import ExecuteMarketDataPage
-from app.services.market_data import CandleIngestionService
+import app.market_data.infrastructure.pages as pages_module
 from test_worker_leases_postgres import FixtureSecrets, FixtureCandles
 engine = create_engine({TEST_URL!r})
 leases = LeaseStore(sessionmaker(engine, autoflush=False, expire_on_commit=False))
@@ -351,11 +351,11 @@ pages = PageStore(leases, PageAccess(FixtureSecrets(), binance=FixtureCandles())
 work = WorkRef(FeedKey(UUID('{work.feed.workspace_id}'), UUID('{work.feed.instrument_id}'), '1m'),
                'backfill', UUID('{work.id}'))
 if {before_commit!r}:
-    original = CandleIngestionService._upsert_points
+    original = pages_module.upsert_candle_points
     def interrupted(*args, **kwargs):
         original(*args, **kwargs)
         os._exit(17)
-    CandleIngestionService._upsert_points = interrupted
+    pages_module.upsert_candle_points = interrupted
 outcome = asyncio.run(ExecuteMarketDataPage(pages).execute(leases.claim(work, uuid4())))
 os._exit(18 if outcome == 'saved' else 19)
 """

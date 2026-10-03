@@ -8,11 +8,11 @@ from app.api.routes import market_data as market_data_routes
 from app.db.session import get_db
 from app.main import app
 from app.market_data.application import use_cases as market_data_application
+from app.market_data.infrastructure.access import MarketDataAccessError
 from app.models.market_data import BackfillJob, Candle, MarketDataSubscription
 from app.models.workspace import AppUser, Workspace
 from app.schemas.market_data import MarketDataCollectionUpdate
 from app.security.rbac import require_operator_role, require_viewer_role
-from app.services.market_data import MarketDataAccessError
 from fastapi.testclient import TestClient
 from sqlalchemy.dialects import postgresql
 
@@ -25,7 +25,7 @@ def test_bulk_collection_commits_all_timeframes_once(monkeypatch, enabled: bool)
     db = MagicMock()
     preflight = MagicMock()
     update = MagicMock()
-    monkeypatch.setattr(market_data_routes, "_validate_collection_configuration", preflight)
+    monkeypatch.setattr(market_data_routes, "validate_collection_access", preflight)
     monkeypatch.setattr(market_data_application, "_set_subscription", update)
     result = market_data_routes.update_all_market_data_subscriptions(
         workspace_id,
@@ -59,8 +59,8 @@ def test_unreadable_credentials_reject_before_any_job_or_subscription_write(
     monkeypatch.setattr(market_data_application, "ensure_no_overlapping_backfill", MagicMock())
     monkeypatch.setattr(market_data_routes, "get_secret_store", MagicMock())
     monkeypatch.setattr(
-        market_data_routes.CandleIngestionService,
-        "validate_configuration",
+        market_data_routes,
+        "check_collection_access",
         MagicMock(
             side_effect=MarketDataAccessError(
                 "private-secret-never-return", "credentials_unreadable"
@@ -93,6 +93,44 @@ def test_unreadable_credentials_reject_before_any_job_or_subscription_write(
     assert "private-secret" not in response.text
     session.add.assert_not_called()
     session.commit.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("code", "expected_phrase"),
+    [
+        ("access_unavailable", "口座の選択と接続の検証状態"),
+        ("credentials_missing", "API資格情報が登録されていません"),
+        ("credentials_unreadable", "保存済み資格情報を読み込めません"),
+        ("configuration_error", "口座の選択と接続の検証状態"),  # unknown codes fall back
+    ],
+)
+def test_each_access_refusal_is_a_409_with_its_own_message(
+    monkeypatch, code: str, expected_phrase: str
+) -> None:
+    # Before Unit 3 every refusal returned the "credentials unreadable" message.
+    workspace_id, instrument_id = uuid4(), uuid4()
+    session = MagicMock()
+    session.get.return_value = Workspace(id=workspace_id, name="Personal", status="active")
+    session.scalar.return_value = instrument_id
+    monkeypatch.setattr(market_data_application, "ensure_no_overlapping_backfill", MagicMock())
+    monkeypatch.setattr(market_data_routes, "get_secret_store", MagicMock())
+    monkeypatch.setattr(
+        market_data_routes,
+        "check_collection_access",
+        MagicMock(side_effect=MarketDataAccessError("internal detail", code)),
+    )
+    _override_database(session)
+    try:
+        response = client.post(
+            f"/api/v1/workspaces/{workspace_id}/candle-backfills",
+            json={"instrument_id": str(instrument_id), "timeframe": "1m", "days": 30},
+        )
+    finally:
+        app.dependency_overrides.clear()
+    assert response.status_code == 409
+    assert expected_phrase in response.json()["detail"]
+    assert "internal detail" not in response.text
+    session.add.assert_not_called()
 
 
 def test_backfill_list_filters_timeframe_and_workspace() -> None:

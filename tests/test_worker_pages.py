@@ -7,12 +7,12 @@ from uuid import uuid4
 import pytest
 from app.exchanges.binance import BinanceApiError, BinanceAuthenticationError
 from app.exchanges.types import CandlePoint
+from app.market_data.infrastructure.access import MarketDataAccessError
 from app.market_data.infrastructure.leases import FeedKey, LeaseClaim, WorkRef
 from app.market_data.infrastructure.models import WorkerBackfill
 from app.market_data.infrastructure.page_access import AccessSnapshot
 from app.market_data.infrastructure.page_errors import classify_failure
 from app.market_data.infrastructure.pages import PreparedPage, final_points, restore_report
-from app.services.market_data import MarketDataAccessError
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 from oandapyV20.exceptions import V20Error
 

@@ -144,7 +144,7 @@ def test_failed_enqueue_rolls_back_without_committing(monkeypatch) -> None:
     db = MagicMock()
     db.commit.side_effect = RuntimeError("commit failed")
     monkeypatch.setattr(cases, "ensure_no_overlapping_backfill", MagicMock())
-    monkeypatch.setattr(routes, "_validate_collection_configuration", MagicMock())
+    monkeypatch.setattr(routes, "validate_collection_access", MagicMock())
     with pytest.raises(RuntimeError, match="commit failed"):
         routes.create_candle_backfill(
             uuid4(), CandleBackfillCreate(instrument_id=uuid4()), db, "owner"

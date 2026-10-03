@@ -190,10 +190,13 @@ def test_auto_start_collection_skips_an_already_overlapping_backfill(
     instruments_routes._auto_start_collection(db, uuid4(), uuid4())  # does not raise
 
 
-def test_auto_start_collection_reraises_other_backfill_errors(
+def test_auto_start_collection_maps_other_backfill_errors_to_http(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Regression: these used to escape the sync endpoint as an unmapped application
+    # error (a 500); they are now mapped like the market-data routes map them.
     from app.market_data.application import use_cases as market_data_application
+    from fastapi import HTTPException
 
     db = MagicMock()
     monkeypatch.setattr(market_data_application, "update_subscriptions", MagicMock())
@@ -207,8 +210,9 @@ def test_auto_start_collection_reraises_other_backfill_errors(
         ),
     )
 
-    with pytest.raises(market_data_application.MarketDataApplicationError):
+    with pytest.raises(HTTPException) as raised:
         instruments_routes._auto_start_collection(db, uuid4(), uuid4())
+    assert (raised.value.status_code, raised.value.detail) == (409, "no credentials")
 
 
 def test_sync_requires_selected_verified_account() -> None:
