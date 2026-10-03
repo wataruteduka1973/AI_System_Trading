@@ -1,5 +1,6 @@
 import type { ConnectionSummary } from '../connections/types'
 import type { WorkspaceInstrument } from '../instruments/types'
+import { findStaleBots } from './botStaleness'
 import type { BotRunSummary, TradingAccount, TradingBot } from './types'
 
 const stateLabel: Record<TradingBot['desired_state'], string> = {
@@ -35,8 +36,24 @@ export default function TradingPanel({
   onCommand: (bot: TradingBot, command: 'start' | 'pause' | 'resume' | 'stop') => void
 }) {
   if (!visible) return null
+  const staleBots = findStaleBots(bots, latestRuns, new Date())
   return (
     <>
+      {staleBots.length > 0 && (
+        <div role="alert" className="worker-alert">
+          <strong>トレーディングWorkerが止まっている可能性があります。</strong>
+          稼働中のボットが、確定した最新の足をまだ評価していません。起動ウィンドウを確認し、
+          止まっていれば [A] キーで再起動してください。
+          <ul>
+            {staleBots.map(({ bot, expectedBarClose, lastEvaluatedAt }) => (
+              <li key={bot.id}>
+                {bot.name}: {expectedBarClose.toLocaleString()} に確定した足が未評価(最終評価:{' '}
+                {lastEvaluatedAt ? lastEvaluatedAt.toLocaleString() : 'なし'})
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {tradingAccounts.length > 0 && (
         <ul className="connection-list">
           {tradingAccounts.map((account) => (

@@ -170,6 +170,20 @@ button:disabled {
   background: rgba(13, 31, 53, 0.75);
 }
 
+.worker-alert {
+  margin-bottom: 1rem;
+  padding: 0.8rem 1rem;
+  border: 1px solid rgba(255, 155, 152, 0.55);
+  border-radius: 10px;
+  color: #ff9b98;
+  background: rgba(64, 20, 26, 0.6);
+}
+
+.worker-alert ul {
+  margin: 0.4rem 0 0;
+  padding-left: 1.2rem;
+}
+
 .source-binance {
   border-color: rgba(245, 184, 75, 0.55);
 }

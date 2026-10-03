@@ -15,6 +15,43 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PORTS = (8000, 5173)
+CONSOLE_TITLE = "AI System Trading - Local"
+WORKER_LABELS = {
+    "app.market_data.worker": "市場データWorker(ローソク足の自動収集)",
+    "app.trading.worker": "トレーディングWorker(ペーパートレードの評価)",
+}
+
+
+def worker_label(command: list[str]) -> str:
+    return WORKER_LABELS.get(command[-1], command[-1])
+
+
+def set_console_title(title: str) -> None:
+    if sys.platform == "win32":
+        import ctypes
+
+        ctypes.windll.kernel32.SetConsoleTitleW(title)
+
+
+def alert_worker_stopped(labels: list[str]) -> None:
+    """Makes a stopped Worker hard to miss: the console line scrolls away, but the window
+    title stays in the taskbar and a warning dialog pops up (on its own thread, so the
+    launcher keeps serving keys). The API and screen keep running either way, which is
+    how a stopped market-data Worker went unnoticed for two weeks (2026-09-20 to 10-03)."""
+    names = "、".join(labels)
+    print(f"\n[WARN] {names} が停止しました。[A]キーで再起動できます。", flush=True)
+    set_console_title(f"[!] Worker停止: {names} - {CONSOLE_TITLE}")
+    if sys.platform == "win32":
+        import ctypes
+        import threading
+
+        message = f"{names} が停止しました。\n起動ウィンドウで [A] キーを押すと再起動できます。"
+        warning_topmost = 0x30 | 0x40000  # MB_ICONWARNING | MB_TOPMOST
+        threading.Thread(
+            target=ctypes.windll.user32.MessageBoxW,
+            args=(None, message, CONSOLE_TITLE, warning_topmost),
+            daemon=True,
+        ).start()
 
 
 def check_ports() -> None:
@@ -144,25 +181,25 @@ def run_once(
             "[Q] 停止して終了   [Ctrl+C] 停止",
             flush=True,
         )
+        set_console_title(CONSOLE_TITLE)
         deadline = time.monotonic() + 60
         is_ready = False
-        worker_exited = False
+        worker_commands = launch_commands[critical_count:]
+        stopped_workers: set[int] = set()
         while True:
             if any(process.poll() is not None for process in critical_processes):
                 raise RuntimeError(
                     "A server exited. See the output above; the other processes are stopping."
                 )
-            if (
-                worker_processes
-                and not worker_exited
-                and any(process.poll() is not None for process in worker_processes)
-            ):
-                worker_exited = True
-                print(
-                    "\n[WARN] Workerプロセスが終了しました（自動取得は停止中）。"
-                    "APIと画面は継続します。[A]キーで再起動できます。",
-                    flush=True,
-                )
+            newly_stopped = [
+                index
+                for index, process in enumerate(worker_processes)
+                if index not in stopped_workers and process.poll() is not None
+            ]
+            if newly_stopped:
+                stopped_workers.update(newly_stopped)
+                alert_worker_stopped([worker_label(worker_commands[i]) for i in newly_stopped])
+            worker_exited = bool(stopped_workers)
             key = read_key()
             if key == "q":
                 return False

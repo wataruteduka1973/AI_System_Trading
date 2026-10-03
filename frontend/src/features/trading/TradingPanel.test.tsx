@@ -2,12 +2,14 @@
 import '@testing-library/jest-dom/vitest'
 import { act, cleanup, render, renderHook, screen } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
-import { TradingForms } from './TradingPanel'
+import TradingPanel, { TradingForms } from './TradingPanel'
+import type { BotRunSummary, TradingBot } from './types'
 import { useTrading } from './useTrading'
 
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  vi.useRealTimers()
 })
 
 const noop = () => undefined
@@ -71,4 +73,61 @@ it('creates a bot without sending a timeframe, leaving the choice to the server'
     account_id: 'account-1',
     instrument_id: 'instrument-1',
   })
+})
+
+const runningBot: TradingBot = {
+  id: 'b1',
+  workspace_id: 'ws',
+  name: 'btcusdt-4h-donchian',
+  execution_mode: 'paper',
+  strategy_mode: 'technical',
+  account_id: 'a1',
+  instrument_id: 'i1',
+  timeframe: '4h',
+  desired_state: 'running',
+  actual_state: 'running',
+  live_trading_enabled: false,
+  version: 1,
+  created_at: '2026-10-01T00:00:00Z',
+}
+
+const latestRun = (lastSignalAt: string): BotRunSummary => ({
+  id: 'r1',
+  bot_id: 'b1',
+  status: 'running',
+  code_version: 'dummy-pipeline-0.1',
+  started_at: '2026-10-02T13:13:00Z',
+  stopped_at: null,
+  stop_reason: null,
+  heartbeat_at: null,
+  latest_signal: { id: 's1', action: 'hold', created_at: lastSignalAt },
+})
+
+const renderBots = (lastSignalAt: string) => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  // 21 minutes after the 04:00 UTC 4h close, past the 10-minute grace.
+  vi.setSystemTime(new Date('2026-10-03T04:21:00Z'))
+  render(
+    <TradingPanel
+      visible
+      tradingAccounts={[]}
+      bots={[runningBot]}
+      latestRuns={{ b1: latestRun(lastSignalAt) }}
+      onCommand={() => undefined}
+    />,
+  )
+}
+
+it('warns when a running bot has not evaluated the newest closed bar', () => {
+  renderBots('2026-10-02T13:30:08Z')
+
+  const alert = screen.getByRole('alert')
+  expect(alert).toHaveTextContent('トレーディングWorkerが止まっている可能性があります')
+  expect(alert).toHaveTextContent('btcusdt-4h-donchian')
+})
+
+it('shows no warning while the bots keep up', () => {
+  renderBots('2026-10-03T04:00:40Z')
+
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
 })

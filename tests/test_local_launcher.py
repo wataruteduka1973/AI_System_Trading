@@ -14,6 +14,15 @@ launcher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(launcher)
 
 
+@pytest.fixture(autouse=True)
+def recorded_alerts(monkeypatch) -> list[list[str]]:
+    """Keeps tests from popping real dialogs or retitling the test console on Windows."""
+    alerts: list[list[str]] = []
+    monkeypatch.setattr(launcher, "alert_worker_stopped", alerts.append)
+    monkeypatch.setattr(launcher, "set_console_title", lambda title: None)
+    return alerts
+
+
 def test_interactive_keys_reject_non_windows(monkeypatch) -> None:
     with monkeypatch.context() as context:
         context.setattr(launcher.sys, "platform", "linux")
@@ -250,3 +259,74 @@ def test_real_child_processes_exit_on_quit(tmp_path, monkeypatch) -> None:
             process.wait(timeout=5)
     assert len(owned) == 2
     assert all(process.poll() is not None for process in owned)
+
+
+def test_a_stopped_worker_is_alerted_by_name_once(tmp_path, monkeypatch, recorded_alerts) -> None:
+    backend, frontend, market_data, trading = MagicMock(), MagicMock(), MagicMock(), MagicMock()
+    for process in (backend, frontend, trading):
+        process.poll.return_value = None
+    market_data.poll.return_value = 1
+    monkeypatch.setattr(launcher, "check_ports", lambda: None)
+    monkeypatch.setattr(
+        launcher.subprocess,
+        "Popen",
+        MagicMock(side_effect=[backend, frontend, market_data, trading]),
+    )
+    monkeypatch.setattr(launcher, "ready", lambda: False)
+    keys = iter(["", "", "", "q"])
+    monkeypatch.setattr(launcher, "read_key", lambda: next(keys))
+    commands = [
+        ["backend"],
+        ["frontend"],
+        ["py", "-m", "app.market_data.worker"],
+        ["py", "-m", "app.trading.worker"],
+    ]
+
+    assert launcher.run_once(tmp_path, commands, False) is False
+    # Once, although the loop saw the exited process on every pass.
+    assert recorded_alerts == [["市場データWorker(ローソク足の自動収集)"]]
+
+
+def test_a_second_worker_stopping_later_is_alerted_too(
+    tmp_path, monkeypatch, recorded_alerts
+) -> None:
+    backend, frontend, market_data, trading = MagicMock(), MagicMock(), MagicMock(), MagicMock()
+    for process in (backend, frontend):
+        process.poll.return_value = None
+    market_data.poll.return_value = 1
+    trading.poll.side_effect = [None, None, 0, 0, 0, 0]
+    monkeypatch.setattr(launcher, "check_ports", lambda: None)
+    monkeypatch.setattr(
+        launcher.subprocess,
+        "Popen",
+        MagicMock(side_effect=[backend, frontend, market_data, trading]),
+    )
+    monkeypatch.setattr(launcher, "ready", lambda: False)
+    keys = iter(["", "", "", "q"])
+    monkeypatch.setattr(launcher, "read_key", lambda: next(keys))
+    commands = [
+        ["backend"],
+        ["frontend"],
+        ["py", "-m", "app.market_data.worker"],
+        ["py", "-m", "app.trading.worker"],
+    ]
+
+    launcher.run_once(tmp_path, commands, False)
+    assert recorded_alerts == [
+        ["市場データWorker(ローソク足の自動収集)"],
+        ["トレーディングWorker(ペーパートレードの評価)"],
+    ]
+
+
+def test_running_workers_raise_no_alert(tmp_path, monkeypatch, recorded_alerts) -> None:
+    processes = [MagicMock(), MagicMock(), MagicMock()]
+    for process in processes:
+        process.poll.return_value = None
+    monkeypatch.setattr(launcher, "check_ports", lambda: None)
+    monkeypatch.setattr(launcher.subprocess, "Popen", MagicMock(side_effect=processes))
+    monkeypatch.setattr(launcher, "read_key", lambda: "q")
+
+    launcher.run_once(
+        tmp_path, [["backend"], ["frontend"], ["py", "-m", "app.trading.worker"]], False
+    )
+    assert recorded_alerts == []
