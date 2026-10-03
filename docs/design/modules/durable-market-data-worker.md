@@ -25,7 +25,8 @@ APIのlifespan pollingとBackgroundTasks dispatchは切替時に削除する。
 ## 2. 現行との差分
 
 - 現行のjob状態はDBにあるが、受付commit後の実行開始はプロセスローカル。
-- `CandleIngestionService.sync` は複数ページを処理し、呼出元が最後にcommitする。
+- `CandleIngestionService.sync` は複数ページを処理し、呼出元が最後にcommitする
+  (Worker への切替後に呼び出し元がなくなり、2026-10-02 に削除した)。
   したがって現状の進捗を、そのままページ単位の復旧位置と解釈してはいけない。
 - 現行のowner advisory lockは実行中のjob保護。古いjobの回復は失敗扱いで、自動再開しない。
 - 新方式はDB lease、ページ単位commit、再開cursor、期限付き再試行を導入する。

@@ -269,10 +269,10 @@ app/                         # FastAPIバックエンドの実行コード（唯
   api/                       # HTTP入出力
   connections/application/   # 接続管理ユースケース
   exchanges/                 # OANDA Practice / Binance Testnetクライアント
-  market_data/               # Durable Worker（application/infrastructure/worker）
+  market_data/               # 市場データ（domain/application/infrastructure/worker。Durable Worker含む）
   notifications/             # Outbox配信・汎用SMTPアダプタ・Notification Worker（スケルトン）
   security/                  # OIDCログイン・セッション・RBAC
-  services/                  # 未分割のアプリケーションサービス
+  services/                  # 暗号化したAPI資格情報のローカル保存(secrets.py)
   trading/application/       # 注文実行・リスク判定・trading halt・backtest replay
   trading/worker/            # Bot execution Worker（実行ループ）
 frontend/                    # Reactフロントエンド
