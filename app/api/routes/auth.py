@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Annotated
 from uuid import UUID
 
+import structlog
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
@@ -28,6 +29,7 @@ from app.security.session import issue_session_token, revoke_sessions
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 DatabaseSession = Annotated[Session, Depends(get_db)]
+logger = structlog.get_logger("app.auth")
 
 _OIDC_STATE_COOKIE = "oidc_state"
 _SESSION_COOKIE = "session"
@@ -81,13 +83,35 @@ def _require_oidc_configured() -> _OidcConfig:
     )
 
 
+def _frontend_origin() -> str:
+    """cors_origins[0] is the frontend's own trusted origin -- configuration, not
+    request-supplied, so redirecting there is not an open redirect (see callback)."""
+    return settings.cors_origins[0] if settings.cors_origins else ""
+
+
+def _back_to_app_with_login_error(code: str) -> RedirectResponse:
+    """`/auth/login` is navigated to by the browser (useAuth.login), so a failure must
+    land back on the app's login screen with a reason it can show, not on a raw JSON
+    error page -- which is what happened when the local mock IdP was not running
+    (2026-10-03). `code` is one of a fixed set; no IdP detail is put in the URL."""
+    return RedirectResponse(
+        f"{_frontend_origin()}/?login_error={code}", status_code=status.HTTP_303_SEE_OTHER
+    )
+
+
 @router.get("/login")
 async def login() -> RedirectResponse:
-    config = _require_oidc_configured()
+    try:
+        config = _require_oidc_configured()
+    except HTTPException:
+        return _back_to_app_with_login_error("not_configured")
     try:
         discovery = await oidc.fetch_discovery_document(config.issuer)
     except oidc.OidcError as exc:
-        raise _raise_for_oidc_error(exc) from exc
+        logger.warning("oidc_login_unavailable", code=exc.code)
+        return _back_to_app_with_login_error(
+            "idp_unreachable" if exc.code in _UPSTREAM_UNAVAILABLE_CODES else "idp_error"
+        )
     pkce = oidc.generate_pkce_pair()
     state = oidc.generate_state()
     nonce = oidc.generate_state()

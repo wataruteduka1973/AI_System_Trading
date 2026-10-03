@@ -10,6 +10,7 @@ import TradingPage from './pages/TradingPage'
 import BacktestPage from './pages/BacktestPage'
 import { useHealth } from './features/health/useHealth'
 import HealthPanel from './features/health/HealthPanel'
+import { loginErrorMessage } from './features/auth/loginError'
 import { useAuth } from './features/auth/useAuth'
 import { useWorkspaces } from './features/workspaces/useWorkspaces'
 import WorkspaceSelector from './features/workspaces/WorkspaceSelector'
@@ -102,11 +103,17 @@ function App() {
   }
 
   if (auth.status === 'unauthenticated') {
+    const loginError = loginErrorMessage(window.location.search)
     return (
       <main className="dashboard-shell">
         <section className="workspace-panel">
           <h2>ログインが必要です</h2>
           <p className="panel-description">続行するにはログインしてください。</p>
+          {loginError && (
+            <p role="alert" className="login-error">
+              {loginError}
+            </p>
+          )}
           <button type="button" onClick={auth.login}>
             ログイン
           </button>
