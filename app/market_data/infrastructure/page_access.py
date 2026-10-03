@@ -11,7 +11,7 @@ from app.exchanges.oanda import OandaPracticeClient
 from app.exchanges.types import CandlePoint
 from app.market_data.infrastructure.access import load_credentials, resolve_instrument_access
 from app.market_data.infrastructure.leases import FeedKey
-from app.services.secrets import LocalEncryptedSecretStore
+from app.security.secret_store import LocalEncryptedSecretStore
 
 
 @dataclass(frozen=True)

@@ -22,7 +22,7 @@ from app.exchanges.oanda import (
 )
 from app.models.audit import AuditLog
 from app.models.connections import Exchange, ExchangeConnection, ExternalAccount
-from app.services.secrets import LocalEncryptedSecretStore
+from app.security.secret_store import LocalEncryptedSecretStore
 
 VerificationErrorCode = Literal[
     "connection_not_found",

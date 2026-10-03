@@ -1,4 +1,4 @@
-from app.services.secrets import LocalEncryptedSecretStore
+from app.security.secret_store import LocalEncryptedSecretStore
 from cryptography.fernet import Fernet
 
 

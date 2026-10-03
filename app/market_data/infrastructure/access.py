@@ -39,7 +39,7 @@ class MarketDataAccessError(RuntimeError):
 
 
 class StoredSecrets(Protocol):
-    """What this module reads from `app.services.secrets.LocalEncryptedSecretStore`."""
+    """What this module reads from `app.security.secret_store.LocalEncryptedSecretStore`."""
 
     def get(self, secret_ref: str) -> dict[str, str]: ...
 

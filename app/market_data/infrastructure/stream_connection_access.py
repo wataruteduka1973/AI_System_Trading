@@ -44,7 +44,7 @@ _SUPPORTED_EXCHANGES = ("oanda", "binance")
 
 
 class SecretReader(Protocol):
-    """The subset of app.services.secrets.LocalEncryptedSecretStore this
+    """The subset of app.security.secret_store.LocalEncryptedSecretStore this
     module needs -- expressed as a Protocol so tests can supply a fake
     without needing the real (compiled/cryptography-backed) store."""
 

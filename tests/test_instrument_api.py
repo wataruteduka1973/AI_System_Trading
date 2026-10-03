@@ -19,7 +19,7 @@ from app.models.connections import (
 from app.models.instruments import Instrument
 from app.models.workspace import AppUser, Workspace
 from app.security.rbac import require_operator_role, require_viewer_role
-from app.services.secrets import get_secret_store
+from app.security.secret_store import get_secret_store
 from fastapi.testclient import TestClient
 
 client = TestClient(app)

@@ -94,6 +94,12 @@ worker/                independently runnable polling and backfill entry points
 Each business module may contain `domain`, `application`, `infrastructure`, and `api` packages when
 those layers are needed. Empty layers are not created in advance.
 
+`shared/` does not exist yet: configuration is in `app/core/`, the database session in `app/db/`
+and authentication in `app/security/`. The local encrypted secret store moved from the former
+`app/services/secrets.py` to `app/security/secret_store.py` (2026-10-03, user decision) to match that
+current layout rather than to start a `shared/` package holding only one module; those packages
+move into `shared/` together if and when that step is taken.
+
 ## Connection verification boundary
 
 Connection verification is the first extracted application use case.

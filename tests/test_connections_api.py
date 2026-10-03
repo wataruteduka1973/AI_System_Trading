@@ -20,7 +20,7 @@ from app.security.rbac import (
     require_owner_role,
     require_viewer_role,
 )
-from app.services.secrets import get_secret_store
+from app.security.secret_store import get_secret_store
 from fastapi.testclient import TestClient
 
 client = TestClient(app)
