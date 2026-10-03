@@ -222,11 +222,7 @@ OIDCログインは外部IdPを前提としており、`.env`にIdPを設定し�
 使えます。**本番や共有環境では絶対に使わないでください**（誰でもセッションを
 取得できます）。
 
-```powershell
-python scripts/mock_oidc_server.py
-```
-
-別ターミナルで`.env`に追記してバックエンドを起動します。
+`.env`に次を設定します。
 
 ```text
 OIDC_ISSUER=http://127.0.0.1:9000
@@ -234,6 +230,12 @@ OIDC_CLIENT_ID=local-test-client
 OIDC_CLIENT_SECRET=local-test-secret
 SESSION_SIGNING_SECRET=<python -c "import secrets; print(secrets.token_urlsafe(32))" の出力>
 ```
+
+`OIDC_ISSUER`がちょうど`http://127.0.0.1:9000`のときだけ、`start-local.bat`が
+このmockを他のプロセスと一緒に起動します（実際のIdPを設定していれば起動しません）。
+`start-local.bat`を使わない場合は、別ターミナルで`python scripts/mock_oidc_server.py`を
+実行してください。IdPに接続できないときは、ログインボタンを押すとログイン画面に
+理由が表示されます。
 
 ログイン後は所属Workspaceが無い状態で始まるため、`POST /api/v1/workspaces`を
 自分で叩くか、フロントエンドに将来Workspace作成UIが追加されるまでは

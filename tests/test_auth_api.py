@@ -49,10 +49,20 @@ async def _fake_discovery(issuer: str) -> oidc.DiscoveryDocument:
 # ---- /auth/login ----
 
 
-def test_login_returns_503_when_oidc_is_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+def _back_to_app_with(response, code: str) -> None:
+    # /auth/login is navigated to by the browser, so a failure must land back on the
+    # app's login screen with a reason it can show -- not on a raw JSON error page.
+    assert response.status_code == 303
+    assert response.headers["location"] == f"{settings.cors_origins[0]}/?login_error={code}"
+    assert "oidc_state" not in response.cookies
+
+
+def test_login_sends_the_browser_back_when_oidc_is_not_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(settings, "oidc_issuer", None)
-    response = client.get("/api/v1/auth/login")
-    assert response.status_code == 503
+    response = client.get("/api/v1/auth/login", follow_redirects=False)
+    _back_to_app_with(response, "not_configured")
 
 
 def test_login_redirects_to_the_authorization_url_and_sets_the_state_cookie(
@@ -70,10 +80,13 @@ def test_login_redirects_to_the_authorization_url_and_sets_the_state_cookie(
     assert "oidc_state" in response.cookies
 
 
-def test_login_returns_502_when_the_idp_is_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Regression test (/code-review finding): a raw httpx failure talking to
-    the IdP's discovery endpoint used to propagate uncaught out of `login()`,
-    surfacing as an unstructured 500 instead of a handled error."""
+def test_login_sends_the_browser_back_when_the_idp_is_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression tests: a raw httpx failure talking to the IdP's discovery endpoint
+    used to propagate uncaught out of `login()` (/code-review finding, then a 502
+    JSON page); with the local mock IdP not running (2026-10-03) the login button
+    left the user on that JSON page instead of a login screen."""
     _configure_oidc(monkeypatch)
 
     async def _unreachable(issuer: str) -> oidc.DiscoveryDocument:
@@ -83,9 +96,24 @@ def test_login_returns_502_when_the_idp_is_unreachable(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(auth_routes.oidc, "fetch_discovery_document", _unreachable)
 
-    response = client.get("/api/v1/auth/login")
+    response = client.get("/api/v1/auth/login", follow_redirects=False)
 
-    assert response.status_code == 502
+    _back_to_app_with(response, "idp_unreachable")
+
+
+def test_login_sends_the_browser_back_when_the_idp_rejects_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_oidc(monkeypatch)
+
+    async def _invalid(issuer: str) -> oidc.DiscoveryDocument:
+        raise oidc.OidcError("discovery_malformed", "Discovery document is malformed")
+
+    monkeypatch.setattr(auth_routes.oidc, "fetch_discovery_document", _invalid)
+
+    response = client.get("/api/v1/auth/login", follow_redirects=False)
+
+    _back_to_app_with(response, "idp_error")
 
 
 # ---- /auth/callback ----

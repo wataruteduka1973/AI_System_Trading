@@ -7,8 +7,9 @@ this script's only job is local manual verification, not acting as a
 redistributable test double), `/token` (verifies the PKCE code_verifier for
 real, then issues a real RS256-signed id_token).
 
-Not started by scripts/start_local.py and not used by the automated test
-suite (tests mock `app.security.oidc` directly instead -- see
+Started by scripts/start_local.py only when OIDC_ISSUER is exactly this
+mock's ISSUER (2026-10-03; never with a real IdP configured). Not used by the
+automated test suite (tests mock `app.security.oidc` directly instead -- see
 tests/test_oidc_client.py). Never point this at a real deployment's
 OIDC_ISSUER; it grants a session to anyone who can reach it.
 

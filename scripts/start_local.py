@@ -16,14 +16,46 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PORTS = (8000, 5173)
 CONSOLE_TITLE = "AI System Trading - Local"
+MOCK_OIDC_ISSUER = "http://127.0.0.1:9000"
+MOCK_OIDC_PORT = 9000
+MOCK_OIDC_SCRIPT = "scripts/mock_oidc_server.py"
 WORKER_LABELS = {
     "app.market_data.worker": "市場データWorker(ローソク足の自動収集)",
     "app.trading.worker": "トレーディングWorker(ペーパートレードの評価)",
+    MOCK_OIDC_SCRIPT: "開発用ログインサーバー(mock OIDC)",
 }
 
 
 def worker_label(command: list[str]) -> str:
     return WORKER_LABELS.get(command[-1], command[-1])
+
+
+def configured_oidc_issuer(root: Path) -> str | None:
+    """OIDC_ISSUER as the app will see it: the environment first, then `.env`."""
+    if "OIDC_ISSUER" in os.environ:
+        return os.environ["OIDC_ISSUER"].strip()
+    env_file = root / ".env"
+    if not env_file.is_file():
+        return None
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key.strip() == "OIDC_ISSUER":
+            return value.strip().strip("\"'")
+    return None
+
+
+def uses_mock_oidc(root: Path) -> bool:
+    """The local mock IdP is started only when `.env` points login at it. Login then
+    works out of the box (2026-10-03: with the mock not running, the login button led to
+    a JSON error); with a real IdP configured it is never started, since the mock grants
+    a session to anyone who can reach 127.0.0.1:9000."""
+    return configured_oidc_issuer(root) == MOCK_OIDC_ISSUER
+
+
+def ports_for(launch_commands: list[list[str]]) -> tuple[int, ...]:
+    if any(command[-1] == MOCK_OIDC_SCRIPT for command in launch_commands):
+        return (*PORTS, MOCK_OIDC_PORT)
+    return PORTS
 
 
 def set_console_title(title: str) -> None:
@@ -54,8 +86,8 @@ def alert_worker_stopped(labels: list[str]) -> None:
         ).start()
 
 
-def check_ports() -> None:
-    for port in PORTS:
+def check_ports(ports: tuple[int, ...] | None = None) -> None:
+    for port in ports if ports is not None else PORTS:
         with socket.socket() as listener:
             if sys.platform == "win32":
                 listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
@@ -79,12 +111,16 @@ def commands(root: Path) -> list[list[str]]:
     vite = root / "frontend/node_modules/vite/bin/vite.js"
     if not vite.is_file():
         raise RuntimeError("Frontend dependencies are missing. Run npm install in frontend first.")
-    return [
+    launch = [
         [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000"],
         [node, str(vite), "--host", "127.0.0.1", "--port", "5173", "--strictPort"],
         [sys.executable, "-m", "app.market_data.worker"],
         [sys.executable, "-m", "app.trading.worker"],
     ]
+    if uses_mock_oidc(root):
+        # Non-critical like the workers: if it stops, login stops but trading does not.
+        launch.append([sys.executable, MOCK_OIDC_SCRIPT])
+    return launch
 
 
 def stop_processes(processes: list[subprocess.Popen], timeout: int = 10) -> None:
@@ -155,7 +191,7 @@ def run_once(
     """The first `critical_count` commands (API, frontend) are required and restart together
     on [R]; the remaining commands (the Worker) only restart with the rest on [A] and get a
     longer stop grace period (`worker_stop_timeout`) since a page in flight can take longer."""
-    check_ports()
+    check_ports(ports_for(launch_commands))
     directories = (root, root / "frontend") + (root,) * (len(launch_commands) - 2)
     if sys.platform == "win32":
         creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
@@ -243,7 +279,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         launch_commands = commands(ROOT)
-        check_ports()
+        check_ports(ports_for(launch_commands))
         if args.check:
             print("Local setup and ports OK. No servers started; database not checked.")
             return 0

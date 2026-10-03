@@ -255,6 +255,10 @@ button:disabled {
   background: #38506f;
 }
 
+.login-error {
+  color: #ff9b98;
+}
+
 .danger-button {
   color: #fff;
   background: #8f3340;

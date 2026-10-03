@@ -56,6 +56,7 @@ def test_commands_use_project_python_fixed_ports_and_no_reload(tmp_path, monkeyp
     vite.parent.mkdir(parents=True)
     vite.touch()
     monkeypatch.setattr(launcher.shutil, "which", lambda _: "node.exe")
+    monkeypatch.delenv("OIDC_ISSUER", raising=False)
     backend, frontend, market_data_worker, trading_worker = launcher.commands(tmp_path)
     assert backend[:4] == [sys.executable, "-m", "uvicorn", "app.main:app"]
     assert "--reload" not in backend
@@ -88,7 +89,7 @@ def test_quit_and_full_restart_stop_only_owned_processes(
         process.poll.return_value = None
     launch = MagicMock(side_effect=processes)
     monkeypatch.setattr(launcher.subprocess, "Popen", launch)
-    monkeypatch.setattr(launcher, "check_ports", lambda: None)
+    monkeypatch.setattr(launcher, "check_ports", lambda *ports: None)
     monkeypatch.setattr(launcher, "read_key", lambda: key)
     assert launcher.run_once(tmp_path, [["backend"], ["frontend"]], False) == restart
     for process in processes:
@@ -109,7 +110,7 @@ def test_partial_restart_key_restarts_only_critical_processes_in_place(
         process.poll.return_value = None
     launch = MagicMock(side_effect=[backend, frontend, worker, new_backend, new_frontend])
     monkeypatch.setattr(launcher.subprocess, "Popen", launch)
-    monkeypatch.setattr(launcher, "check_ports", lambda: None)
+    monkeypatch.setattr(launcher, "check_ports", lambda *ports: None)
     monkeypatch.setattr(launcher, "ready", lambda: False)
     keys = iter(["r", "q"])
     monkeypatch.setattr(launcher, "read_key", lambda: next(keys))
@@ -131,7 +132,7 @@ def test_full_restart_key_stops_worker_with_its_own_grace_period(tmp_path, monke
     monkeypatch.setattr(
         launcher.subprocess, "Popen", MagicMock(side_effect=[backend, frontend, worker])
     )
-    monkeypatch.setattr(launcher, "check_ports", lambda: None)
+    monkeypatch.setattr(launcher, "check_ports", lambda *ports: None)
     monkeypatch.setattr(launcher, "read_key", lambda: "a")
     assert launcher.run_once(tmp_path, [["backend"], ["frontend"], ["worker"]], False) is True
     worker.wait.assert_called_once_with(timeout=45)
@@ -142,7 +143,7 @@ def test_full_restart_key_stops_worker_with_its_own_grace_period(tmp_path, monke
 def test_second_launch_failure_cleans_up_first_process(tmp_path, monkeypatch) -> None:
     first = MagicMock()
     first.poll.return_value = None
-    monkeypatch.setattr(launcher, "check_ports", lambda: None)
+    monkeypatch.setattr(launcher, "check_ports", lambda *ports: None)
     monkeypatch.setattr(
         launcher.subprocess, "Popen", MagicMock(side_effect=[first, OSError("launch failed")])
     )
@@ -155,7 +156,7 @@ def test_unexpected_exit_stops_other_server(tmp_path, monkeypatch) -> None:
     failed, remaining = MagicMock(), MagicMock()
     failed.poll.return_value = 1
     remaining.poll.return_value = None
-    monkeypatch.setattr(launcher, "check_ports", lambda: None)
+    monkeypatch.setattr(launcher, "check_ports", lambda *ports: None)
     monkeypatch.setattr(launcher.subprocess, "Popen", MagicMock(side_effect=[failed, remaining]))
     with pytest.raises(RuntimeError, match="A server exited"):
         launcher.run_once(tmp_path, [["backend"], ["frontend"]], False)
@@ -168,7 +169,7 @@ def test_non_critical_worker_exit_does_not_stop_api_or_frontend(tmp_path, monkey
     backend.poll.return_value = None
     frontend.poll.return_value = None
     worker.poll.return_value = 1
-    monkeypatch.setattr(launcher, "check_ports", lambda: None)
+    monkeypatch.setattr(launcher, "check_ports", lambda *ports: None)
     monkeypatch.setattr(
         launcher.subprocess, "Popen", MagicMock(side_effect=[backend, frontend, worker])
     )
@@ -187,7 +188,7 @@ def test_worker_command_runs_from_project_root(tmp_path, monkeypatch) -> None:
         process.poll.return_value = None
     launch = MagicMock(side_effect=processes)
     monkeypatch.setattr(launcher.subprocess, "Popen", launch)
-    monkeypatch.setattr(launcher, "check_ports", lambda: None)
+    monkeypatch.setattr(launcher, "check_ports", lambda *ports: None)
     monkeypatch.setattr(launcher, "read_key", lambda: "q")
     launcher.run_once(tmp_path, [["backend"], ["frontend"], ["worker"]], False)
     assert launch.call_args_list[2].kwargs["cwd"] == tmp_path
@@ -207,7 +208,7 @@ def test_interruption_or_startup_timeout_cleans_up_both_servers(tmp_path, monkey
     processes = [MagicMock(), MagicMock()]
     for process in processes:
         process.poll.return_value = None
-    monkeypatch.setattr(launcher, "check_ports", lambda: None)
+    monkeypatch.setattr(launcher, "check_ports", lambda *ports: None)
     monkeypatch.setattr(launcher.subprocess, "Popen", MagicMock(side_effect=processes))
     monkeypatch.setattr(launcher, "ready", lambda: False)
     if reason == "interrupt":
@@ -226,7 +227,7 @@ def test_interruption_or_startup_timeout_cleans_up_both_servers(tmp_path, monkey
 def test_check_only_does_not_start_servers(monkeypatch) -> None:
     monkeypatch.setattr(sys, "argv", ["start_local.py", "--check"])
     monkeypatch.setattr(launcher, "commands", lambda _: [])
-    monkeypatch.setattr(launcher, "check_ports", lambda: None)
+    monkeypatch.setattr(launcher, "check_ports", lambda *ports: None)
     run = MagicMock()
     monkeypatch.setattr(launcher, "run_once", run)
     assert launcher.main() == 0
@@ -245,7 +246,7 @@ def test_real_child_processes_exit_on_quit(tmp_path, monkeypatch) -> None:
         return process
 
     monkeypatch.setattr(launcher.subprocess, "Popen", spawn)
-    monkeypatch.setattr(launcher, "check_ports", lambda: None)
+    monkeypatch.setattr(launcher, "check_ports", lambda *ports: None)
     monkeypatch.setattr(launcher, "ready", lambda: True)
     keys = iter(["", "q"])
     monkeypatch.setattr(launcher, "read_key", lambda: next(keys))
@@ -266,7 +267,7 @@ def test_a_stopped_worker_is_alerted_by_name_once(tmp_path, monkeypatch, recorde
     for process in (backend, frontend, trading):
         process.poll.return_value = None
     market_data.poll.return_value = 1
-    monkeypatch.setattr(launcher, "check_ports", lambda: None)
+    monkeypatch.setattr(launcher, "check_ports", lambda *ports: None)
     monkeypatch.setattr(
         launcher.subprocess,
         "Popen",
@@ -295,7 +296,7 @@ def test_a_second_worker_stopping_later_is_alerted_too(
         process.poll.return_value = None
     market_data.poll.return_value = 1
     trading.poll.side_effect = [None, None, 0, 0, 0, 0]
-    monkeypatch.setattr(launcher, "check_ports", lambda: None)
+    monkeypatch.setattr(launcher, "check_ports", lambda *ports: None)
     monkeypatch.setattr(
         launcher.subprocess,
         "Popen",
@@ -322,7 +323,7 @@ def test_running_workers_raise_no_alert(tmp_path, monkeypatch, recorded_alerts) 
     processes = [MagicMock(), MagicMock(), MagicMock()]
     for process in processes:
         process.poll.return_value = None
-    monkeypatch.setattr(launcher, "check_ports", lambda: None)
+    monkeypatch.setattr(launcher, "check_ports", lambda *ports: None)
     monkeypatch.setattr(launcher.subprocess, "Popen", MagicMock(side_effect=processes))
     monkeypatch.setattr(launcher, "read_key", lambda: "q")
 
@@ -330,3 +331,57 @@ def test_running_workers_raise_no_alert(tmp_path, monkeypatch, recorded_alerts) 
         tmp_path, [["backend"], ["frontend"], ["py", "-m", "app.trading.worker"]], False
     )
     assert recorded_alerts == []
+
+
+# ---- local mock IdP (started only when .env points login at it) ----
+
+
+def _project(tmp_path, env_text: str) -> Path:
+    (tmp_path / ".env").write_text(env_text, encoding="utf-8")
+    vite = tmp_path / "frontend/node_modules/vite/bin/vite.js"
+    vite.parent.mkdir(parents=True)
+    vite.touch()
+    return tmp_path
+
+
+def test_the_mock_idp_starts_when_env_points_login_at_it(tmp_path, monkeypatch) -> None:
+    # Regression (2026-10-03): with the mock not started, the login button led to a JSON error.
+    monkeypatch.setattr(launcher.shutil, "which", lambda _: "node.exe")
+    monkeypatch.delenv("OIDC_ISSUER", raising=False)
+    root = _project(tmp_path, "DATABASE_URL=x\nOIDC_ISSUER=http://127.0.0.1:9000\n")
+
+    launch = launcher.commands(root)
+
+    assert launch[-1] == [sys.executable, "scripts/mock_oidc_server.py"]
+    assert launcher.ports_for(launch) == (8000, 5173, 9000)
+    assert launcher.worker_label(launch[-1]) == "開発用ログインサーバー(mock OIDC)"
+
+
+@pytest.mark.parametrize(
+    "env_text", ["OIDC_ISSUER=https://tenant.example.com/\n", "DATABASE_URL=x\n"]
+)
+def test_the_mock_idp_never_starts_for_a_real_or_missing_issuer(
+    tmp_path, monkeypatch, env_text
+) -> None:
+    monkeypatch.setattr(launcher.shutil, "which", lambda _: "node.exe")
+    monkeypatch.delenv("OIDC_ISSUER", raising=False)
+
+    launch = launcher.commands(_project(tmp_path, env_text))
+
+    assert all(command[-1] != "scripts/mock_oidc_server.py" for command in launch)
+    assert launcher.ports_for(launch) == (8000, 5173)
+
+
+def test_the_environment_overrides_env_file_like_the_app_does(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("OIDC_ISSUER", "https://tenant.example.com/")
+    root = _project(tmp_path, "OIDC_ISSUER=http://127.0.0.1:9000\n")
+
+    assert launcher.uses_mock_oidc(root) is False
+
+
+def test_the_launcher_and_the_mock_agree_on_the_mock_issuer() -> None:
+    mock = (Path(__file__).resolve().parents[1] / "scripts/mock_oidc_server.py").read_text(
+        encoding="utf-8"
+    )
+    assert f'ISSUER = "{launcher.MOCK_OIDC_ISSUER}"' in mock
+    assert f"port={launcher.MOCK_OIDC_PORT}" in mock
