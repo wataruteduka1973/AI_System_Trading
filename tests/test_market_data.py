@@ -7,13 +7,12 @@ import pytest
 from app.exchanges.binance import BinanceSpotTestnetClient
 from app.exchanges.oanda import OandaPracticeClient
 from app.exchanges.types import CandlePoint, timeframe_delta
+from app.market_data.domain.coverage import classify_candle_coverage, find_internal_gaps
+from app.market_data.domain.ingestion_report import IngestionReport
 from app.models.market_data import MarketDataGap
 from app.services.market_data import (
     CandleIngestionService,
-    IngestionReport,
     MarketDataAccessError,
-    classify_candle_coverage,
-    find_internal_gaps,
     persist_internal_gaps,
 )
 
