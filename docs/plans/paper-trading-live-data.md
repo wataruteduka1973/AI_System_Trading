@@ -47,7 +47,7 @@
 
 1. 公開価格の継続的な取り込みが無い。公開価格はスクリプトによる一括backfillだけで、ライブの価格取り込み
    (Worker・ストリーム)はTestnetのクライアントに固定されている。
-2. 戦略が固定。`dummy_pipeline.run_dummy_pipeline_once` は `generate_dummy_signal` を直接呼び、読み込む足は
+2. 戦略が固定。`bot_evaluation.evaluate_bot_on_latest_bar` は `generate_dummy_signal` を直接呼び、読み込む足は
    直近30本だけ(donchian_55_20には最低57本、ATRの計算には260本が必要)。
 3. ライブに損切りが無い。損切り価格を保存する場所が無く、`order_flow` の約定は常に直近の終値。
 4. ~~ボットのexchange_codeの正規化が必要~~ → 不要と判明(2026-10-02)。ボット・口座は既存のBinance Testnetの
@@ -73,7 +73,7 @@
 
 ### Unit 2: 戦略をボットごとに選べるようにする(仕様は2026-10-02 利用者承認)
 
-完了(2026-10-02)。実装: `live_strategies.py`、`dummy_pipeline.run_dummy_pipeline_once`、
+完了(2026-10-02)。実装: `live_strategies.py`、`bot_evaluation.evaluate_bot_on_latest_bar`、
 `bot_lifecycle.validate_bot_startup`。実DBの既存の戦略バージョン(`dummy_sma_crossover`)が新しい起動前チェックを
 通ることを確認した。
 - `StrategyVersion.definition` の `kind` でシグナル関数を選ぶ(`app/trading/application/live_strategies.py`)。

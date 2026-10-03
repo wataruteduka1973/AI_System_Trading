@@ -129,7 +129,7 @@ CONSERVATIVE_V1_RULES: dict[str, object] = {
     },
 }
 """08_取引アルゴリズムとリスク初期値.md§4/§5's approved conservative-v1 numbers, as the
-JSON payload for the dummy `risk_profile_version.rules` row `dummy_pipeline.py`
+JSON payload for the dummy `risk_profile_version.rules` row `bot_evaluation.py`
 creates. Kept as a module-level constant (rather than only living in the DB row) so
 tests can assert against it directly without a DB round trip."""
 
@@ -610,7 +610,7 @@ def evaluate_signal(
     exchange_code: str,
 ) -> RiskEvaluationResult:
     """Evaluate one `buy`/`sell` Signal against conservative-v1 and persist the
-    resulting `risk_decision`. Caller (`dummy_pipeline.py`) is responsible for
+    resulting `risk_decision`. Caller (`bot_evaluation.py`) is responsible for
     deciding *whether* to call this at all (e.g. `hold` signals, or a signal that
     dote-gating says must be close-only, never reach this function).
 

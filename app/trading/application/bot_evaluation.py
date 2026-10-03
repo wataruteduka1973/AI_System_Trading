@@ -1,12 +1,15 @@
 """Orchestrates one evaluation cycle of a paper bot: the signal from the bot's
 strategy version (`live_strategies.resolve_live_strategy`) -> Risk Gate ->
-OrderIntent -> `order_flow.place_order`. The module and function names date from
-when the only signal was the SMA pipeline skeleton (`dummy_signal.py`).
+OrderIntent -> `order_flow.place_order`, plus the stop-loss check before it.
+
+Formerly `dummy_pipeline.run_dummy_pipeline_once` (renamed 2026-10-03), from when the
+only signal was the SMA pipeline skeleton; older docs and the stored identifiers
+`code_version="dummy-pipeline-0.1"` and `client_order_id="dummy-..."` keep that name.
 
 Bots are created elsewhere (`paper_provisioning.py`) and left stopped; starting one
 is `bot_lifecycle.start_bot`'s job.
 
-**`run_dummy_pipeline_once`'s gating on `bot.actual_state`** (2026-09-20, added for
+**`evaluate_bot_on_latest_bar`'s gating on `bot.actual_state`** (2026-09-20, added for
 the Bot lifecycle task): `stopped` skips everything, including signal generation
 itself, before touching candles at all -- matching
 05_アーキテクチャと移行計画.md"Bot pause/resumeの動作仕様"'s "新しいシグナル評価...
@@ -26,7 +29,7 @@ when the new signal opposes an existing position, this module places a close-onl
 order (quantity capped to exactly the held quantity, so `order_flow.py` closes rather
 than flips) and does **not** evaluate/open the reverse position in the same call. No
 extra "pending confirmation" state is tracked for this: because closing makes the
-account flat, the *next* call to `run_dummy_pipeline_once` (on the next bar) finds no
+account flat, the *next* call to `evaluate_bot_on_latest_bar` (on the next bar) finds no
 open position and evaluates the new signal as an ordinary fresh entry -- which is
 already exactly "only open the reverse position if the same-direction signal still
 holds on the next evaluation." Tracking an explicit pending-reversal marker (as the
@@ -199,7 +202,7 @@ def _set_entry_stop(
     db.commit()
 
 
-def run_dummy_pipeline_once(db: Session, bot: TradingBot, bot_run: BotRun) -> dict:
+def evaluate_bot_on_latest_bar(db: Session, bot: TradingBot, bot_run: BotRun) -> dict:
     """Runs one evaluation cycle for `bot`. Returns a small dict describing what
     happened (`action`: "hold" | "already_processed" | "close_only" | "denied" |
     "opened", plus the row ids involved) -- meant for tests/scripts to assert
@@ -315,7 +318,7 @@ def run_dummy_pipeline_once(db: Session, bot: TradingBot, bot_run: BotRun) -> di
 
     if bot.actual_state == "paused":
         # Paused: closing (above) is still allowed, but a new or same-direction
-        # entry is not -- see module docstring's "run_dummy_pipeline_once's gating".
+        # entry is not -- see module docstring's "evaluate_bot_on_latest_bar's gating".
         return {
             "action": "hold",
             "signal_id": signal.id,

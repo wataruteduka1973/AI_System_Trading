@@ -205,11 +205,11 @@ lease機構は使いません（通知送信は1回で完結する短い処理�
 
 `app/trading/worker/`（`python -m app.trading.worker`で起動）は、`actual_state`が
 `running`/`paused`の全Botを一定間隔（`.env`の`BOT_EXECUTION_POLL_INTERVAL_SECONDS`、
-既定5秒）でポーリングし、`app/trading/application/dummy_pipeline.py`の
-`run_dummy_pipeline_once`を呼び出す単純なポーリングループです。Notification Worker
+既定5秒）でポーリングし、`app/trading/application/bot_evaluation.py`の
+`evaluate_bot_on_latest_bar`を呼び出す単純なポーリングループです。Notification Worker
 同様、市場データWorkerのlease機構は使いません（1回の評価が短いDBアクセスのみで完結し、
 外部ネットワークI/Oを伴わないため）。同じ最新確定バーに対して複数回呼ばれても
-`run_dummy_pipeline_once`自身が`(bot_run_id, candle_id)`単位で冪等なため安全です。
+`evaluate_bot_on_latest_bar`自身が`(bot_run_id, candle_id)`単位で冪等なため安全です。
 外部設定の前提条件（SMTPのような）が無いため、`scripts/start_local.py`に含めています。
 
 ### ログイン後のUIをローカルで手動確認する（開発者向け）

@@ -1,4 +1,4 @@
-"""`run_dummy_pipeline_once` had zero callers/coverage before the
+"""`evaluate_bot_on_latest_bar` had zero callers/coverage before the
 execution loop/Worker task (`app/trading/application/bot_execution_loop.py`)
 gave it its first real caller. The tests below cover the gating branches and,
 in particular, the idempotency guard added for that task -- see that
@@ -23,7 +23,7 @@ from app.models.strategy import (
     TradingBot,
 )
 from app.models.trading import TradingAccount, TradingPosition
-from app.trading.application.dummy_pipeline import run_dummy_pipeline_once
+from app.trading.application.bot_evaluation import evaluate_bot_on_latest_bar
 
 
 def _instrument(**overrides: object) -> Instrument:
@@ -43,7 +43,7 @@ def _instrument(**overrides: object) -> Instrument:
     return Instrument(**defaults)
 
 
-# ---- run_dummy_pipeline_once ----
+# ---- evaluate_bot_on_latest_bar ----
 
 
 def _bot(**overrides: object) -> TradingBot:
@@ -92,14 +92,14 @@ def _candle(**overrides: object) -> Candle:
     return Candle(**defaults)
 
 
-def test_run_dummy_pipeline_once_holds_when_bot_is_not_active() -> None:
+def test_evaluate_bot_on_latest_bar_holds_when_bot_is_not_active() -> None:
     db = MagicMock()
-    result = run_dummy_pipeline_once(db, _bot(actual_state="stopped"), _bot_run())
+    result = evaluate_bot_on_latest_bar(db, _bot(actual_state="stopped"), _bot_run())
     assert result == {"action": "hold", "reason": "bot_not_active", "actual_state": "stopped"}
     db.get.assert_not_called()
 
 
-def test_run_dummy_pipeline_once_holds_when_no_candles_exist() -> None:
+def test_evaluate_bot_on_latest_bar_holds_when_no_candles_exist() -> None:
     db = MagicMock()
     bot = _bot()
     db.get.side_effect = [
@@ -111,12 +111,12 @@ def test_run_dummy_pipeline_once_holds_when_no_candles_exist() -> None:
     db.scalar.return_value = "binance"  # _exchange_code_for_connection
     db.scalars.return_value = []  # list(db.scalars(...)) -- no .all() call in this path
 
-    result = run_dummy_pipeline_once(db, bot, _bot_run(bot_id=bot.id))
+    result = evaluate_bot_on_latest_bar(db, bot, _bot_run(bot_id=bot.id))
 
     assert result == {"action": "hold", "reason": "no_candles"}
 
 
-def test_run_dummy_pipeline_once_is_idempotent_for_an_already_processed_candle() -> None:
+def test_evaluate_bot_on_latest_bar_is_idempotent_for_an_already_processed_candle() -> None:
     """Regression test for the execution-loop task: before this guard existed,
     calling this function twice for the same still-latest candle would reach
     `db.commit()` a second time and raise an uncaught IntegrityError against
@@ -145,7 +145,7 @@ def test_run_dummy_pipeline_once_is_idempotent_for_an_already_processed_candle()
     db.scalar.side_effect = ["binance", existing_signal]
     db.scalars.return_value = [candle]  # list(db.scalars(...)) -- no .all() call in this path
 
-    result = run_dummy_pipeline_once(db, bot, bot_run)
+    result = evaluate_bot_on_latest_bar(db, bot, bot_run)
 
     assert result == {"action": "already_processed", "signal_id": existing_signal.id}
     db.add.assert_not_called()  # no second Signal row attempted
@@ -171,7 +171,7 @@ def _evaluate_with(definition: object, candles: list[Candle]) -> tuple[MagicMock
     # the stop check's open-position lookup (flat here).
     db.scalar.side_effect = ["binance", None, None]
     db.scalars.return_value = candles
-    result = run_dummy_pipeline_once(db, bot, _bot_run(bot_id=bot.id))
+    result = evaluate_bot_on_latest_bar(db, bot, _bot_run(bot_id=bot.id))
     return db, bot, result
 
 
@@ -253,21 +253,21 @@ _OPENED = datetime(2026, 10, 1, 4, 0, 5, tzinfo=UTC)
 
 
 def test_stop_exit_price_is_the_stop_once_a_later_bars_low_reaches_it() -> None:
-    from app.trading.application.dummy_pipeline import _stop_exit_price
+    from app.trading.application.bot_evaluation import _stop_exit_price
 
     bars = [_bar(0, "100", "100", "80", "100"), _bar(1, "99", "101", "94", "96")]
     assert _stop_exit_price(bars, _held_long("95", _OPENED)) == Decimal("95")
 
 
 def test_stop_exit_price_is_the_open_when_a_bar_gaps_through_the_stop() -> None:
-    from app.trading.application.dummy_pipeline import _stop_exit_price
+    from app.trading.application.bot_evaluation import _stop_exit_price
 
     bars = [_bar(0, "100", "100", "100", "100"), _bar(1, "90", "91", "88", "89")]
     assert _stop_exit_price(bars, _held_long("95", _OPENED)) == Decimal("90")
 
 
 def test_stop_exit_price_uses_the_first_bar_that_hits_after_missed_bars() -> None:
-    from app.trading.application.dummy_pipeline import _stop_exit_price
+    from app.trading.application.bot_evaluation import _stop_exit_price
 
     bars = [
         _bar(0, "100", "100", "100", "100"),
@@ -279,14 +279,14 @@ def test_stop_exit_price_uses_the_first_bar_that_hits_after_missed_bars() -> Non
 
 
 def test_no_stop_exit_while_no_later_bar_reaches_the_stop() -> None:
-    from app.trading.application.dummy_pipeline import _stop_exit_price
+    from app.trading.application.bot_evaluation import _stop_exit_price
 
     bars = [_bar(0, "100", "100", "80", "100"), _bar(1, "99", "110", "96", "108")]
     assert _stop_exit_price(bars, _held_long("95", _OPENED)) is None
 
 
 def test_no_stop_exit_for_a_position_without_a_stop() -> None:
-    from app.trading.application.dummy_pipeline import _stop_exit_price
+    from app.trading.application.bot_evaluation import _stop_exit_price
 
     position = _held_long("95", _OPENED)
     position.stop_price = None
@@ -297,18 +297,18 @@ def test_no_stop_exit_for_a_position_without_a_stop() -> None:
 def test_entry_stop_price_is_the_stop_distance_away_from_the_fill(
     side: str, expected: Decimal
 ) -> None:
-    from app.trading.application.dummy_pipeline import _entry_stop_price
+    from app.trading.application.bot_evaluation import _entry_stop_price
 
     assert _entry_stop_price(side, Decimal("100"), Decimal("5")) == expected
 
 
 def test_no_entry_stop_when_the_distance_would_put_it_at_or_below_zero() -> None:
-    from app.trading.application.dummy_pipeline import _entry_stop_price
+    from app.trading.application.bot_evaluation import _entry_stop_price
 
     assert _entry_stop_price("buy", Decimal("100"), Decimal("100")) is None
 
 
-# ---- stop-loss inside run_dummy_pipeline_once ----
+# ---- stop-loss inside evaluate_bot_on_latest_bar ----
 
 _DONCHIAN_STOP = {
     "kind": "donchian_breakout",
@@ -344,7 +344,7 @@ def test_a_reached_stop_closes_the_whole_position_at_the_stop_before_the_signal(
         _bar(0, "100", "100", "100", "100"),
     ]
 
-    result = run_dummy_pipeline_once(db, bot, _bot_run(bot_id=bot.id))
+    result = evaluate_bot_on_latest_bar(db, bot, _bot_run(bot_id=bot.id))
 
     assert result["action"] == "hold"
     [command] = placed
@@ -361,14 +361,14 @@ def _enter_long(monkeypatch: pytest.MonkeyPatch, definition: dict) -> TradingPos
     from types import SimpleNamespace
 
     from app.models.trading import Fill
-    from app.trading.application import dummy_pipeline, order_flow
+    from app.trading.application import bot_evaluation, order_flow
 
     decision = SimpleNamespace(
         id=uuid4(), outcome="allow", reason_code=None,
         rule_results={"quantity_calculation": {"stop_distance": "5"}},
     )  # fmt: skip
     monkeypatch.setattr(
-        dummy_pipeline,
+        bot_evaluation,
         "evaluate_signal",
         lambda *args: SimpleNamespace(decision=decision, approved_quantity=Decimal("1")),
     )
@@ -396,7 +396,7 @@ def _enter_long(monkeypatch: pytest.MonkeyPatch, definition: dict) -> TradingPos
     bars = [_bar(i, c, c, c, c) for i, c in enumerate(["100"] * 4 + ["101"])]
     db.scalars.return_value = list(reversed(bars))  # the query returns newest first
 
-    assert run_dummy_pipeline_once(db, bot, _bot_run(bot_id=bot.id))["action"] == "opened"
+    assert evaluate_bot_on_latest_bar(db, bot, _bot_run(bot_id=bot.id))["action"] == "opened"
     return opened
 
 
