@@ -337,6 +337,7 @@ def _run_with_exits(
     *,
     entry: str = "buy",
     exit_policy: replay.ExitPolicy = "stop_and_target",
+    stop_slippage: Decimal = Decimal(0),
 ) -> replay.ReplayResult:
     monkeypatch.setattr(gate, "_stop_distance", lambda *args: Decimal(5))
 
@@ -352,6 +353,7 @@ def _run_with_exits(
         initial_equity=Decimal("1000000"),
         signal_generator=scripted_signal,  # type: ignore[arg-type]
         exit_policy=exit_policy,
+        stop_slippage=stop_slippage,
     )
 
 
@@ -488,3 +490,46 @@ def test_stop_loss_policy_still_stops_out(monkeypatch: pytest.MonkeyPatch) -> No
     [trade] = _run_with_exits(candles, monkeypatch, exit_policy="stop_loss").trades
     assert trade.exit_price == Decimal("95")
     assert trade.exit_reason == "stop_loss"
+
+
+# ---- run_replay: stop_slippage (docs/plans/paper-trading-live-data.md, option C) ----
+
+
+@pytest.mark.parametrize(
+    ("bar", "expected"),
+    [
+        (("99", "101", "94", "96"), Decimal("94.05")),  # stop 95, 1% worse
+        (("90", "91", "88", "89"), Decimal("89.10")),  # gapped open 90, 1% worse
+    ],
+)
+def test_stop_slippage_fills_a_long_stop_worse_than_its_level(
+    monkeypatch: pytest.MonkeyPatch, bar: tuple[str, str, str, str], expected: Decimal
+) -> None:
+    candles = [_ohlc(0, "100", "100", "100", "100"), _ohlc(1, *bar)]
+    [trade] = _run_with_exits(
+        candles, monkeypatch, exit_policy="stop_loss", stop_slippage=Decimal("0.01")
+    ).trades
+    assert trade.exit_price == expected
+    assert trade.exit_reason == "stop_loss"
+
+
+def test_stop_slippage_fills_a_short_stop_higher(monkeypatch: pytest.MonkeyPatch) -> None:
+    candles = [_ohlc(0, "100", "100", "100", "100"), _ohlc(1, "101", "106", "99", "104")]
+    [trade] = _run_with_exits(
+        candles, monkeypatch, entry="sell", exit_policy="stop_loss", stop_slippage=Decimal("0.01")
+    ).trades
+    assert trade.exit_price == Decimal("106.05")  # stop 105, 1% worse for a short
+
+
+def test_stop_slippage_does_not_touch_a_take_profit(monkeypatch: pytest.MonkeyPatch) -> None:
+    candles = [_ohlc(0, "100", "100", "100", "100"), _ohlc(1, "101", "111", "99", "108")]
+    [trade] = _run_with_exits(candles, monkeypatch, stop_slippage=Decimal("0.01")).trades
+    assert trade.exit_price == Decimal("110")
+    assert trade.exit_reason == "take_profit"
+
+
+def test_negative_stop_slippage_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ValueError):
+        _run_with_exits(
+            [_ohlc(0, "100", "100", "100", "100")], monkeypatch, stop_slippage=Decimal("-0.01")
+        )

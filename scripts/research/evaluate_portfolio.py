@@ -18,6 +18,7 @@ biases the result upward (survivorship bias).
 Research only: nothing is persisted.
 
 Run: python scripts/research/evaluate_portfolio.py [--symbols BTCUSDT,ETHUSDT,...] [--timeframe 4h]
+     [--stop-slippage 0.005]
 """
 
 import argparse
@@ -25,6 +26,7 @@ import itertools
 import statistics
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from app.db.session import SessionLocal
 from app.exchanges.types import TIMEFRAME_SECONDS
@@ -95,6 +97,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--symbols", default=DEFAULT_SYMBOLS)
     parser.add_argument("--timeframe", default="4h")
+    parser.add_argument(
+        "--stop-slippage",
+        type=Decimal,
+        default=Decimal(0),
+        help="fill each triggered stop this fraction worse than its level, e.g. 0.005",
+    )
     args = parser.parse_args()
 
     strategy_curves: dict[str, list[tuple[datetime, float]]] = {}
@@ -126,6 +134,7 @@ def main() -> int:
             test_bars=TEST_DAYS * bars_per_day,
             signal_generator=RESEARCH_STRATEGIES[STRATEGY],
             exit_policy=EXIT_POLICY,
+            stop_slippage=args.stop_slippage,
         )
         folds = [r.fold for r in results]
         tests = [r.test_result for r in results]
