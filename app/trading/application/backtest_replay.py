@@ -23,7 +23,7 @@ renamed too, an unrelated-seeming edit to unit 2's file this task did not ask fo
 confirmation): when a bar's signal opposes the currently held position, this
 harness places a close-only fill (quantity capped to exactly the held quantity) and
 does not evaluate a new/reverse entry in the same bar -- copied from
-`dummy_pipeline.run_dummy_pipeline_once`'s "Dote-gating" behavior, so a backtest
+`bot_evaluation.evaluate_bot_on_latest_bar`'s "Dote-gating" behavior, so a backtest
 run's execution *policy* matches the live pipeline's, not just its signal/risk
 logic. A structural consequence of always closing the *exact* held quantity: this
 pipeline's dote-gating path never triggers `apply_fill_to_position`'s partial-reduce

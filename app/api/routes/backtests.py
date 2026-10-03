@@ -4,7 +4,7 @@ already-implemented, already-tested Horizon4-lite backtest engine
 (docs/plans/horizon4-lite-backtest.md Units 1-6:
 `app/trading/application/{backtest_replay,backtest_metrics,backtest_walk_forward}.py`)
 over HTTP -- the same "fully built, zero HTTP callers" gap Horizon 3's Bot
-management API closed for `dummy_pipeline.py`.
+management API closed for `bot_evaluation.py`.
 
 Runs synchronously within the POST request (see
 `backtest_provisioning.run_backtest_for_workspace`'s own docstring for why): a

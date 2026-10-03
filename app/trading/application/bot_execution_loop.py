@@ -2,7 +2,7 @@
 execution loop -- docs/architecture/architecture-alignment-and-long-term-roadmap.md,
 2026-09-25 "Bot管理API -> 実行ループ/Worker -> 最低限のUI"順, second step).
 
-Calls `dummy_pipeline.run_dummy_pipeline_once` for every bot with
+Calls `bot_evaluation.evaluate_bot_on_latest_bar` for every bot with
 `actual_state` in `('running', 'paused')`, across every workspace -- a single
 unscoped process, no lease/heartbeat machinery. This mirrors the Notification
 Worker's shape (see `app/notifications/worker/__main__.py`'s docstring for the
@@ -12,7 +12,7 @@ crash mid-flight and need stale-recovery, so the market-data worker's
 lease/heartbeat design does not apply here either.
 
 Safe to call on a poll interval faster than any bot's own candle interval
-closes: `run_dummy_pipeline_once` is idempotent per (bot_run_id, candle_id)
+closes: `evaluate_bot_on_latest_bar` is idempotent per (bot_run_id, candle_id)
 (see that function's own docstring) -- re-evaluating a still-latest candle is
 a cheap "already_processed" no-op, not a duplicate signal or a crash.
 """
@@ -23,7 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.strategy import BotRun, TradingBot
-from app.trading.application.dummy_pipeline import run_dummy_pipeline_once
+from app.trading.application.bot_evaluation import evaluate_bot_on_latest_bar
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ def run_active_bots_once(db: Session) -> int:
             logger.warning("bot_execution_loop: bot %s has no matching active BotRun", bot.id)
             continue
         try:
-            run_dummy_pipeline_once(db, bot, bot_run)
+            evaluate_bot_on_latest_bar(db, bot, bot_run)
         except Exception as exc:
             db.rollback()
             logger.warning(

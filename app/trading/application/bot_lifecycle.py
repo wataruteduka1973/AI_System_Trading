@@ -39,7 +39,7 @@ continuing to run -- not this task's dummy signal generator. This codebase has n
 such engine at all yet (`trade_order.stop_price`/`take_profit_price` are stored but
 nothing acts on them, independent of Bot lifecycle -- a pre-existing gap noted in
 `order_flow.py`'s own module docstring). There is therefore nothing for *this* module
-to keep running during pause; see `dummy_pipeline.py`'s docstring for how the
+to keep running during pause; see `bot_evaluation.py`'s docstring for how the
 pipeline-layer distinction the task separately asked for ("新規建て玉は行わないが、
 既存ポジションの決済シグナルは引き続き評価する") was implemented instead, and the
 completion report for why these two requirements are not the same thing.
@@ -189,7 +189,7 @@ def _cancel_open_orders(db: Session, bot: TradingBot, *, reason_code: str) -> li
     """Cancels every cancellable order for the bot's account. Queried by `account_id`
     rather than joining through OrderIntent->Signal->BotRun->bot_id: a direct/manual
     order (`order_intent_id=None`, e.g. a dote-gating close-only order -- see
-    dummy_pipeline.py) has no such chain to join through, and this codebase's current
+    bot_evaluation.py) has no such chain to join through, and this codebase's current
     design has exactly one TradingBot per TradingAccount, so account_id is both
     simpler and more complete here. Under the current fully-synchronous fill model
     (order_flow.py: every order reaches a terminal state inside one `place_order`

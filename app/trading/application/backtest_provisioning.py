@@ -2,7 +2,7 @@
 `StrategyVersion`/`RiskProfileVersion`) and ties Units 1-6 of
 docs/plans/horizon4-lite-backtest.md into one workspace-facing entry point
 (Horizon 4 API/UI task, 2026-09-26 -- same "already fully built, zero HTTP
-callers" state Horizon 3's Bot management API found `dummy_pipeline.py` in).
+callers" state Horizon 3's Bot management API found `bot_evaluation.py` in).
 
 `docs/plans/horizon4-lite-backtest.md`'s own dataflow step 2
 ("dataset_snapshotを作成: 対象期間のcandle件数・欠損チェック・checksum算出") was
@@ -175,7 +175,7 @@ def run_backtest_for_workspace(
     a single backtest or a walk-forward train/test pair. Returns one `BacktestRun`
     for `walk_forward=False`, two (`[train, test]`) for `walk_forward=True`. Runs
     synchronously in this call -- there is no job queue in this codebase, matching
-    every other pipeline entry point here (`order_flow.py`, `dummy_pipeline.py`).
+    every other pipeline entry point here (`order_flow.py`, `bot_evaluation.py`).
     One transaction: nothing is committed until the run(s) are fully persisted."""
     candles = load_final_candles(db, instrument.id, timeframe, from_time, to_time)
     if not candles:

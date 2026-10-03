@@ -2,8 +2,8 @@
 docs/architecture/architecture-alignment-and-long-term-roadmap.md 2026-09-25 "Bot管理API ->
 実行ループ/Worker -> 最低限のUI"順). Covers bot discovery, the missing-BotRun
 skip path, and that one bot's failure does not stop the rest of the batch --
-`run_dummy_pipeline_once` itself is covered separately in
-tests/test_dummy_pipeline.py.
+`evaluate_bot_on_latest_bar` itself is covered separately in
+tests/test_bot_evaluation.py.
 """
 
 from unittest.mock import MagicMock
@@ -48,7 +48,7 @@ def test_run_active_bots_once_evaluates_every_active_bot(monkeypatch) -> None:
     calls = []
     monkeypatch.setattr(
         bot_execution_loop,
-        "run_dummy_pipeline_once",
+        "evaluate_bot_on_latest_bar",
         lambda db_, bot, bot_run: calls.append((bot, bot_run)) or {"action": "hold"},
     )
 
@@ -70,7 +70,7 @@ def test_run_active_bots_once_skips_a_bot_with_no_matching_bot_run(monkeypatch) 
     db.scalars.return_value.all.return_value = [bot]
     db.scalar.return_value = None  # no active BotRun found
     called = MagicMock()
-    monkeypatch.setattr(bot_execution_loop, "run_dummy_pipeline_once", called)
+    monkeypatch.setattr(bot_execution_loop, "evaluate_bot_on_latest_bar", called)
 
     evaluated = bot_execution_loop.run_active_bots_once(db)
 
@@ -90,7 +90,7 @@ def test_run_active_bots_once_isolates_one_bots_failure_from_the_rest(monkeypatc
             raise RuntimeError("boom")
         return {"action": "hold"}
 
-    monkeypatch.setattr(bot_execution_loop, "run_dummy_pipeline_once", fake_run)
+    monkeypatch.setattr(bot_execution_loop, "evaluate_bot_on_latest_bar", fake_run)
 
     evaluated = bot_execution_loop.run_active_bots_once(db)
 

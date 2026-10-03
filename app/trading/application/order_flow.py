@@ -153,7 +153,7 @@ class PlaceOrderCommand:
     time_in_force: str = "gtc"
     bot_id: UUID | None = None
     """Optional (ADR 0004/docs/plans/trading-halt-mvp.md Unit C): when the caller
-    knows which bot this order is for (e.g. `dummy_pipeline.py`), passing it lets
+    knows which bot this order is for (e.g. `bot_evaluation.py`), passing it lets
     `place_order` also check a bot-scoped `trading_halt` (data-delay), on top of the
     account-scoped one it always checks. A manual/direct order with no bot behind it
     leaves this `None` and only the account-scoped check applies."""

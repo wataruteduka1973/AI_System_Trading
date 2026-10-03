@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     # Horizon 3 execution loop (docs/architecture/architecture-alignment-and-long-term-roadmap.md,
     # 2026-09-25 "Bot管理API -> 実行ループ/Worker -> 最低限のUI"順): how often the
     # Bot execution Worker re-evaluates every running/paused bot. Safe to poll faster
-    # than any bot's own candle interval -- see dummy_pipeline.run_dummy_pipeline_once's
+    # than any bot's own candle interval -- see bot_evaluation.evaluate_bot_on_latest_bar's
     # idempotency guard.
     bot_execution_poll_interval_seconds: float = 5.0
 
