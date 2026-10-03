@@ -30,7 +30,7 @@ def upsert_candle_points(
     quality_status: str,
     points: list[CandlePoint],
 ) -> tuple[int, int]:
-    """Extracted from `CandleIngestionService._upsert_points` (2026-09-26, when
+    """Extracted from the former `CandleIngestionService._upsert_points` (2026-09-26, when
     `app/market_data/application/public_research.py` needed the identical
     upsert against `uq_candle_business_key` without going through the rest of
     that service's credentialed-account machinery). Returns (inserted,

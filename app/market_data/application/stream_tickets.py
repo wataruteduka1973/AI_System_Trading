@@ -17,18 +17,12 @@ from app.market_data.application.use_cases import (
     SUPPORTED_TIMEFRAMES,
     MarketDataApplicationError,
 )
+from app.market_data.infrastructure.access import ACCESS_ERROR_CODES, MarketDataAccessError
 from app.market_data.infrastructure.leases import FeedKey
 from app.market_data.infrastructure.page_access import AccessSnapshot
 from app.market_data.infrastructure.stream_tickets import issue_ticket
-from app.services.market_data import MarketDataAccessError
 
 ResolveAccess = Callable[[Session, FeedKey], AccessSnapshot]
-
-_ACCESS_ERROR_CODES = {
-    "access_unavailable",
-    "credentials_missing",
-    "credentials_unreadable",
-}
 
 
 @dataclass(frozen=True)
@@ -55,7 +49,7 @@ def issue_stream_ticket(
     try:
         access = resolve_access(db, feed)
     except MarketDataAccessError as exc:
-        code = exc.code if exc.code in _ACCESS_ERROR_CODES else "access_unavailable"
+        code = exc.code if exc.code in ACCESS_ERROR_CODES else "access_unavailable"
         raise MarketDataApplicationError(code, str(exc)) from exc
     token, expires_at = issue_ticket(
         ticket_secret,

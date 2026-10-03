@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.api.routes.market_data import application_errors, validate_collection_access
 from app.db.session import get_db
 from app.exchanges.binance import (
     BinanceApiError,
@@ -35,7 +36,6 @@ from app.models.instruments import Instrument
 from app.models.workspace import AppUser, Workspace
 from app.schemas.instruments import WorkspaceInstrumentRead, WorkspaceInstrumentSyncRead
 from app.security.rbac import require_operator_role, require_viewer_role
-from app.services.market_data import CandleIngestionService, MarketDataAccessError
 from app.services.secrets import LocalEncryptedSecretStore, get_secret_store
 
 router = APIRouter()
@@ -47,23 +47,6 @@ OandaClient = Annotated[OandaPracticeClient, Depends(get_oanda_practice_client)]
 BinanceClient = Annotated[BinanceSpotTestnetClient, Depends(get_binance_spot_testnet_client)]
 
 
-def _validate_collection_configuration(
-    db: Session, workspace_id: UUID, instrument_id: UUID
-) -> None:
-    """Mirrors `market_data.py`'s own helper of the same name -- both wrap
-    `CandleIngestionService.validate_configuration` into the
-    `ConfigurationValidator` shape `market_data_application`'s functions expect."""
-    try:
-        CandleIngestionService(db, get_secret_store()).validate_configuration(
-            workspace_id, instrument_id
-        )
-    except MarketDataAccessError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail="保存済み資格情報を読み込めません。接続管理でAPI資格情報を更新して再検証してください。",
-        ) from exc
-
-
 def _auto_start_collection(db: Session, workspace_id: UUID, instrument_id: UUID) -> None:
     """Starts continuous auto-collection and a one-time 365-day backfill for every
     supported timeframe, right after an instrument is synced -- 2026-09-26, per
@@ -71,26 +54,28 @@ def _auto_start_collection(db: Session, workspace_id: UUID, instrument_id: UUID)
     "get past year" click before it has any data. Silently skips a timeframe whose
     backfill already overlaps an in-flight one (re-syncing an already-set-up
     instrument is not an error); any other failure is left to propagate, since it
-    means the just-verified configuration cannot actually be used."""
-    market_data_application.update_subscriptions(
-        db,
-        workspace_id,
-        instrument_id,
-        enabled=True,
-        validate_configuration=_validate_collection_configuration,
-    )
-    for frame in market_data_application.SUPPORTED_TIMEFRAMES:
-        try:
-            market_data_application.enqueue_backfill(
-                db,
-                workspace_id,
-                market_data_application.BackfillCommand(instrument_id, frame, 365),
-                _validate_collection_configuration,
-                trigger_type="automatic",
-            )
-        except market_data_application.MarketDataApplicationError as exc:
-            if exc.code != "overlapping_backfill":
-                raise
+    means the just-verified configuration cannot actually be used -- mapped to HTTP
+    the same way the market-data routes map it."""
+    with application_errors():
+        market_data_application.update_subscriptions(
+            db,
+            workspace_id,
+            instrument_id,
+            enabled=True,
+            validate_configuration=validate_collection_access,
+        )
+        for frame in market_data_application.SUPPORTED_TIMEFRAMES:
+            try:
+                market_data_application.enqueue_backfill(
+                    db,
+                    workspace_id,
+                    market_data_application.BackfillCommand(instrument_id, frame, 365),
+                    validate_collection_access,
+                    trigger_type="automatic",
+                )
+            except market_data_application.MarketDataApplicationError as exc:
+                if exc.code != "overlapping_backfill":
+                    raise
 
 
 @router.get(

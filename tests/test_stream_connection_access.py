@@ -5,11 +5,11 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
+from app.market_data.infrastructure.access import MarketDataAccessError
 from app.market_data.infrastructure.stream_connection_access import (
     resolve_stream_connection_credentials,
 )
 from app.models.connections import ExchangeConnection, ExternalAccount
-from app.services.market_data import MarketDataAccessError
 
 WORKSPACE_ID = uuid4()
 
@@ -30,7 +30,10 @@ class _FakeSecrets:
 def _session_returning(row) -> MagicMock:
     session = MagicMock()
     execute_result = MagicMock()
-    execute_result.one_or_none.return_value = row
+    # Rows of access.selected_account_statement: (exchange, connection, account, selection).
+    execute_result.one_or_none.return_value = (
+        None if row is None else (MagicMock(), *row, MagicMock())
+    )
     session.execute.return_value = execute_result
     return session
 

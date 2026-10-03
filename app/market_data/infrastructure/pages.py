@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.exchanges.types import CandlePoint, timeframe_delta
 from app.market_data.domain.ingestion_report import IngestionReport
+from app.market_data.infrastructure.access import MarketDataAccessError
 from app.market_data.infrastructure.candle_store import (
     build_candle_coverage,
     persist_internal_gaps,
@@ -18,7 +19,6 @@ from app.market_data.infrastructure.models import WorkerBackfill, WorkerSubscrip
 from app.market_data.infrastructure.page_access import AccessSnapshot, PageAccess
 from app.market_data.infrastructure.page_errors import PageFailure
 from app.models.market_data import Candle
-from app.services.market_data import MarketDataAccessError
 
 
 @dataclass(frozen=True)

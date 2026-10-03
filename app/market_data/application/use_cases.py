@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.market_data.infrastructure.access import ACCESS_ERROR_CODES, MarketDataAccessError
 from app.market_data.infrastructure.backfill_locks import (
     DuplicateBackfillError,
     advisory_lock_key,
@@ -48,6 +49,36 @@ class SubscriptionCommand:
     instrument_id: UUID
     timeframe: str
     enabled: bool
+
+
+_ACCESS_ERROR_MESSAGES = {
+    "access_unavailable": (
+        "この銘柄のデータを取得できる接続がありません。接続管理で、口座の選択と接続の検証状態を"
+        "確認してください。"
+    ),
+    "credentials_missing": (
+        "接続にAPI資格情報が登録されていません。接続管理でAPI資格情報を登録して再検証してください。"
+    ),
+    "credentials_unreadable": (
+        "保存済み資格情報を読み込めません。接続管理でAPI資格情報を更新して再検証してください。"
+    ),
+}
+
+
+def _check_access(
+    validate_configuration: ConfigurationValidator,
+    db: Session,
+    workspace_id: UUID,
+    instrument_id: UUID,
+) -> None:
+    """Runs the injected access check (`access.check_collection_access` in the API) and
+    turns its failure into an application error by code, as `stream_tickets` does.
+    The message never includes the underlying error, which may name secret details."""
+    try:
+        validate_configuration(db, workspace_id, instrument_id)
+    except MarketDataAccessError as exc:
+        code = exc.code if exc.code in ACCESS_ERROR_CODES else "access_unavailable"
+        raise MarketDataApplicationError(code, _ACCESS_ERROR_MESSAGES[code]) from exc
 
 
 @contextmanager
@@ -139,7 +170,7 @@ def enqueue_backfill(
             )
         except DuplicateBackfillError as exc:
             raise MarketDataApplicationError("overlapping_backfill", str(exc)) from exc
-        validate_configuration(db, workspace_id, payload.instrument_id)
+        _check_access(validate_configuration, db, workspace_id, payload.instrument_id)
         job = BackfillJob(
             workspace_id=workspace_id,
             instrument_id=payload.instrument_id,
@@ -233,7 +264,7 @@ def update_subscriptions(
         _require_workspace(db, workspace_id)
         _require_instrument_access(db, workspace_id, instrument_id)
         if enabled:
-            validate_configuration(db, workspace_id, instrument_id)
+            _check_access(validate_configuration, db, workspace_id, instrument_id)
         _lock_collection(db, workspace_id, instrument_id)
         subscriptions = [
             _set_subscription(db, workspace_id, SubscriptionCommand(instrument_id, frame, enabled))

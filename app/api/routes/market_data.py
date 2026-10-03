@@ -13,6 +13,7 @@ from app.core.config import Settings, get_settings
 from app.db.session import get_db
 from app.market_data.application import stream_tickets as stream_ticket_application
 from app.market_data.application import use_cases as market_data_application
+from app.market_data.infrastructure.access import check_collection_access
 from app.market_data.infrastructure.page_access import PageAccess
 from app.models.market_data import BackfillJob, Candle, MarketDataSubscription
 from app.models.workspace import AppUser
@@ -29,7 +30,6 @@ from app.schemas.market_data import (
     Timeframe,
 )
 from app.security.rbac import require_operator_role, require_viewer_role
-from app.services.market_data import CandleIngestionService, MarketDataAccessError
 from app.services.secrets import get_secret_store
 
 router = APIRouter()
@@ -38,22 +38,15 @@ Viewer = Annotated[AppUser, Depends(require_viewer_role)]
 Operator = Annotated[AppUser, Depends(require_operator_role)]
 
 
-def _validate_collection_configuration(
-    db: Session, workspace_id: UUID, instrument_id: UUID
-) -> None:
-    try:
-        CandleIngestionService(db, get_secret_store()).validate_configuration(
-            workspace_id, instrument_id
-        )
-    except MarketDataAccessError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail="保存済み資格情報を読み込めません。接続管理でAPI資格情報を更新して再検証してください。",
-        ) from exc
+def validate_collection_access(db: Session, workspace_id: UUID, instrument_id: UUID) -> None:
+    """The `ConfigurationValidator` the market-data use cases take, wired to the local
+    secret store. Shared with `instruments.py`'s auto-start; the use cases turn a
+    refusal into an application error code, mapped to HTTP by `application_errors`."""
+    check_collection_access(db, get_secret_store(), workspace_id, instrument_id)
 
 
 @contextmanager
-def _application_errors() -> Iterator[None]:
+def application_errors() -> Iterator[None]:
     try:
         yield
     except market_data_application.MarketDataApplicationError as exc:
@@ -70,12 +63,12 @@ def _application_errors() -> Iterator[None]:
 
 
 def _require_workspace(db: Session, workspace_id: UUID) -> None:
-    with _application_errors():
+    with application_errors():
         market_data_application._require_workspace(db, workspace_id)
 
 
 def _require_instrument_access(db: Session, workspace_id: UUID, instrument_id: UUID) -> None:
-    with _application_errors():
+    with application_errors():
         market_data_application._require_instrument_access(db, workspace_id, instrument_id)
 
 
@@ -91,14 +84,14 @@ def create_candle_backfill(
     db: DatabaseSession,
     _: Operator,
 ) -> BackfillJob:
-    with _application_errors():
+    with application_errors():
         job = market_data_application.enqueue_backfill(
             db,
             workspace_id,
             market_data_application.BackfillCommand(
                 payload.instrument_id, payload.timeframe, payload.days
             ),
-            _validate_collection_configuration,
+            validate_collection_access,
         )
     return job
 
@@ -173,7 +166,7 @@ def get_candle_coverage(
     requested_from: datetime | None = None,
     requested_to: datetime | None = None,
 ) -> CandleCoverageRead:
-    with _application_errors():
+    with application_errors():
         report = market_data_application.get_coverage(
             db, workspace_id, instrument_id, timeframe, requested_from, requested_to
         )
@@ -191,13 +184,13 @@ def update_market_data_subscription(
     db: DatabaseSession,
     _: Operator,
 ) -> MarketDataSubscription:
-    with _application_errors():
+    with application_errors():
         return market_data_application.update_subscriptions(
             db,
             workspace_id,
             payload.instrument_id,
             payload.enabled,
-            _validate_collection_configuration,
+            validate_collection_access,
             timeframe=payload.timeframe,
         )[0]
 
@@ -213,13 +206,13 @@ def update_all_market_data_subscriptions(
     db: DatabaseSession,
     _: Operator,
 ) -> list[MarketDataSubscription]:
-    with _application_errors():
+    with application_errors():
         return market_data_application.update_subscriptions(
             db,
             workspace_id,
             payload.instrument_id,
             payload.enabled,
-            _validate_collection_configuration,
+            validate_collection_access,
         )
 
 
@@ -271,7 +264,7 @@ def create_market_stream_ticket(
     ticket_secret = _require_ticket_secret(settings)
     _require_workspace(db, workspace_id)
     page_access = PageAccess(get_secret_store())
-    with _application_errors():
+    with application_errors():
         result = stream_ticket_application.issue_stream_ticket(
             db,
             workspace_id,

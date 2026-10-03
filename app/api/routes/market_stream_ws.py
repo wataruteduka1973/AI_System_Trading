@@ -46,6 +46,7 @@ from sqlalchemy import select
 from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.market_data.application.spread_tracking import record_spread_observation
+from app.market_data.infrastructure.access import MarketDataAccessError
 from app.market_data.infrastructure.binance_stream import make_binance_feed_starter
 from app.market_data.infrastructure.candle_stream import FeedHub, FeedStarter
 from app.market_data.infrastructure.oanda_stream import OandaPriceTick, make_oanda_feed_starter
@@ -65,7 +66,6 @@ from app.market_data.infrastructure.stream_tickets import (
 )
 from app.models.connections import Exchange
 from app.models.instruments import Instrument
-from app.services.market_data import MarketDataAccessError
 from app.services.secrets import get_secret_store
 
 router = APIRouter()
