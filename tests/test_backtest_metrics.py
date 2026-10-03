@@ -8,6 +8,7 @@ from decimal import Decimal
 from unittest.mock import MagicMock
 from uuid import uuid4
 
+import pytest
 from app.models.instruments import Instrument
 from app.models.market_data import Candle
 from app.trading.application import backtest_metrics as metrics_mod
@@ -298,3 +299,37 @@ def test_run_and_persist_backtest_with_baseline_adds_comparison() -> None:
 
     assert "baseline_comparison" in run.summary_metrics
     assert run.summary_metrics["baseline_comparison"]["baseline"]["trade_count"] == 0
+
+
+def test_run_and_persist_backtest_replays_and_records_the_exit_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    replay_kwargs: list[dict[str, object]] = []
+    real_run_replay = metrics_mod.run_replay
+
+    def recording_run_replay(candles: object, **kwargs: object) -> object:
+        replay_kwargs.append(kwargs)
+        return real_run_replay(candles, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(metrics_mod, "run_replay", recording_run_replay)
+    candles = [_candle(Decimal("100"), 0), _candle(Decimal("100"), 1)]
+
+    run = metrics_mod.run_and_persist_backtest(
+        MagicMock(),
+        candles,
+        workspace_id=uuid4(),
+        strategy_version_id=uuid4(),
+        risk_profile_version_id=uuid4(),
+        dataset_snapshot_id=uuid4(),
+        instrument=_instrument(),
+        timeframe="4h",
+        exchange_code="binance",
+        rules=CONSERVATIVE_V1_RULES,
+        initial_equity=Decimal("1000000"),
+        code_version="test",
+        signal_generator=lambda history: "hold",
+        exit_policy="stop_loss",
+    )
+
+    assert [kwargs["exit_policy"] for kwargs in replay_kwargs] == ["stop_loss"]
+    assert run.parameters["exit_policy"] == "stop_loss"

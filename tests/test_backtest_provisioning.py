@@ -18,6 +18,7 @@ from app.models.backtest import BacktestRun, DatasetSnapshot
 from app.models.instruments import Instrument
 from app.models.market_data import Candle
 from app.trading.application import backtest_provisioning as provisioning
+from app.trading.application.paper_provisioning import APPROVED_STRATEGY_DEFINITION
 
 
 def _instrument(**overrides: object) -> Instrument:
@@ -167,11 +168,13 @@ def test_run_backtest_for_workspace_single_mode_calls_run_and_persist_backtest(
 
     from app.models.strategy import RiskProfileVersion, StrategyVersion
 
-    strategy_version = StrategyVersion(id=uuid4(), strategy_id=uuid4(), version=1)
+    strategy_version = StrategyVersion(
+        id=uuid4(), strategy_id=uuid4(), version=1, definition=APPROVED_STRATEGY_DEFINITION
+    )
     risk_profile_version = RiskProfileVersion(id=uuid4(), risk_profile_id=uuid4(), version=1)
     monkeypatch.setattr(
         provisioning,
-        "ensure_dummy_strategy_and_risk_profile",
+        "ensure_approved_versions",
         lambda db_, workspace_id: (strategy_version, risk_profile_version),
     )
     fake_run = BacktestRun(id=uuid4(), workspace_id=uuid4())
@@ -195,6 +198,9 @@ def test_run_backtest_for_workspace_single_mode_calls_run_and_persist_backtest(
     assert result == [fake_run]
     assert calls[0]["strategy_version_id"] == strategy_version.id
     assert calls[0]["risk_profile_version_id"] == risk_profile_version.id
+    # The approved strategy, resolved the way a live bot resolves it -- not the SMA skeleton.
+    assert calls[0]["signal_generator"].__name__ == "donchian_breakout"
+    assert calls[0]["exit_policy"] == "stop_loss"
     db.commit.assert_called_once()
 
 
@@ -209,19 +215,22 @@ def test_run_backtest_for_workspace_walk_forward_mode_calls_run_and_persist_walk
 
     from app.models.strategy import RiskProfileVersion, StrategyVersion
 
-    strategy_version = StrategyVersion(id=uuid4(), strategy_id=uuid4(), version=1)
+    strategy_version = StrategyVersion(
+        id=uuid4(), strategy_id=uuid4(), version=1, definition=APPROVED_STRATEGY_DEFINITION
+    )
     risk_profile_version = RiskProfileVersion(id=uuid4(), risk_profile_id=uuid4(), version=1)
     monkeypatch.setattr(
         provisioning,
-        "ensure_dummy_strategy_and_risk_profile",
+        "ensure_approved_versions",
         lambda db_, workspace_id: (strategy_version, risk_profile_version),
     )
     train_run = BacktestRun(id=uuid4(), workspace_id=uuid4())
     test_run = BacktestRun(id=uuid4(), workspace_id=uuid4())
+    wf_calls: list[dict[str, object]] = []
     monkeypatch.setattr(
         provisioning,
         "run_and_persist_walk_forward",
-        lambda db_, candles_, **kwargs: (train_run, test_run),
+        lambda db_, candles_, **kwargs: wf_calls.append(kwargs) or (train_run, test_run),
     )
 
     result = provisioning.run_backtest_for_workspace(
@@ -236,4 +245,6 @@ def test_run_backtest_for_workspace_walk_forward_mode_calls_run_and_persist_walk
     )
 
     assert result == [train_run, test_run]
+    assert wf_calls[0]["signal_generator"].__name__ == "donchian_breakout"
+    assert wf_calls[0]["exit_policy"] == "stop_loss"
     db.commit.assert_called_once()
