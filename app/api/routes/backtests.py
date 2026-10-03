@@ -11,10 +11,10 @@ Runs synchronously within the POST request (see
 large date range can make this endpoint slow. No progress reporting exists;
 this is a known, accepted limitation of "minimal" scope, not an oversight.
 
-`StrategyVersion` is not caller-selectable here: this codebase has exactly one
-real strategy implementation, so the workspace's shared dummy
-`StrategyVersion`/`RiskProfileVersion` (the same ones
-`dummy_pipeline.ensure_dummy_bot` uses for live paper bots) is always used. The
+`StrategyVersion` is not caller-selectable here: the workspace's approved
+`StrategyVersion`/`RiskProfileVersion` (`paper_provisioning.ensure_approved_versions`,
+the same ones a new bot gets) is always used, so a backtest evaluates what would
+actually be traded. Before 2026-10-02 this ran the rejected SMA skeleton. The
 `StrategyVersion` Draft/Validated/Approved/Retired governance workflow ADR 0003
 deferred remains out of scope here too (explicit user decision, 2026-09-26 --
 "公開運用・複数戦略運用が具体化した時点で改めて着手する").

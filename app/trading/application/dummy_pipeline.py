@@ -58,10 +58,8 @@ from app.models.instruments import Instrument
 from app.models.market_data import Candle
 from app.models.strategy import (
     BotRun,
-    RiskProfile,
     RiskProfileVersion,
     Signal,
-    Strategy,
     StrategyVersion,
     TradingBot,
 )
@@ -70,84 +68,11 @@ from app.trading.application import order_flow
 from app.trading.application.backtest_fill import BacktestPosition
 from app.trading.application.backtest_replay import _HISTORY_WINDOW, _protective_exit
 from app.trading.application.live_strategies import resolve_live_strategy
-from app.trading.application.risk_gate import CONSERVATIVE_V1_RULES, evaluate_signal
+from app.trading.application.risk_gate import evaluate_signal
 
 
 def _checksum(payload: object) -> str:
     return hashlib.sha256(repr(payload).encode()).hexdigest()
-
-
-def ensure_dummy_strategy_and_risk_profile(
-    db: Session,
-    workspace_id: UUID,
-    *,
-    strategy_name: str = "dummy-sma-pipeline-skeleton",
-    risk_profile_name: str = "conservative-v1-dummy",
-) -> tuple[StrategyVersion, RiskProfileVersion]:
-    """Idempotent: reuses existing rows by (workspace_id, name) if this has already
-    been called for this workspace. Extracted from `ensure_dummy_bot` (2026-09-26,
-    Horizon 4 backtest API task) so the backtest provisioning flow -- which needs a
-    `StrategyVersion`/`RiskProfileVersion` but not a `TradingBot`/`TradingAccount` --
-    can reuse the same one dummy strategy/risk-profile every bot in a workspace
-    already shares, instead of duplicating this block. Caller commits."""
-    strategy = db.scalar(
-        select(Strategy).where(
-            Strategy.workspace_id == workspace_id, Strategy.name == strategy_name
-        )
-    )
-    if strategy is None:
-        strategy = Strategy(workspace_id=workspace_id, name=strategy_name, mode="technical")
-        db.add(strategy)
-        db.flush()
-    strategy_version = db.scalar(
-        select(StrategyVersion).where(StrategyVersion.strategy_id == strategy.id)
-    )
-    if strategy_version is None:
-        definition = {
-            "kind": "dummy_sma_crossover",
-            "period": 5,
-            "note": "pipeline skeleton only, not a real strategy -- see dummy_signal.py",
-        }
-        strategy_version = StrategyVersion(
-            strategy_id=strategy.id,
-            version=1,
-            supported_market_types=["foreign_fx", "crypto"],
-            definition=definition,
-            checksum=_checksum(definition),
-            # "paper_approved" (not the DB default "draft"): bot_lifecycle.py's
-            # startup validation requires this before a bot can start/resume. This
-            # dummy strategy genuinely is approved for paper use -- that is the
-            # whole point of this pipeline skeleton -- so this is not a fabricated
-            # bypass of the gate, just an honest status for what it is.
-            lifecycle_status="paper_approved",
-        )
-        db.add(strategy_version)
-        db.flush()
-
-    risk_profile = db.scalar(
-        select(RiskProfile).where(
-            RiskProfile.workspace_id == workspace_id, RiskProfile.name == risk_profile_name
-        )
-    )
-    if risk_profile is None:
-        risk_profile = RiskProfile(workspace_id=workspace_id, name=risk_profile_name)
-        db.add(risk_profile)
-        db.flush()
-    risk_profile_version = db.scalar(
-        select(RiskProfileVersion).where(RiskProfileVersion.risk_profile_id == risk_profile.id)
-    )
-    if risk_profile_version is None:
-        risk_profile_version = RiskProfileVersion(
-            risk_profile_id=risk_profile.id,
-            version=1,
-            rules=CONSERVATIVE_V1_RULES,
-            checksum=_checksum(CONSERVATIVE_V1_RULES),
-            status="approved",
-        )
-        db.add(risk_profile_version)
-        db.flush()
-
-    return strategy_version, risk_profile_version
 
 
 def _exchange_code_for_connection(db: Session, connection_id: UUID) -> str:
