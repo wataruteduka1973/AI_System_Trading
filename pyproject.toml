@@ -34,7 +34,7 @@ dependencies = [
 # 3553/3554, GHSA-537c-gmf6-5ccf) -- one of them (PYSEC-2026-3552) is only fixed as of
 # 50.0.0. Verified via `python -m pip_audit` against 50.0.1 before pinning. This
 # project's only use of cryptography is Fernet symmetric encryption
-# (app/services/secrets.py) -- a narrow, stable API untouched by this jump.
+# (app/security/secret_store.py) -- a narrow, stable API untouched by this jump.
 #
 # requests is imported directly (exception types caught around the OANDA SDK calls in
 # app/exchanges/oanda.py and app/market_data/infrastructure/), so it is declared here

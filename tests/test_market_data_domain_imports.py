@@ -15,7 +15,7 @@ FORBIDDEN_PREFIXES = (
     "oandapyV20",
     "httpx",
     "app.models",
-    "app.services",
+    "app.security",
     "app.db",
     "app.api",
     "app.market_data.application",

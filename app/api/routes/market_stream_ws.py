@@ -66,7 +66,7 @@ from app.market_data.infrastructure.stream_tickets import (
 )
 from app.models.connections import Exchange
 from app.models.instruments import Instrument
-from app.services.secrets import get_secret_store
+from app.security.secret_store import get_secret_store
 
 router = APIRouter()
 logger = structlog.get_logger("app.market_stream")

@@ -22,7 +22,7 @@ from app.market_data.infrastructure.normalize import normalize_legacy_jobs
 from app.market_data.infrastructure.page_access import PageAccess
 from app.market_data.infrastructure.pages import PageStore
 from app.market_data.worker.runner import WorkerRunner
-from app.services.secrets import get_secret_store
+from app.security.secret_store import get_secret_store
 
 logger = logging.getLogger(__name__)
 REQUIRED_REVISIONS = frozenset({"20260831_0005"})

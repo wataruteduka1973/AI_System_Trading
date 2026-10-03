@@ -51,7 +51,7 @@ from app.security.rbac import (
     require_owner_role,
     require_viewer_role,
 )
-from app.services.secrets import LocalEncryptedSecretStore, get_secret_store
+from app.security.secret_store import LocalEncryptedSecretStore, get_secret_store
 
 router = APIRouter()
 DatabaseSession = Annotated[Session, Depends(get_db)]

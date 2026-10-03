@@ -86,7 +86,7 @@ def test_access_errors_default_to_a_safe_configuration_error_code() -> None:
 
 
 def test_changed_encryption_key_has_an_actionable_safe_error(tmp_path) -> None:
-    from app.services.secrets import LocalEncryptedSecretStore
+    from app.security.secret_store import LocalEncryptedSecretStore
     from cryptography.fernet import Fernet
 
     original = LocalEncryptedSecretStore(tmp_path, Fernet.generate_key().decode())
