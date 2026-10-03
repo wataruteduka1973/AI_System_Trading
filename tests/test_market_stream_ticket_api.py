@@ -10,10 +10,10 @@ from app.api.routes import market_data as market_data_routes
 from app.core.config import Settings
 from app.db.session import get_db
 from app.main import app
+from app.market_data.infrastructure.access import MarketDataAccessError
 from app.market_data.infrastructure.page_access import AccessSnapshot
 from app.models.workspace import AppUser
 from app.security.rbac import require_viewer_role
-from app.services.market_data import MarketDataAccessError
 from fastapi.testclient import TestClient
 
 client = TestClient(app)

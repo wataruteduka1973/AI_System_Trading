@@ -10,9 +10,9 @@ import jwt
 import pytest
 from app.market_data.application import stream_tickets as ticket_application
 from app.market_data.application.use_cases import MarketDataApplicationError
+from app.market_data.infrastructure.access import MarketDataAccessError
 from app.market_data.infrastructure.leases import FeedKey
 from app.market_data.infrastructure.page_access import AccessSnapshot
-from app.services.market_data import MarketDataAccessError
 
 SECRET = "test-signing-secret"
 

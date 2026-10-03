@@ -12,7 +12,7 @@ from requests.exceptions import Timeout as RequestsTimeout
 
 from app.exchanges.binance import BinanceAuthenticationError
 from app.exchanges.oanda import OandaAuthenticationError
-from app.services.market_data import MarketDataAccessError
+from app.market_data.infrastructure.access import MarketDataAccessError
 
 
 @dataclass(frozen=True)
