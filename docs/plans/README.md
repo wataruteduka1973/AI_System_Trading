@@ -1,7 +1,7 @@
 # 計画書の一覧
 
 各計画書の状態を一か所で見るための索引。詳細と正の記録は各計画書にある。計画書を追加したとき、
-または状態が変わったときは、この表も更新する(2026-10-02 時点、マージ済みPRと照合)。
+または状態が変わったときは、この表も更新する(2026-10-03 時点、マージ済みPRと照合)。
 
 長期の実行順序は [architecture/architecture-alignment-and-long-term-roadmap.md](../architecture/architecture-alignment-and-long-term-roadmap.md) を参照。
 
@@ -24,6 +24,7 @@
 
 | 計画書 | 内容 |
 |---|---|
+| [market-data-services-consolidation.md](market-data-services-consolidation.md) | 市場データの旧サービス層を app/market_data/ に統合(閲覧系の認可クエリの扱いは別判断として残る) |
 | [horizon4-lite-backtest.md](horizon4-lite-backtest.md) | バックテスト基盤(Unit 1〜6) |
 | [trading-halt-mvp.md](trading-halt-mvp.md) | trading_haltの発動・解除(MVP) |
 | [durable-market-data-worker.md](durable-market-data-worker.md) | 市場データのDurable Worker(Horizon 1) |

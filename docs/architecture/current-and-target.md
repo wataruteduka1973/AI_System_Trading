@@ -132,16 +132,33 @@ Transitional dependencies that remain intentionally:
 `update_subscriptions`. They accept plain inputs/command dataclasses, enforce workspace scope,
 and return ORM entities or coverage data without importing FastAPI or response schemas.
 Application error codes are translated to the existing HTTP contract by the route.
-Credential preflight is injected; API wiring constructs the existing ingestion service and
-translates secret errors. Disabling collection never needs credential decryption.
+Credential preflight is injected (`api/routes/market_data.validate_collection_access`, wired to
+`infrastructure/access.check_collection_access`); the use cases translate its
+`MarketDataAccessError` into application error codes. Disabling collection never needs
+credential decryption.
 
 Enqueue and subscription writes include their audit records in one transaction and roll back
 on failure. Both legacy single-frame and bulk changes use the same instrument/workspace lock.
-Coverage range validation and latest-job fallback moved out of the route; calculation still
-delegates to the existing service shared with backfill execution.
+Coverage range validation and latest-job fallback moved out of the route; calculation lives in
+`infrastructure/candle_store.build_candle_coverage`, shared with backfill execution.
 
-SQLAlchemy/services are intentional transitional dependencies, as with connection verification.
-Read-only candle/job/subscription listing still lives in the route. Backfill execution and polling
+**Module layout (2026-10-03, `docs/plans/market-data-services-consolidation.md`).** The legacy
+`app/services/market_data.py` is gone; all market-data code is under `app/market_data/`:
+
+- `domain/`: gap detection, coverage classification, the backfill ingestion report. No
+  SQLAlchemy, ORM, SDK or framework imports (checked by `tests/test_market_data_domain_imports.py`).
+- `infrastructure/candle_store.py` and `backfill_locks.py`: candle upsert, coverage and gap
+  persistence, and the advisory locks.
+- `infrastructure/access.py`: the only place that decides whether a workspace may read market
+  data through a connection (selected active account, verified connection, matching environment,
+  Practice/Testnet endpoint, shared lock until commit). The Worker, the realtime stream and the
+  API's pre-check all resolve access through it, so the API refuses (409) what the Worker would.
+  `use_cases._require_instrument_access` (view authorization for read endpoints and backtests)
+  still has its own looser query; tightening it changes read behavior and needs a separate
+  decision.
+
+SQLAlchemy sessions are an intentional transitional dependency of the use cases, as with
+connection verification. Read-only candle/job/subscription listing still lives in the route. Backfill execution and polling
 now run in the separate Worker process described under "Worker" below, not in the API process.
 See `docs/plans/market-data-application-boundary.md` for the Application-extraction transitions
 and `docs/plans/durable-market-data-worker.md` for the Worker delivery that followed it.

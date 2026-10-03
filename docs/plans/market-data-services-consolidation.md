@@ -1,6 +1,8 @@
 # 市場データの旧サービス層を app/market_data/ に統合する
 
-- 状態: 計画(未着手)。Unit 3 の挙動変更は2026-10-03に利用者が推奨案で承認(「決めたこと」を参照)
+- 状態: `[x]` 完了(2026-10-03)。Unit 1 は PR #78、Unit 2・3 は PR #82(#79・#80 の内容)、Unit 4 は
+  この文書の更新と同じPR。Unit 3 の挙動変更は2026-10-03に利用者が推奨案で承認(「決めたこと」を参照)。
+  結果と残った課題は末尾の「実施結果」を参照
 - 作成: 2026-10-03(技術的負債リスト #10)
 - 正とする設計: `docs/architecture/current-and-target.md` の「Target modules」と依存方向
   (`API or Worker -> Application -> Domain`、`Infrastructure` は Application から使う)
@@ -168,3 +170,24 @@ Unit 3 は、APIが返すエラーが変わる。
   mypy と import の静的検査で確認する。
 - **並行するPRとの衝突**: 開いているPR(#72〜#76)はこの計画の対象ファイルを変更していない
   (#76 は `current-and-target.md` 内のパスを変更する。Unit 4 は #76 のマージ後に行う)。
+
+## 実施結果(2026-10-03)
+
+- `app/services/market_data.py` を削除した。`app/services/` に残るのは `secrets.py` だけ。
+- 移した定義は、名前の変更(`_is_expected_market_time` → `is_expected_market_time`、
+  `_advisory_lock_key` → `advisory_lock_key`)を除いて元とASTが同一であることを確認した(Unit 1・2)。
+- Unit 3 で計画との違いが2つあった。
+  - 接続先が Practice/Testnet 以外のとき、取引所クライアントの例外(`BinanceApiError` /
+    `OandaApiError`)が出る。Worker はこれを従来どおり分類するので変えず、APIの事前確認
+    (`check_collection_access`)の中だけで `access_unavailable` に変換した。変換しないと
+    APIは500を返す。
+  - 銘柄同期の自動収集開始(`instruments._auto_start_collection`)で、重複以外のアプリケーション
+    エラーがHTTPに変換されず500になっていた既存の不具合を、市場データのルートと同じ対応表
+    (`application_errors`)で返すように直した。
+- 空になった旧モジュールは Unit 3 で削除した(計画では Unit 4)。
+- **残った課題(別の判断が必要)**: `use_cases._require_instrument_access` も口座選択を引く
+  クエリを持ち、`access.py` より条件が緩い。閲覧系(ローソク足一覧・カバレッジ・バックテスト)の
+  認可で、書き込み系では `check_collection_access` より前に実行されるので、今回の不整合は
+  起きない。厳しくすると閲覧とバックテストの挙動が変わるため、この計画では扱わなかった。
+- **運用上の注意**: 積み上げたPR(#79・#80)が中間ブランチにマージされ main に届かなかったため、
+  PR #82 で入れ直した。以後、PRは main 向けだけにする。
