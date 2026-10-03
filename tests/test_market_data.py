@@ -9,12 +9,12 @@ from app.exchanges.oanda import OandaPracticeClient
 from app.exchanges.types import CandlePoint, timeframe_delta
 from app.market_data.domain.coverage import classify_candle_coverage, find_internal_gaps
 from app.market_data.domain.ingestion_report import IngestionReport
-from app.models.market_data import MarketDataGap
-from app.services.market_data import (
-    CandleIngestionService,
-    MarketDataAccessError,
+from app.market_data.infrastructure.candle_store import (
     persist_internal_gaps,
+    upsert_candle_points,
 )
+from app.models.market_data import MarketDataGap
+from app.services.market_data import CandleIngestionService, MarketDataAccessError
 
 
 def candle_point(open_time: datetime) -> CandlePoint:
@@ -359,10 +359,10 @@ def test_upsert_reports_actual_insert_and_update_counts() -> None:
     scalar_result = MagicMock()
     scalar_result.all.return_value = [True, False, True]
     session.scalars.return_value = scalar_result
-    service = CandleIngestionService(session, MagicMock())
     start = datetime(2026, 8, 27, tzinfo=UTC)
 
-    inserted, updated = service._upsert_points(
+    inserted, updated = upsert_candle_points(
+        session,
         uuid4(),
         "1m",
         "binance",
