@@ -1,6 +1,5 @@
 import type { ConnectionSummary } from '../connections/types'
 import type { WorkspaceInstrument } from '../instruments/types'
-import type { Timeframe } from '../market-data/types'
 import type { BotRunSummary, TradingAccount, TradingBot } from './types'
 
 const stateLabel: Record<TradingBot['desired_state'], string> = {
@@ -17,7 +16,8 @@ const stateBadgeClass: Record<TradingBot['desired_state'], string> = {
   failed: 'connection-badge bot-state-failed',
 }
 
-const timeframeOptions: Timeframe[] = ['1m', '5m', '15m', '30m', '1h', '4h', '1d']
+/** The server always creates this one (paper_provisioning.APPROVED_*); shown, not chosen. */
+const approvedStrategyLabel = '4h・Donchian 55/20'
 
 /** Rendered inside the shared workspace-panel section, mirroring ConnectionsPanel's
  * placement convention -- see that component's own doc comment. */
@@ -120,8 +120,6 @@ export function TradingForms({
   onBotAccountIdChange,
   botInstrumentId,
   onBotInstrumentIdChange,
-  botTimeframe,
-  onBotTimeframeChange,
   onCreateBot,
 }: {
   visible: boolean
@@ -147,8 +145,6 @@ export function TradingForms({
   onBotAccountIdChange: (value: string) => void
   botInstrumentId: string
   onBotInstrumentIdChange: (value: string) => void
-  botTimeframe: Timeframe
-  onBotTimeframeChange: (value: Timeframe) => void
   onCreateBot: () => void
 }) {
   if (!visible) return null
@@ -213,12 +209,15 @@ export function TradingForms({
         <div>
           <p className="eyebrow">BOTS</p>
           <h2>Botを作成</h2>
-          <p className="panel-description">作成のみ行います。開始は一覧の「開始」ボタンから別途行ってください。</p>
+          <p className="panel-description">
+            作成のみ行います。開始は一覧の「開始」ボタンから別途行ってください。
+            戦略は検証済みのDonchian 55/20＋損切り(4h足)だけで、暗号資産の銘柄にのみ作成できます。
+          </p>
         </div>
         <div className="registration-grid">
           <label>
             Bot名
-            <input value={botName} onChange={(event) => onBotNameChange(event.target.value)} placeholder="btc-1m-bot" />
+            <input value={botName} onChange={(event) => onBotNameChange(event.target.value)} placeholder="btc-4h-bot" />
           </label>
           <label>
             取引口座
@@ -243,14 +242,8 @@ export function TradingForms({
             </select>
           </label>
           <label>
-            時間足
-            <select value={botTimeframe} onChange={(event) => onBotTimeframeChange(event.target.value as Timeframe)}>
-              {timeframeOptions.map((timeframe) => (
-                <option key={timeframe} value={timeframe}>
-                  {timeframe}
-                </option>
-              ))}
-            </select>
+            戦略・時間足
+            <input value={approvedStrategyLabel} readOnly />
           </label>
           <button type="button" onClick={onCreateBot} disabled={!botName.trim() || !botAccountId || !botInstrumentId}>
             Bot作成

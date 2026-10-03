@@ -10,7 +10,6 @@ import pytest
 from app.models.market_data import Candle
 from app.trading.application import live_strategies as ls
 from app.trading.application.donchian_breakout_signal import generate_donchian_breakout_signal
-from app.trading.application.dummy_signal import generate_dummy_signal
 
 
 def _candles(closes: list[int]) -> list[Candle]:
@@ -33,23 +32,18 @@ def _candles(closes: list[int]) -> list[Candle]:
     ]
 
 
-def test_the_existing_dummy_definition_keeps_its_behaviour_and_take_profit() -> None:
-    # The exact definition `ensure_dummy_strategy_and_risk_profile` stores, note included.
-    definition = {"kind": "dummy_sma_crossover", "period": 5, "note": "pipeline skeleton only"}
-    strategy = ls.resolve_live_strategy(definition)
-    candles = _candles([100, 100, 100, 100, 100, 110])
-
-    assert strategy.generate(candles) == generate_dummy_signal(candles, period=5) == "buy"
-    assert strategy.records_take_profit is True
-    assert strategy.rationale(candles[-1]) == {
+def test_the_rejected_sma_skeleton_is_refused_so_its_bots_cannot_start() -> None:
+    # The exact definition the SMA pipeline skeleton's strategy version is stored with.
+    definition = {
         "kind": "dummy_sma_crossover",
-        "parameters": {"period": 5},
-        "exit_policy": "signal",
-        "close": "110",
+        "period": 5,
+        "note": "pipeline skeleton only, not a real strategy -- see dummy_signal.py",
     }
+    with pytest.raises(ls.UnresolvableStrategyError, match="dummy_sma_crossover"):
+        ls.resolve_live_strategy(definition)
 
 
-def test_a_donchian_definition_uses_its_own_periods_and_no_take_profit() -> None:
+def test_a_donchian_definition_uses_its_own_periods() -> None:
     strategy = ls.resolve_live_strategy(
         {"kind": "donchian_breakout", "entry_period": 3, "exit_period": 2}
     )
@@ -60,7 +54,6 @@ def test_a_donchian_definition_uses_its_own_periods_and_no_take_profit() -> None
         == generate_donchian_breakout_signal(candles, entry_period=3, exit_period=2)
         == "buy"
     )
-    assert strategy.records_take_profit is False
     assert strategy.rationale(candles[-1])["parameters"] == {"entry_period": 3, "exit_period": 2}
 
 
@@ -74,7 +67,6 @@ def test_a_donchian_definition_uses_its_own_periods_and_no_take_profit() -> None
         {"kind": "donchian_breakout", "entry_period": "55", "exit_period": 20},
         {"kind": "donchian_breakout", "entry_period": 0, "exit_period": 20},
         {"kind": "donchian_breakout", "entry_period": True, "exit_period": 20},
-        {"kind": "dummy_sma_crossover", "period": -1},
     ],
 )
 def test_anything_unresolvable_is_refused(definition: object) -> None:
@@ -86,7 +78,9 @@ def test_anything_unresolvable_is_refused(definition: object) -> None:
 
 
 def test_exit_policy_defaults_to_signal_only() -> None:
-    strategy = ls.resolve_live_strategy({"kind": "dummy_sma_crossover", "period": 5})
+    strategy = ls.resolve_live_strategy(
+        {"kind": "donchian_breakout", "entry_period": 55, "exit_period": 20}
+    )
     assert strategy.exit_policy == "signal"
 
 

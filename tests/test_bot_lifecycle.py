@@ -60,7 +60,7 @@ def _strategy_version(**overrides: object) -> StrategyVersion:
         strategy_id=uuid4(),
         version=1,
         lifecycle_status="paper_approved",
-        definition={"kind": "dummy_sma_crossover", "period": 5},
+        definition={"kind": "donchian_breakout", "entry_period": 55, "exit_period": 20},
     )
     defaults.update(overrides)
     return StrategyVersion(**defaults)

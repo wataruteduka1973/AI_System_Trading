@@ -1,23 +1,10 @@
-"""Orchestrates one evaluation cycle of the placeholder pipeline: dummy signal ->
-Risk Gate -> OrderIntent -> `order_flow.place_order`. See `dummy_signal.py`'s
-docstring -- this whole module is pipeline-wiring scaffolding for exercising
-Signal -> RiskDecision -> OrderIntent -> TradeOrder -> Fill end-to-end while a real
-predictive model is on hold, not a strategy implementation.
+"""Orchestrates one evaluation cycle of a paper bot: the signal from the bot's
+strategy version (`live_strategies.resolve_live_strategy`) -> Risk Gate ->
+OrderIntent -> `order_flow.place_order`. The module and function names date from
+when the only signal was the SMA pipeline skeleton (`dummy_signal.py`).
 
-`ensure_dummy_bot` creates the minimum fixture rows the schema's foreign keys require
-to record a Signal at all (`Strategy`/`StrategyVersion`, `RiskProfile`/
-`RiskProfileVersion`, `TradingBot`). Idempotent (safe to call repeatedly; reuses
-existing rows by `(workspace_id, name)`).
-
-**Provisioning vs. starting are two separate steps** (changed from this function's
-original shape, which used to also call `bot_lifecycle.start_bot` itself): a newly
-created bot is left in the DB-default `stopped` state. This module had zero callers
-and zero test coverage before the Bot management API (`app/api/routes/trading.py`)
-was added -- splitting these lets `POST .../bots` create a bot without immediately
-running it, and `POST .../bots/{id}/start` start it as its own explicit action,
-matching how `bot_lifecycle.py`'s four commands are already independent of each
-other. Callers that want the old "create and start in one call" behavior should call
-`ensure_dummy_bot` then `bot_lifecycle.start_bot` themselves.
+Bots are created elsewhere (`paper_provisioning.py`) and left stopped; starting one
+is `bot_lifecycle.start_bot`'s job.
 
 **`run_dummy_pipeline_once`'s gating on `bot.actual_state`** (2026-09-20, added for
 the Bot lifecycle task): `stopped` skips everything, including signal generation
@@ -82,7 +69,7 @@ from app.models.trading import Fill, TradeOrder, TradingAccount, TradingPosition
 from app.trading.application import order_flow
 from app.trading.application.backtest_fill import BacktestPosition
 from app.trading.application.backtest_replay import _HISTORY_WINDOW, _protective_exit
-from app.trading.application.live_strategies import LiveStrategy, resolve_live_strategy
+from app.trading.application.live_strategies import resolve_live_strategy
 from app.trading.application.risk_gate import CONSERVATIVE_V1_RULES, evaluate_signal
 
 
@@ -163,56 +150,6 @@ def ensure_dummy_strategy_and_risk_profile(
     return strategy_version, risk_profile_version
 
 
-def ensure_dummy_bot(
-    db: Session,
-    workspace_id: UUID,
-    account: TradingAccount,
-    instrument: Instrument,
-    *,
-    bot_name: str,
-    timeframe: str = "1m",
-    strategy_name: str = "dummy-sma-pipeline-skeleton",
-    risk_profile_name: str = "conservative-v1-dummy",
-) -> TradingBot:
-    """Idempotent: reuses existing rows by (workspace_id, name) if this has already
-    been called for this workspace. `strategy_name`/`risk_profile_name` default to
-    the one dummy strategy/risk-profile every bot in a workspace currently shares
-    (there is only one real strategy implementation, `dummy_signal.py`) --
-    `bot_name` has no such shared default since it must be unique per bot
-    (`uq_trading_bot_name`) and the caller always has a real one to give it."""
-    strategy_version, risk_profile_version = ensure_dummy_strategy_and_risk_profile(
-        db, workspace_id, strategy_name=strategy_name, risk_profile_name=risk_profile_name
-    )
-
-    bot = db.scalar(
-        select(TradingBot).where(
-            TradingBot.workspace_id == workspace_id, TradingBot.name == bot_name
-        )
-    )
-    if bot is None:
-        if account.connection_id is None:
-            raise ValueError("account has no connection_id; cannot create a TradingBot")
-        bot = TradingBot(
-            workspace_id=workspace_id,
-            name=bot_name,
-            execution_mode="paper",
-            strategy_mode="technical",
-            connection_id=account.connection_id,
-            account_id=account.id,
-            instrument_id=instrument.id,
-            timeframe=timeframe,
-            strategy_version_id=strategy_version.id,
-            risk_profile_version_id=risk_profile_version.id,
-            # DB defaults apply: stopped/stopped. Starting the bot is a separate,
-            # explicit action (bot_lifecycle.start_bot) -- not this function's job.
-        )
-        db.add(bot)
-
-    db.commit()
-    db.refresh(bot)
-    return bot
-
-
 def _exchange_code_for_connection(db: Session, connection_id: UUID) -> str:
     code = db.scalar(
         select(Exchange.code)
@@ -234,23 +171,6 @@ def _open_position(
             TradingPosition.status == "open",
         )
     )
-
-
-_TAKE_PROFIT_REWARD_MULTIPLE = Decimal("2.0")
-"""Matches `risk_gate.py`'s fixed reward/risk ratio (which the gate does not
-actually evaluate -- see docs/plans/paper-trading-live-data.md)."""
-
-
-def _informational_take_profit(
-    strategy: LiveStrategy, side: str, close: Decimal, stop_distance: Decimal
-) -> Decimal | None:
-    """The take-profit price stored on the order intent -- recorded only, never
-    executed. None for strategies that do not exit at a fixed target (see
-    `live_strategies.LiveStrategy.records_take_profit`)."""
-    if not strategy.records_take_profit:
-        return None
-    target = stop_distance * _TAKE_PROFIT_REWARD_MULTIPLE
-    return close + target if side == "buy" else close - target
 
 
 def _stop_exit_price(candles: list[Candle], position: TradingPosition) -> Decimal | None:
@@ -494,9 +414,6 @@ def run_dummy_pipeline_once(db: Session, bot: TradingBot, bot_run: BotRun) -> di
 
     assert result.approved_quantity is not None
     stop_distance = Decimal(result.decision.rule_results["quantity_calculation"]["stop_distance"])
-    take_profit_price = _informational_take_profit(
-        strategy, signal_action, latest_candle.close, stop_distance
-    )
 
     intent = order_flow.create_order_intent(
         db,
@@ -506,7 +423,6 @@ def run_dummy_pipeline_once(db: Session, bot: TradingBot, bot_run: BotRun) -> di
             side=signal_action,
             order_type="market",
             requested_quantity=result.approved_quantity,
-            take_profit_price=take_profit_price,
         ),
     )
     order = order_flow.place_order(

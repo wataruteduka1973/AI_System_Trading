@@ -32,23 +32,17 @@ from app.models.connections import Exchange, ExchangeConnection
 from app.models.workspace import Workspace
 from app.trading.application import bot_lifecycle
 from app.trading.application.paper_provisioning import (
+    APPROVED_RISK_PROFILE_NAME,
+    APPROVED_RISK_RULES,
+    APPROVED_STRATEGY_DEFINITION,
+    APPROVED_STRATEGY_NAME,
+    APPROVED_TIMEFRAME,
     PaperBotSpec,
     ProvisioningError,
     provision_paper_bot,
 )
 from app.trading.application.public_price_refresh import INITIAL_BARS
-from app.trading.application.risk_gate import CONSERVATIVE_V1_RULES
 from sqlalchemy import select
-
-TIMEFRAME = "4h"
-STRATEGY_NAME = "donchian-55-20-stop-loss"
-STRATEGY_DEFINITION = {
-    "kind": "donchian_breakout",
-    "entry_period": 55,
-    "exit_period": 20,
-    "exit_policy": "stop_loss",
-}
-RISK_PROFILE_NAME = "conservative-v1"
 
 
 def main() -> int:
@@ -86,13 +80,13 @@ def main() -> int:
             connection_id=connections[0].id,
             instrument_id=instrument.id,
             quote_asset=instrument.quote_asset,
-            bot_name=f"{args.symbol.lower()}-{TIMEFRAME}-donchian",
-            timeframe=TIMEFRAME,
+            bot_name=f"{args.symbol.lower()}-{APPROVED_TIMEFRAME}-donchian",
+            timeframe=APPROVED_TIMEFRAME,
             allocation=args.allocation,
-            strategy_name=STRATEGY_NAME,
-            strategy_definition=STRATEGY_DEFINITION,
-            risk_profile_name=RISK_PROFILE_NAME,
-            risk_rules=CONSERVATIVE_V1_RULES,
+            strategy_name=APPROVED_STRATEGY_NAME,
+            strategy_definition=APPROVED_STRATEGY_DEFINITION,
+            risk_profile_name=APPROVED_RISK_PROFILE_NAME,
+            risk_rules=APPROVED_RISK_RULES,
         )
         try:
             bot = provision_paper_bot(db, spec)
@@ -110,12 +104,12 @@ def main() -> int:
                 db,
                 get_binance_public_client(),
                 instrument,
-                TIMEFRAME,
+                APPROVED_TIMEFRAME,
                 initial_bars=INITIAL_BARS,
                 now=datetime.now(UTC),
             )
         )
-        print(f"[OK] refreshed {args.symbol} {TIMEFRAME}: {refreshed} new bar(s)")
+        print(f"[OK] refreshed {args.symbol} {APPROVED_TIMEFRAME}: {refreshed} new bar(s)")
         try:
             bot_run = bot_lifecycle.start_bot(db, bot)
         except bot_lifecycle.BotLifecycleError as exc:
