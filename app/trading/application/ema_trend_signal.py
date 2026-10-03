@@ -42,12 +42,10 @@ bar's fast/slow relationship to the previous bar's). `backtest_replay.py`'s
 """
 
 from collections.abc import Sequence
-from typing import Literal
 
 from app.market_data.application.indicators import exponential_moving_average
 from app.models.market_data import Candle
-
-EmaTrendSignalAction = Literal["buy", "sell", "hold"]
+from app.trading.application.signal_action import SignalAction
 
 FAST_PERIOD = 12
 SLOW_PERIOD = 26
@@ -60,7 +58,7 @@ def generate_ema_trend_signal(
     fast_period: int = FAST_PERIOD,
     slow_period: int = SLOW_PERIOD,
     trend_period: int = TREND_PERIOD,
-) -> EmaTrendSignalAction:
+) -> SignalAction:
     """ "buy" on the bar the fast EMA crosses above the slow EMA, provided the
     latest close is above the EMA(trend_period) trend filter; "sell" on the
     bar the fast EMA crosses below the slow EMA, regardless of the trend

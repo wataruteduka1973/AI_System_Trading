@@ -30,7 +30,7 @@ from typing import Any, Literal
 
 from app.models.market_data import Candle
 from app.trading.application.donchian_breakout_signal import generate_donchian_breakout_signal
-from app.trading.application.dummy_signal import DummySignalAction
+from app.trading.application.signal_action import SignalAction
 
 
 class UnresolvableStrategyError(ValueError):
@@ -45,7 +45,7 @@ _LIVE_EXIT_POLICIES: tuple[LiveExitPolicy, ...] = ("signal", "stop_loss")
 class LiveStrategy:
     kind: str
     parameters: dict[str, int]
-    generate: Callable[[Sequence[Candle]], DummySignalAction]
+    generate: Callable[[Sequence[Candle]], SignalAction]
     exit_policy: LiveExitPolicy
 
     def rationale(self, latest_candle: Candle) -> dict[str, object]:
@@ -86,7 +86,7 @@ def resolve_live_strategy(definition: Mapping[str, Any] | None) -> LiveStrategy:
         exit_ = _positive_int(definition, "exit_period")
 
         # Named, not a lambda: a backtest stores the generator's __name__ in its parameters.
-        def donchian_breakout(candles: Sequence[Candle]) -> DummySignalAction:
+        def donchian_breakout(candles: Sequence[Candle]) -> SignalAction:
             return generate_donchian_breakout_signal(candles, entry_period=entry, exit_period=exit_)
 
         return LiveStrategy(

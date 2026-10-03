@@ -30,11 +30,9 @@ is simply denied by the Risk Gate's `binance_no_short` check.
 """
 
 from collections.abc import Sequence
-from typing import Literal
 
 from app.models.market_data import Candle
-
-DonchianSignalAction = Literal["buy", "sell", "hold"]
+from app.trading.application.signal_action import SignalAction
 
 ENTRY_PERIOD = 20
 EXIT_PERIOD = 10
@@ -53,7 +51,7 @@ def generate_donchian_breakout_signal(
     *,
     entry_period: int = ENTRY_PERIOD,
     exit_period: int = EXIT_PERIOD,
-) -> DonchianSignalAction:
+) -> SignalAction:
     """ "buy" on the first bar whose close exceeds the prior `entry_period` bars'
     highest high; "sell" on the first bar whose close falls below the prior
     `exit_period` bars' lowest low; "hold" otherwise, including while there are

@@ -83,9 +83,10 @@ from app.models.instruments import Instrument
 from app.models.market_data import Candle
 from app.trading.application import backtest_fill as fill_sim
 from app.trading.application import order_flow, risk_gate
-from app.trading.application.dummy_signal import DummySignalAction, generate_dummy_signal
+from app.trading.application.dummy_signal import generate_dummy_signal
+from app.trading.application.signal_action import SignalAction
 
-BacktestSignalGenerator = Callable[[Sequence[Candle]], DummySignalAction]
+BacktestSignalGenerator = Callable[[Sequence[Candle]], SignalAction]
 ExitReason = Literal["signal", "stop_loss", "take_profit"]
 ExitPolicy = Literal["signal", "stop_loss", "stop_and_target"]
 """How a position may exit besides an opposing signal: `signal` (the signal

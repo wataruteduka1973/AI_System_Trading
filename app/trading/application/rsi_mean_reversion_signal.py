@@ -28,15 +28,13 @@ reflects it rather than hiding it.
 
 from collections.abc import Sequence
 from decimal import Decimal
-from typing import Literal
 
 from app.market_data.application.indicators import (
     exponential_moving_average,
     relative_strength_index,
 )
 from app.models.market_data import Candle
-
-RsiSignalAction = Literal["buy", "sell", "hold"]
+from app.trading.application.signal_action import SignalAction
 
 RSI_PERIOD = 14
 OVERSOLD = Decimal(30)
@@ -51,7 +49,7 @@ def generate_rsi_mean_reversion_signal(
     oversold: Decimal = OVERSOLD,
     exit_level: Decimal = EXIT_LEVEL,
     trend_period: int = TREND_PERIOD,
-) -> RsiSignalAction:
+) -> SignalAction:
     """ "buy" on the bar RSI(`rsi_period`) first drops below `oversold`, provided
     the close is above EMA(`trend_period`); "sell" on the bar RSI first rises
     above `exit_level`, regardless of trend; "hold" otherwise, including while

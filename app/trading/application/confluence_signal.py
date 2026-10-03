@@ -27,10 +27,8 @@ from typing import Literal
 
 from app.models.market_data import Candle
 from app.trading.application.backtest_replay import BacktestSignalGenerator
-from app.trading.application.donchian_breakout_signal import (
-    DonchianSignalAction,
-    generate_donchian_breakout_signal,
-)
+from app.trading.application.donchian_breakout_signal import generate_donchian_breakout_signal
+from app.trading.application.signal_action import SignalAction
 
 TREND_PERIOD = 200
 ATR_PERIOD = 14
@@ -178,7 +176,7 @@ def make_confluence_signal(
     entry_period: int = 55,
     exit_period: int = 20,
 ) -> BacktestSignalGenerator:
-    def generate(candles: Sequence[Candle]) -> DonchianSignalAction:
+    def generate(candles: Sequence[Candle]) -> SignalAction:
         action = generate_donchian_breakout_signal(
             candles, entry_period=entry_period, exit_period=exit_period
         )
