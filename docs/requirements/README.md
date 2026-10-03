@@ -6,7 +6,7 @@
 裏付けられた到達点を正とする。現在何を要件としているかは、以下を参照する。
 
 - 到達点表（実装済み / 暫定実装 / 未着手の区分）:
-  `../architecture-alignment-and-long-term-roadmap.md` の「4. 現在の実装到達点」
+  `../architecture/architecture-alignment-and-long-term-roadmap.md` の「4. 現在の実装到達点」
 - 現在のHorizonの開始条件・完了条件・承認ゲート:
   同文書の「7. 長期ロードマップ」「9. 承認ゲート」
 - 現在のモジュール構造・安全境界（paper/testnet限定など）:

@@ -1,5 +1,5 @@
 """Bot management API (Horizon5, "trade bot core functionality" phase --
-docs/architecture-alignment-and-long-term-roadmap.md, 2026-09-25 "その順で
+docs/architecture/architecture-alignment-and-long-term-roadmap.md, 2026-09-25 "その順で
 進めて": Bot management API -> execution loop/Worker -> minimal UI).
 
 Two resources: trading-accounts (paper only -- see app/schemas/trading.py's

@@ -218,7 +218,7 @@ padding.
 
 Status: `[~]` implemented under a different name. 2026-09-19 correction: this section had not
 been updated since 2026-08-29 and still read "not implemented" after the work below was already
-done. The long-term roadmap (`../architecture-alignment-and-long-term-roadmap.md`, section 7,
+done. The long-term roadmap (`../architecture/architecture-alignment-and-long-term-roadmap.md`, section 7,
 Horizon 2) tracks this same scope as "Horizon 2: リアルタイム観測と運用可視性" and is the
 current source of truth for its implementation state, per that document's own section 11
 ("個別機能の実装状態は `docs/plans/` の各専用計画を正とする") -- the authoritative detailed

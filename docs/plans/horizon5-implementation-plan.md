@@ -27,7 +27,7 @@
 
 1. `docs/decisions/0005-horizon5-self-hosted-distribution.md` (ADR 0005) — 配布モデルの決定（セルフホスト型ソフトウェアライセンス販売への一本化）と、その法的背景。
 2. `docs/plans/horizon5-distribution-and-auth.md` — ADR 0005を受けたドラフト実装計画。本ドキュメントはこれを置き換えるものではなく、そこで洗い出された論点（`user_membership`は既存、`system_worker`は別テーブル、Secret抽象化が未整備、等）を引き継ぎ、コードレベルまで具体化したものである。
-3. `docs/architecture-alignment-and-long-term-roadmap.md` の「Horizon 5」節 — 開始条件・完了条件・実装/整備項目のロードマップ原文。
+3. `docs/architecture/architecture-alignment-and-long-term-roadmap.md` の「Horizon 5」節 — 開始条件・完了条件・実装/整備項目のロードマップ原文。
 
 本計画はこの3点と、実装時点の実コード（後述の「1. 実装前に確認した既存コードの事実」）を突き合わせて作成した。
 
@@ -495,7 +495,7 @@ def require_authenticated_user(
 
 ##### 3.9 セッションの強制失効(2026-09-21改訂 #1、新設)
 
-初版はセッションJWTのサーバー側強制失効ができない制約を「本Unitのスコープ外」としていたが、これは`docs/architecture-alignment-and-long-term-roadmap.md`のHorizon5完了条件「権限境界、CSRF/CORS、session、secret rotation、監査ログのsecurity testが通る」と直接矛盾する。特にtrading_haltの停止原因「APIキー漏えい疑い」（`docs/concept/FXtrading_rebuild/05_アーキテクチャと移行計画.md`取引停止マトリクス）は、認証情報の漏えいに即応する手段を要求しており、有効期限(`session_ttl_seconds`、既定8時間)が切れるまで何もできないのは看過できない。
+初版はセッションJWTのサーバー側強制失効ができない制約を「本Unitのスコープ外」としていたが、これは`docs/architecture/architecture-alignment-and-long-term-roadmap.md`のHorizon5完了条件「権限境界、CSRF/CORS、session、secret rotation、監査ログのsecurity testが通る」と直接矛盾する。特にtrading_haltの停止原因「APIキー漏えい疑い」（`docs/concept/FXtrading_rebuild/05_アーキテクチャと移行計画.md`取引停止マトリクス）は、認証情報の漏えいに即応する手段を要求しており、有効期限(`session_ttl_seconds`、既定8時間)が切れるまで何もできないのは看過できない。
 
 **設計**: `jti`単位の失効リストではなく、ユーザー単位の「このタイムスタンプより前に発行されたセッションは全て無効」というカットオフ方式にする（個々のセッションを特定するjti追跡・保存が不要で、実装・検証コストが小さい。1台のデバイスだけを失効させる用途には使えないが、「このユーザーの全セッションを今すぐ無効化する」という粒度で十分という判断）。
 
@@ -1307,7 +1307,7 @@ def deliver_pending_notifications(
 #### 想定リスク
 高。本Unitはスケルトン実装であり、`aggregate_type`/`aggregate_id`からの実際の宛先解決ロジックが未確定（ドメインイベントの発行元コード自体がまだ存在しないため）。実装エージェントは、着手前に「どのドメインイベントを最初に配線するか」（例: `connection.credentials_updated`の監査ログをトリガーに通知するのか、trading_haltの発動を通知するのか）を利用者に確認すること。本計画はUnit 8を「基盤（ORM・アダプタ・配信ループの骨格）を用意するところまで」と定義し、具体的なイベント種別ごとの配線は別タスクとする。
 
-**（2026-09-21改訂 #5、明示）Unit 8完了だけではロードマップの完了条件を満たさない**: `docs/architecture-alignment-and-long-term-roadmap.md`のHorizon5完了条件「通知の重複、欠落、再送をOutboxから追跡できる」は、実際にOutboxへイベントを書き込むドメインイベント発行元があって初めて検証できる。本Unitはその発行元を一つも用意しないため、Unit 8完了時点でこの完了条件は**満たされない**。少なくとも1種類のドメインイベント（trading_halt発動等）を実際に配線する別タスクの完了をもって、この完了条件の充足とする。実装エージェントはUnit 8完了報告時に、この完了条件が引き続き未達であることを明記すること（「基盤を整備した」を「完了条件を満たした」と読み替えない）。
+**（2026-09-21改訂 #5、明示）Unit 8完了だけではロードマップの完了条件を満たさない**: `docs/architecture/architecture-alignment-and-long-term-roadmap.md`のHorizon5完了条件「通知の重複、欠落、再送をOutboxから追跡できる」は、実際にOutboxへイベントを書き込むドメインイベント発行元があって初めて検証できる。本Unitはその発行元を一つも用意しないため、Unit 8完了時点でこの完了条件は**満たされない**。少なくとも1種類のドメインイベント（trading_halt発動等）を実際に配線する別タスクの完了をもって、この完了条件の充足とする。実装エージェントはUnit 8完了報告時に、この完了条件が引き続き未達であることを明記すること（「基盤を整備した」を「完了条件を満たした」と読み替えない）。
 
 ---
 
@@ -1379,7 +1379,7 @@ dev = [
 6. 冒頭に明記すること: 「本書は運営者によるSLA/SLO保証を意味しない。顧客自身の運用責任の下で実行される（ADR 0005）」。
 
 #### 変更対象ファイル
-- `docs/architecture-alignment-and-long-term-roadmap.md`: Horizon 5節の実装・整備項目チェック状態を、本計画のUnit進捗に応じて更新する（実装完了ごとに `[x]` を付す運用は、Horizon 1/2節の既存の書き方に揃える）。
+- `docs/architecture/architecture-alignment-and-long-term-roadmap.md`: Horizon 5節の実装・整備項目チェック状態を、本計画のUnit進捗に応じて更新する（実装完了ごとに `[x]` を付す運用は、Horizon 1/2節の既存の書き方に揃える）。
 
 #### テスト方針
 テスト対象なし（ドキュメントのみ）。実装エージェントは、手順書に書いたコマンドを実際にローカルで実行し、記載どおりに動作することを確認してから完了とする。

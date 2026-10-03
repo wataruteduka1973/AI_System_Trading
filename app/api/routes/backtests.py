@@ -1,5 +1,5 @@
 """Backtest API (Horizon 4 "backtest + strategy governance" phase --
-docs/architecture-alignment-and-long-term-roadmap.md, 2026-09-26). Exposes the
+docs/architecture/architecture-alignment-and-long-term-roadmap.md, 2026-09-26). Exposes the
 already-implemented, already-tested Horizon4-lite backtest engine
 (docs/plans/horizon4-lite-backtest.md Units 1-6:
 `app/trading/application/{backtest_replay,backtest_metrics,backtest_walk_forward}.py`)

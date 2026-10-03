@@ -11,7 +11,7 @@ It distinguishes implemented runtime behavior from the intended target structure
 Horizon5 groups A/D/E (OIDC login + RBAC in `app/security/`, Outbox/Notification skeleton in
 `app/notifications/`, CI dependency/SBOM scanning) have since landed and are not reflected in the
 module layout or migration sequence below. `docs/plans/horizon5-implementation-plan.md` and
-`docs/architecture-alignment-and-long-term-roadmap.md`'s Horizon 4/5 sections are the current source
+`docs/architecture/architecture-alignment-and-long-term-roadmap.md`'s Horizon 4/5 sections are the current source
 of truth for that work until this document is refreshed. The one specific claim below that is now
 wrong, not just incomplete, is called out inline rather than silently left standing.
 

@@ -104,5 +104,5 @@ Horizon5 グループC(Unit 6、`docs/plans/horizon5-implementation-plan.md`)は
 - 本リポジトリ(AI_System_Trading)側の変更は、check-inペイロードの送信ロジック
   (`app/licensing/`配下に新設予定)と関連設定(`app/core/config.py`)に限定される想定。
   顧客DB・復旧トークン発行ロジックは新サービス側にのみ実装する。
-- `docs/architecture-alignment-and-long-term-roadmap.md`のHorizon 5節を本ADRへの参照付きで
+- `docs/architecture/architecture-alignment-and-long-term-roadmap.md`のHorizon 5節を本ADRへの参照付きで
   更新する。

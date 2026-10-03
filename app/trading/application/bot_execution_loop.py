@@ -1,5 +1,5 @@
 """One evaluation pass over every currently active `TradingBot` (Horizon 3
-execution loop -- docs/architecture-alignment-and-long-term-roadmap.md,
+execution loop -- docs/architecture/architecture-alignment-and-long-term-roadmap.md,
 2026-09-25 "Bot管理API -> 実行ループ/Worker -> 最低限のUI"順, second step).
 
 Calls `dummy_pipeline.run_dummy_pipeline_once` for every bot with
