@@ -17,7 +17,7 @@ biases the result upward (survivorship bias).
 
 Research only: nothing is persisted.
 
-Run: python scripts/evaluate_portfolio.py [--symbols BTCUSDT,ETHUSDT,...] [--timeframe 4h]
+Run: python scripts/research/evaluate_portfolio.py [--symbols BTCUSDT,ETHUSDT,...] [--timeframe 4h]
 """
 
 import argparse

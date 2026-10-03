@@ -46,7 +46,7 @@
   donchian_55_20に条件を掛けるシグナル関数
 - `app/trading/application/backtest_walk_forward.py`: 訓練期間で候補を選ぶ `run_selected_walk_forward`
 - `app/trading/application/backtest_robustness.py`: 比較用の集計(`summarize_windows`)を共通化
-- `scripts/evaluate_confluence.py`(新規): 研究用の比較スクリプト
+- `scripts/research/evaluate_confluence.py`(新規): 研究用の比較スクリプト
 
 ## テスト
 
@@ -62,7 +62,7 @@
 
 ## 検証結果 (2026-09-30, BTCUSDT 4h, 2018-08〜2026-09, 98区間, 訓練360日/検証30日, 損切りのみ)
 
-`python scripts/evaluate_confluence.py --timeframe 4h`
+`python scripts/research/evaluate_confluence.py --timeframe 4h`
 
 | 条件 | 年率 | 前半 | 後半 | 直近24区間 | 最大DD | 最長の含み損期間 | 最悪の1取引 | 取引数 |
 |---|---|---|---|---|---|---|---|---|

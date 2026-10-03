@@ -8,7 +8,7 @@ picked.
 
 Research only: nothing is persisted.
 
-Run: python scripts/evaluate_confluence.py [--symbol BTCUSDT] [--timeframe 4h]
+Run: python scripts/research/evaluate_confluence.py [--symbol BTCUSDT] [--timeframe 4h]
 """
 
 import argparse

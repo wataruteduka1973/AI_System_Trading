@@ -276,6 +276,8 @@ app/                         # FastAPIバックエンドの実行コード（唯
   trading/application/       # 注文実行・リスク判定・trading halt・backtest replay
   trading/worker/            # Bot execution Worker（実行ループ）
 frontend/                    # Reactフロントエンド
+scripts/                     # 起動・ペーパートレードの用意と確認・データ取得
+  research/                  # 戦略検証用の比較スクリプト(結果はdocs/plans/に記録)
 tests/                       # 自動テスト
 ```
 

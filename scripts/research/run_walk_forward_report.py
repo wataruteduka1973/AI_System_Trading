@@ -10,7 +10,7 @@ Research only: nothing is persisted. `net` counts closed trades only (see
 equity, so it also counts a position still held at the window's end (marked
 `open`), valued at its last close.
 
-Run: python scripts/run_walk_forward_report.py [--symbol BTCJPY]
+Run: python scripts/research/run_walk_forward_report.py [--symbol BTCJPY]
      [--timeframes 15m,1h,4h] [--train-days 90] [--test-days 30]
      [--strategies ema_trend,rsi14_30_70]
 """

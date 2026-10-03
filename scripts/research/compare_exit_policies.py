@@ -16,7 +16,7 @@ Risk Gate -- through every test window.
 
 Research only: nothing is persisted.
 
-Run: python scripts/compare_exit_policies.py [--symbol BTCUSDT] [--timeframe 4h]
+Run: python scripts/research/compare_exit_policies.py [--symbol BTCUSDT] [--timeframe 4h]
      [--strategies donchian_55_20,donchian_20_10,ema_trend]
 """
 

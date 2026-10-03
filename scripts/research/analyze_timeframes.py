@@ -16,7 +16,7 @@ Per timeframe, over the whole stored history:
 
 Research only: nothing is persisted.
 
-Run: python scripts/analyze_timeframes.py [--symbol BTCJPY]
+Run: python scripts/research/analyze_timeframes.py [--symbol BTCJPY]
 """
 
 import argparse

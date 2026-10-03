@@ -10,7 +10,7 @@
   = BTC / ETH / XRP / ADA / LTC / BNB。**生存バイアスあり**(その後に上場廃止・凋落した銘柄は含まれない)。
 - 各銘柄: 訓練90日/検証30日のローリングwalk-forward、foldの損益を複利でつないだ曲線。
 - ポートフォリオ: 各銘柄の曲線を日次で均等配分(上場の遅い銘柄はその時点から参加)。
-- 実行: `python scripts/evaluate_portfolio.py`
+- 実行: `python scripts/research/evaluate_portfolio.py`
 
 ## 結果
 

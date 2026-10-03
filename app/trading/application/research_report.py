@@ -1,5 +1,5 @@
-"""Report helpers shared by the research scripts (`scripts/compare_exit_policies.py`,
-`scripts/evaluate_confluence.py`): turning walk-forward test windows into the
+"""Report helpers shared by the research scripts (`scripts/research/compare_exit_policies.py`,
+`scripts/research/evaluate_confluence.py`): turning walk-forward test windows into the
 compounded curves of `backtest_robustness.py`, the 10%-hold benchmark, and the
 report lines. Research only -- nothing here is used by live/paper execution.
 """
