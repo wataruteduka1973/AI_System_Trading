@@ -8,17 +8,17 @@ from sqlalchemy.orm import Session
 
 from app.exchanges.types import CandlePoint, timeframe_delta
 from app.market_data.domain.ingestion_report import IngestionReport
+from app.market_data.infrastructure.candle_store import (
+    build_candle_coverage,
+    persist_internal_gaps,
+    upsert_candle_points,
+)
 from app.market_data.infrastructure.leases import LeaseClaim, LeaseStore
 from app.market_data.infrastructure.models import WorkerBackfill, WorkerSubscription
 from app.market_data.infrastructure.page_access import AccessSnapshot, PageAccess
 from app.market_data.infrastructure.page_errors import PageFailure
 from app.models.market_data import Candle
-from app.services.market_data import (
-    CandleIngestionService,
-    MarketDataAccessError,
-    build_candle_coverage,
-    persist_internal_gaps,
-)
+from app.services.market_data import MarketDataAccessError
 
 
 @dataclass(frozen=True)
@@ -143,7 +143,8 @@ class PageStore:
             self._recheck(db, page)
             inserted = updated = 0
             if accepted:
-                inserted, updated = CandleIngestionService(db, self.access.secrets)._upsert_points(
+                inserted, updated = upsert_candle_points(
+                    db,
                     target.instrument_id,
                     target.timeframe,
                     page.access.exchange,

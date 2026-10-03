@@ -9,6 +9,12 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.market_data.infrastructure.backfill_locks import (
+    DuplicateBackfillError,
+    advisory_lock_key,
+    ensure_no_overlapping_backfill,
+)
+from app.market_data.infrastructure.candle_store import build_candle_coverage
 from app.models.audit import AuditLog
 from app.models.connections import (
     Exchange,
@@ -19,12 +25,6 @@ from app.models.connections import (
 from app.models.instruments import Instrument
 from app.models.market_data import BackfillJob, MarketDataSubscription
 from app.models.workspace import Workspace
-from app.services.market_data import (
-    DuplicateBackfillError,
-    _advisory_lock_key,
-    build_candle_coverage,
-    ensure_no_overlapping_backfill,
-)
 
 SUPPORTED_TIMEFRAMES = ("1m", "5m", "15m", "30m", "1h", "4h", "1d")
 ConfigurationValidator = Callable[[Session, UUID, UUID], None]
@@ -67,9 +67,7 @@ def _validate_timeframe(timeframe: str) -> None:
 def _lock_collection(db: Session, workspace_id: UUID, instrument_id: UUID) -> None:
     db.execute(
         select(
-            func.pg_advisory_xact_lock(
-                _advisory_lock_key("collection", workspace_id, instrument_id)
-            )
+            func.pg_advisory_xact_lock(advisory_lock_key("collection", workspace_id, instrument_id))
         )
     )
 

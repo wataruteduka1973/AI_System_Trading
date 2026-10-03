@@ -14,12 +14,15 @@ from uuid import uuid4
 
 import pytest
 from app.market_data.application.execute_page import ExecuteMarketDataPage
+from app.market_data.infrastructure.backfill_locks import (
+    DuplicateBackfillError,
+    ensure_no_overlapping_backfill,
+)
 from app.market_data.infrastructure.candidates import CandidateScanner
 from app.market_data.infrastructure.models import WorkerBackfill
 from app.market_data.infrastructure.normalize import normalize_legacy_jobs
 from app.market_data.worker.runner import WorkerRunner
 from app.models.audit import AuditLog
-from app.services.market_data import DuplicateBackfillError, ensure_no_overlapping_backfill
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
