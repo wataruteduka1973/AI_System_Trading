@@ -52,7 +52,7 @@ dev = [
   "types-requests>=2.32,<3",
   "pip-audit>=2.10,<3",
   # scripts/stream_soak_monitor.py's WebSocket client.
-  "websockets>=16.1,<17",
+  "websockets>=16.1,<18",
 ]
 
 [tool.hatch.build.targets.wheel]
