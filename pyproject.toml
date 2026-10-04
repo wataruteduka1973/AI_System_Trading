@@ -47,7 +47,7 @@ dev = [
   "pytest-asyncio>=1.4.0,<2",
   "pytest-cov>=7.1.0,<8",
   "respx>=0.22,<1",
-  "ruff==0.16.8",
+  "ruff==0.16.9",
   "mypy>=2.3,<3",
   "types-requests>=2.32,<3",
   "pip-audit>=2.10,<3",
