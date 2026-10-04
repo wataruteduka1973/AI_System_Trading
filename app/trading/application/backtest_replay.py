@@ -72,11 +72,11 @@ formula `risk_gate.evaluate_signal` uses inline, so risk-sizing and the simulate
 fill price stay internally consistent for a given bar.
 """
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Literal
+from typing import Literal, Protocol
 
 from app.exchanges.types import TIMEFRAME_SECONDS
 from app.models.instruments import Instrument
@@ -88,10 +88,40 @@ from app.trading.application.signal_action import SignalAction
 
 BacktestSignalGenerator = Callable[[Sequence[Candle]], SignalAction]
 ExitReason = Literal["signal", "stop_loss", "take_profit"]
-ExitPolicy = Literal["signal", "stop_loss", "stop_and_target"]
+ExitPolicy = Literal["signal", "stop_loss", "stop_and_target", "trailing_stop"]
 """How a position may exit besides an opposing signal: `signal` (the signal
 only), `stop_loss` (plus a fixed stop, letting winners run until the signal
-exits), or `stop_and_target` (plus a fixed take-profit as well)."""
+exits), `stop_and_target` (plus a fixed take-profit as well), or
+`trailing_stop` (a stop that starts like `stop_loss` and ratchets up to stay
+`stop_distance` behind the highest high since entry -- research only, fixed
+before looking at results: the same 2xATR distance the Risk Gate sized for)."""
+
+
+@dataclass(frozen=True, slots=True)
+class MonitorBar:
+    """A finer bar used only to check stops inside a coarser decision bar (see
+    `run_replay`'s `stop_monitor`). Plain values rather than a `Candle` row: a
+    9-year 5m series is ~1M bars, and only these fields are ever read."""
+
+    open_time: datetime
+    close_time: datetime
+    open: Decimal
+    high: Decimal
+    low: Decimal
+
+
+class PriceBar(Protocol):
+    """What a stop check reads from a bar -- satisfied by `Candle` and `MonitorBar`."""
+
+    @property
+    def open(self) -> Decimal: ...
+    @property
+    def high(self) -> Decimal: ...
+    @property
+    def low(self) -> Decimal: ...
+    @property
+    def close_time(self) -> datetime: ...
+
 
 _HISTORY_WINDOW = risk_gate._ATR_HISTORY_CANDLES
 """Bound on how much of `candles` `run_replay` hands a bar's `signal_generator`
@@ -148,6 +178,9 @@ class _ReplayState:
     last_order_time: datetime | None = None
     stop_price: Decimal | None = None
     take_profit_price: Decimal | None = None
+    trail_distance: Decimal | None = None
+    """Set only under `trailing_stop`: how far behind the highest high the stop trails."""
+    highest_since_entry: Decimal | None = None
     open_entry_fees: Decimal = Decimal(0)
     """Entry fees paid for the currently open position and not yet attributed to
     a `TradeRecord` -- charged to trades in proportion to the quantity they close."""
@@ -245,6 +278,8 @@ def _apply_and_record(
         state.position_opened_at = None
         state.stop_price = None
         state.take_profit_price = None
+        state.trail_distance = None
+        state.highest_since_entry = None
         state.open_entry_fees = Decimal(0)
     # else: same-direction increase or partial reduce -- opened_at unchanged,
     # matching order_flow._apply_fill_to_position's own opened_at semantics.
@@ -253,7 +288,7 @@ def _apply_and_record(
 
 
 def _protective_exit(
-    candle: Candle, position: fill_sim.BacktestPosition, stop: Decimal, target: Decimal | None
+    candle: PriceBar, position: fill_sim.BacktestPosition, stop: Decimal, target: Decimal | None
 ) -> tuple[Decimal, ExitReason] | None:
     """Where, if anywhere, `candle` hit `position`'s stop or target. A bar that
     opens beyond a level fills at its open (a gap cannot fill at a price that
@@ -297,6 +332,23 @@ def _slipped_stop_price(
     return price * (1 + stop_slippage)
 
 
+def _raise_trailing_stop(state: _ReplayState, bar: PriceBar) -> None:
+    """Under `trailing_stop`, after `bar` was checked without a hit: follow a new
+    high upward, never downward. Long positions only -- this engine's spot
+    research is long-only; a short keeps its fixed stop."""
+    position = state.position
+    if (
+        state.trail_distance is None
+        or state.highest_since_entry is None
+        or state.stop_price is None
+        or position is None
+        or position.side != "long"
+    ):
+        return
+    state.highest_since_entry = max(state.highest_since_entry, bar.high)
+    state.stop_price = max(state.stop_price, state.highest_since_entry - state.trail_distance)
+
+
 def run_replay(
     candles: Sequence[Candle],
     *,
@@ -310,6 +362,7 @@ def run_replay(
     warmup_bars: int = 0,
     exit_policy: ExitPolicy = "signal",
     stop_slippage: Decimal = Decimal(0),
+    stop_monitor: Mapping[datetime, Sequence[MonitorBar]] | None = None,
 ) -> ReplayResult:
     """Replay `candles` (ascending by `open_time`, final bars only -- the caller is
     responsible for that, matching `_recent_final_candles`'s live-path filter) bar by
@@ -337,7 +390,16 @@ def run_replay(
 
     `stop_slippage` fills a triggered stop that fraction worse than its level
     (see `_slipped_stop_price`); the default 0 fills exactly at the stop, which
-    flatters results in fast crashes."""
+    flatters results in fast crashes.
+
+    `stop_monitor` maps a decision bar's `open_time` to the finer bars inside it
+    (ascending). Stops are then checked on those finer bars in order -- the same
+    fill rule, so a finer bar that opens past the stop fills at its own open, as
+    a resting stop order would in a fast fall -- while signals, sizing and the
+    equity curve stay on the decision bars. A decision bar with no entry falls
+    back to checking itself. A trailing stop is raised from each checked bar's
+    high only after that bar is checked, so a bar never triggers the level its
+    own high created (OHLC cannot tell whether its low came after its high)."""
     if warmup_bars < 0:
         raise ValueError("warmup_bars must be non-negative")
     if stop_slippage < 0:
@@ -356,27 +418,33 @@ def run_replay(
         now = candle.close_time
         history = candles[max(0, i + 1 - _HISTORY_WINDOW) : i + 1]
 
-        if exit_policy != "signal" and state.position is not None and state.stop_price is not None:
-            hit = _protective_exit(
-                candle, state.position, state.stop_price, state.take_profit_price
+        probes: Sequence[PriceBar] = (
+            (stop_monitor.get(candle.open_time) or [candle]) if stop_monitor else [candle]
+        )
+        for probe in probes:
+            if exit_policy == "signal" or state.position is None or state.stop_price is None:
+                break
+            hit = _protective_exit(probe, state.position, state.stop_price, state.take_profit_price)
+            if hit is None:
+                _raise_trailing_stop(state, probe)
+                continue
+            exit_price, reason = hit
+            held = state.position
+            exit_side: fill_sim.OrderSide = "sell" if held.side == "long" else "buy"
+            if reason == "stop_loss":
+                exit_price = _slipped_stop_price(exit_price, held.side, stop_slippage)
+            exit_fill = fill_sim.simulate_fill(
+                exchange_code=exchange_code,
+                side=exit_side,
+                candle_close=exit_price,
+                quantity=held.quantity,
+                expected_slippage=_expected_slippage(exchange_code, spread),
             )
-            if hit is not None:
-                exit_price, reason = hit
-                held = state.position
-                exit_side: fill_sim.OrderSide = "sell" if held.side == "long" else "buy"
-                if reason == "stop_loss":
-                    exit_price = _slipped_stop_price(exit_price, held.side, stop_slippage)
-                exit_fill = fill_sim.simulate_fill(
-                    exchange_code=exchange_code,
-                    side=exit_side,
-                    candle_close=exit_price,
-                    quantity=held.quantity,
-                    expected_slippage=_expected_slippage(exchange_code, spread),
-                )
-                _apply_and_record(
-                    state, held, exit_fill, exit_side, now,
-                    allow_short=allow_short, exit_reason=reason,
-                )  # fmt: skip
+            _apply_and_record(
+                state, held, exit_fill, exit_side, probe.close_time,
+                allow_short=allow_short, exit_reason=reason,
+            )  # fmt: skip
+            break
 
         mark_to_market_equity = state.cash_equity + _market_value(state.position, candle.close)
         state.equity_curve.append((now, mark_to_market_equity))
@@ -478,6 +546,9 @@ def run_replay(
         if exit_policy != "signal" and opened_new_position:
             direction = Decimal(1) if signal_action == "buy" else Decimal(-1)
             state.stop_price = entry_fill.price - direction * stop_distance
+            if exit_policy == "trailing_stop":
+                state.trail_distance = stop_distance
+                state.highest_since_entry = entry_fill.price
             if exit_policy == "stop_and_target":
                 reward_risk = risk_gate._decimal(rules, "min_reward_risk")
                 state.take_profit_price = entry_fill.price + direction * stop_distance * reward_risk
