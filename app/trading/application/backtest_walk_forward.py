@@ -38,8 +38,9 @@ candles before `test_candles[0]` are available to it) -- not a new gap Unit 6
 introduces, just the same one, now visible twice.
 """
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from functools import partial
 from uuid import UUID
@@ -58,6 +59,7 @@ from app.trading.application.backtest_replay import (
     _HISTORY_WINDOW,
     BacktestSignalGenerator,
     ExitPolicy,
+    MonitorBar,
     ReplayResult,
     generate_dummy_signal,
     run_replay,
@@ -210,6 +212,7 @@ def _replay_window(
     spread: Decimal,
     exit_policy: ExitPolicy,
     stop_slippage: Decimal = Decimal(0),
+    stop_monitor: Mapping[datetime, Sequence[MonitorBar]] | None = None,
 ) -> ReplayResult:
     """Replay `candles[start:end]` from `initial_equity`, with up to
     `_HISTORY_WINDOW - 1` bars before `start` as warm-up history (the history
@@ -227,6 +230,7 @@ def _replay_window(
         warmup_bars=warmup,
         exit_policy=exit_policy,
         stop_slippage=stop_slippage,
+        stop_monitor=stop_monitor,
     )
 
 
@@ -244,6 +248,7 @@ def run_rolling_walk_forward(
     signal_generator: BacktestSignalGenerator = generate_dummy_signal,
     exit_policy: ExitPolicy = "signal",
     stop_slippage: Decimal = Decimal(0),
+    stop_monitor: Mapping[datetime, Sequence[MonitorBar]] | None = None,
 ) -> list[RollingFoldResult]:
     """Every window starts from `initial_equity`, as in `run_walk_forward` (and so
     `peak_drawdown_limit_hard`'s lock never carries across windows). Unlike
@@ -265,6 +270,7 @@ def run_rolling_walk_forward(
             spread=spread,
             exit_policy=exit_policy,
             stop_slippage=stop_slippage,
+            stop_monitor=stop_monitor,
         )
         return result, compute_metrics(result, initial_equity)
 

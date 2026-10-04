@@ -533,3 +533,110 @@ def test_negative_stop_slippage_is_rejected(monkeypatch: pytest.MonkeyPatch) -> 
         _run_with_exits(
             [_ohlc(0, "100", "100", "100", "100")], monkeypatch, stop_slippage=Decimal("-0.01")
         )
+
+
+# ---- stop_monitor and trailing_stop (stop-monitoring timeframe research) ----
+
+
+def _sub(
+    start: Candle, minutes: int, length: int, open_: str, high: str, low: str
+) -> replay.MonitorBar:
+    t = start.open_time + timedelta(minutes=minutes)
+    return replay.MonitorBar(
+        open_time=t,
+        close_time=t + timedelta(minutes=length),
+        open=Decimal(open_),
+        high=Decimal(high),
+        low=Decimal(low),
+    )
+
+
+def _run_monitored(
+    candles: list[Candle],
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    stop_monitor: dict | None,
+    exit_policy: replay.ExitPolicy = "stop_loss",
+) -> replay.ReplayResult:
+    monkeypatch.setattr(gate, "_stop_distance", lambda *args: Decimal(5))
+
+    def scripted_signal(history: Sequence[Candle]) -> str:
+        return "buy" if len(history) == 1 else "hold"
+
+    return replay.run_replay(
+        candles,
+        instrument=_instrument(),
+        timeframe="1m",
+        exchange_code="oanda",
+        rules=gate.CONSERVATIVE_V1_RULES,
+        initial_equity=Decimal("1000000"),
+        signal_generator=scripted_signal,  # type: ignore[arg-type]
+        exit_policy=exit_policy,
+        stop_monitor=stop_monitor,
+    )
+
+
+def test_finer_monitoring_fills_a_stop_at_the_sub_bar_that_gapped_through_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Entry at 100, stop 95. The coarse bar opens at 99 (above the stop) and its low is
+    # 90, so coarse monitoring fills exactly at 95. Inside it, the price fell to 96, then
+    # a sub-bar opened at 92 -- a real fill would have been ~92, not 95.
+    entry, coarse = _ohlc(0, "100", "100", "100", "100"), _ohlc(1, "99", "100", "90", "93")
+    subs = [_sub(coarse, 0, 1, "99", "100", "96"), _sub(coarse, 1, 1, "92", "93", "90")]
+
+    [unmonitored] = _run_monitored([entry, coarse], monkeypatch, stop_monitor=None).trades
+    [monitored] = _run_monitored(
+        [entry, coarse], monkeypatch, stop_monitor={coarse.open_time: subs}
+    ).trades
+
+    assert unmonitored.exit_price == Decimal("95")
+    assert monitored.exit_price == Decimal("92")
+    assert monitored.exit_time == subs[1].close_time
+
+
+def test_a_coarse_bar_without_monitoring_bars_falls_back_to_itself(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry, coarse = _ohlc(0, "100", "100", "100", "100"), _ohlc(1, "99", "101", "94", "96")
+    [trade] = _run_monitored([entry, coarse], monkeypatch, stop_monitor={}).trades
+    assert trade.exit_price == Decimal("95")
+
+
+def test_a_trailing_stop_ratchets_up_behind_new_highs_and_exits_there(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candles = [
+        _ohlc(0, "100", "100", "100", "100"),  # entry 100, stop 95
+        _ohlc(1, "101", "110", "100", "109"),  # high 110 -> stop raised to 105 afterwards
+        _ohlc(2, "108", "108", "104", "104"),  # reaches 105 -> exits at 105
+    ]
+    [trade] = _run_monitored(
+        candles, monkeypatch, stop_monitor=None, exit_policy="trailing_stop"
+    ).trades
+    assert trade.exit_price == Decimal("105")
+    assert trade.exit_reason == "stop_loss"
+
+
+def test_a_trailing_stop_never_triggers_on_the_bar_that_raised_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Bar 1 makes the 110 high and also dips to 104: OHLC cannot tell whether the dip
+    # came after the high, so the raised stop (105) only applies from the next bar on.
+    candles = [_ohlc(0, "100", "100", "100", "100"), _ohlc(1, "101", "110", "104", "109")]
+    result = _run_monitored(candles, monkeypatch, stop_monitor=None, exit_policy="trailing_stop")
+    assert result.trades == []
+    assert result.ending_position is not None
+
+
+def test_a_trailing_stop_never_moves_down(monkeypatch: pytest.MonkeyPatch) -> None:
+    candles = [
+        _ohlc(0, "100", "100", "100", "100"),  # stop 95
+        _ohlc(1, "100", "102", "99", "101"),  # 102 - 5 = 97 -> stop 97
+        _ohlc(2, "100", "100", "98", "99"),  # 100 - 5 = 95 would be lower: stays 97
+        _ohlc(3, "98", "98", "96", "96"),  # reaches 97
+    ]
+    [trade] = _run_monitored(
+        candles, monkeypatch, stop_monitor=None, exit_policy="trailing_stop"
+    ).trades
+    assert trade.exit_price == Decimal("97")
