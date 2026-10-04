@@ -209,6 +209,7 @@ def _replay_window(
     initial_equity: Decimal,
     spread: Decimal,
     exit_policy: ExitPolicy,
+    stop_slippage: Decimal = Decimal(0),
 ) -> ReplayResult:
     """Replay `candles[start:end]` from `initial_equity`, with up to
     `_HISTORY_WINDOW - 1` bars before `start` as warm-up history (the history
@@ -225,6 +226,7 @@ def _replay_window(
         signal_generator=signal_generator,
         warmup_bars=warmup,
         exit_policy=exit_policy,
+        stop_slippage=stop_slippage,
     )
 
 
@@ -241,6 +243,7 @@ def run_rolling_walk_forward(
     spread: Decimal = Decimal(0),
     signal_generator: BacktestSignalGenerator = generate_dummy_signal,
     exit_policy: ExitPolicy = "signal",
+    stop_slippage: Decimal = Decimal(0),
 ) -> list[RollingFoldResult]:
     """Every window starts from `initial_equity`, as in `run_walk_forward` (and so
     `peak_drawdown_limit_hard`'s lock never carries across windows). Unlike
@@ -261,6 +264,7 @@ def run_rolling_walk_forward(
             initial_equity=initial_equity,
             spread=spread,
             exit_policy=exit_policy,
+            stop_slippage=stop_slippage,
         )
         return result, compute_metrics(result, initial_equity)
 
