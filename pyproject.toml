@@ -23,7 +23,7 @@ dependencies = [
   "requests>=2.32,<3",
   "SQLAlchemy>=2.0.51,<2.2",
   "structlog>=26.1.0,<27",
-  "uvicorn[standard]>=0.51,<0.54",
+  "uvicorn[standard]>=0.51,<0.55",
 ]
 # httpx moved here from dev (Horizon5 Group A, docs/plans/horizon5-implementation-plan.md
 # Unit 3.3): app/security/oidc.py's discovery/token-exchange calls are now part of the
