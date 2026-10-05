@@ -1,5 +1,6 @@
 """Fenced page preparation and persistence, isolated from legacy runtime wiring."""
 
+import logging
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
@@ -19,6 +20,8 @@ from app.market_data.infrastructure.models import WorkerBackfill, WorkerSubscrip
 from app.market_data.infrastructure.page_access import AccessSnapshot, PageAccess
 from app.market_data.infrastructure.page_errors import PageFailure
 from app.models.market_data import Candle
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -143,7 +146,7 @@ class PageStore:
             self._recheck(db, page)
             inserted = updated = 0
             if accepted:
-                inserted, updated = upsert_candle_points(
+                inserted, updated, rejected = upsert_candle_points(
                     db,
                     target.instrument_id,
                     target.timeframe,
@@ -151,6 +154,14 @@ class PageStore:
                     "backfilled" if isinstance(target, WorkerBackfill) else "complete",
                     accepted,
                 )
+                if rejected:
+                    logger.warning(
+                        "candle source conflict: %d %s candles for instrument %s were "
+                        "stored by another source and left unchanged",
+                        rejected,
+                        target.timeframe,
+                        target.instrument_id,
+                    )
             target.next_fetch_at = page.end
             target.consecutive_failures = 0
             now = self.leases._now(db)

@@ -95,7 +95,7 @@ def classify_candle_coverage(
     coverage_status = "empty"
     if stored_count and actual_from is not None and actual_to is not None:
         missing_count = internal_missing_count
-        if exchange_code == "binance":
+        if exchange_code in {"binance", "binance_public"}:
             if requested_from is not None and requested_to is not None:
                 expected_count = max(0, int((requested_to - requested_from) / delta))
             if missing_count is None:

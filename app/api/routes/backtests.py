@@ -55,32 +55,19 @@ Viewer = Annotated[AppUser, Depends(require_viewer_role)]
 Operator = Annotated[AppUser, Depends(require_operator_role)]
 
 
-def _is_research_instrument(db: Session, instrument_id: UUID) -> bool:
-    exchange_code = db.scalar(
-        select(Exchange.code)
-        .join(Instrument, Instrument.exchange_id == Exchange.id)
-        .where(Instrument.id == instrument_id)
-    )
-    return exchange_code == RESEARCH_EXCHANGE_CODE
-
-
 def _require_instrument_access(db: Session, workspace_id: UUID, instrument_id: UUID) -> None:
     """Mirrors `market_data.py`'s own wrapper around the same application-layer
-    checks -- an instrument only counts as usable once the workspace has an
-    active, verified connection selected for its exchange (see
-    `use_cases.require_instrument_access`) -- **except** a `binance_public`
-    research instrument (2026-09-26), which has no `ExchangeConnection`/
-    `WorkspaceAccountSelection` at all by design (it is public, read-only
-    market data, not a tradeable account): only workspace existence is
+    checks (`use_cases.require_instrument_readable`): an instrument is usable once
+    the workspace has an active, verified connection selected for its exchange,
+    except a `binance_public` research instrument (2026-09-26), which has no
+    connection or account selection by design -- only workspace existence is
     checked for it."""
     try:
         market_data_application.require_workspace(db, workspace_id)
     except market_data_application.MarketDataApplicationError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    if _is_research_instrument(db, instrument_id):
-        return
     try:
-        market_data_application.require_instrument_access(db, workspace_id, instrument_id)
+        market_data_application.require_instrument_readable(db, workspace_id, instrument_id)
     except market_data_application.MarketDataApplicationError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 

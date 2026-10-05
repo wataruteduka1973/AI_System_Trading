@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.market_data.application.public_research import is_research_instrument
 from app.market_data.infrastructure.access import (
     ACCESS_ERROR_CODES,
     MarketDataAccessError,
@@ -116,6 +117,17 @@ def require_instrument_access(db: Session, workspace_id: UUID, instrument_id: UU
         )
 
 
+def require_instrument_readable(db: Session, workspace_id: UUID, instrument_id: UUID) -> None:
+    """Read-only access to stored candles and coverage. Same as
+    `require_instrument_access`, except that a public research instrument (no
+    connection or account by design) is readable by any workspace member. Writes
+    (collection, backfill requests, subscriptions) keep using
+    `require_instrument_access`, which never admits one."""
+    if is_research_instrument(db, instrument_id):
+        return
+    require_instrument_access(db, workspace_id, instrument_id)
+
+
 def enqueue_backfill(
     db: Session,
     workspace_id: UUID,
@@ -189,7 +201,7 @@ def get_coverage(
 ) -> dict[str, object]:
     _validate_timeframe(timeframe)
     require_workspace(db, workspace_id)
-    require_instrument_access(db, workspace_id, instrument_id)
+    require_instrument_readable(db, workspace_id, instrument_id)
     if (requested_from is None) != (requested_to is None):
         raise MarketDataApplicationError(
             "invalid_input", "requested_from and requested_to must be provided together"

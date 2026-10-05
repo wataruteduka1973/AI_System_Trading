@@ -8,11 +8,27 @@ export function useInstruments() {
     '利用口座を選択すると、取引所から最新の銘柄ルールを同期できます。',
   )
   const [selectedInstrumentId, setSelectedInstrumentId] = useState('')
+  // Public production history (binance_public): no connection or account behind it, so it is
+  // not part of `workspaceInstruments`. Read-only: charts and backtests only.
+  const [researchInstruments, setResearchInstruments] = useState<WorkspaceInstrument[]>([])
+
+  const loadResearchInstruments = async (workspaceId: string) => {
+    try {
+      const response = await apiFetch(
+        `${apiBaseUrl}/api/v1/workspaces/${workspaceId}/research-instruments`,
+      )
+      if (response.ok) setResearchInstruments((await response.json()) as WorkspaceInstrument[])
+    } catch {
+      // The research list is optional; an unreachable API leaves it empty.
+    }
+  }
 
   const load = async (workspaceId: string) => {
     setWorkspaceInstruments([])
+    setResearchInstruments([])
     setSelectedInstrumentId('')
     if (!workspaceId) return
+    void loadResearchInstruments(workspaceId)
     try {
       const response = await apiFetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/instruments`)
       if (response.ok) {
@@ -49,6 +65,7 @@ export function useInstruments() {
 
   return {
     workspaceInstruments,
+    researchInstruments,
     instrumentMessage,
     selectedInstrumentId,
     setSelectedInstrumentId,

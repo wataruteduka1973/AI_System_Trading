@@ -1,4 +1,5 @@
-export type ExchangeCode = 'oanda' | 'binance'
+/** `binance_public` is the research-only public history (no account behind it). */
+export type ExchangeCode = 'oanda' | 'binance' | 'binance_public'
 
 export type AppRoute =
   | { kind: 'home'; workspaceId: null; exchange: null }
@@ -9,7 +10,7 @@ export type AppRoute =
   | { kind: 'not-found'; workspaceId: null; exchange: null }
 
 const workspaceRoute =
-  /^\/workspaces\/([^/]+)\/(connections|trading|backtests|markets\/(oanda|binance))\/?$/
+  /^\/workspaces\/([^/]+)\/(connections|trading|backtests|markets\/(oanda|binance|binance_public))\/?$/
 
 export function resolveAppRoute(pathname: string): AppRoute {
   if (pathname === '/' || pathname === '') {

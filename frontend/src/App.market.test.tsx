@@ -128,3 +128,43 @@ it('shows the next retry time for a queued backfill with prior failures', async 
   expect(container.textContent).toContain('次回再試行予定')
   expect(container.textContent).toContain('連続失敗2回')
 })
+
+it('shows public research history read-only: source and final range, no collection controls, no stream', async () => {
+  const request = vi.fn((input: string) => {
+    const url = new URL(input)
+    if (url.pathname.endsWith('/auth/me')) return jsonResponse(authMe)
+    if (url.pathname.endsWith('/health') || url.pathname.endsWith('/health/db')) return jsonResponse({ status: 'ok' })
+    if (url.pathname.endsWith('/research-instruments')) {
+      return jsonResponse([{ ...baseInstrument, id: 'pub', exchange_code: 'binance_public', symbol: 'ETHUSDT' }])
+    }
+    if (url.pathname.endsWith('/instruments')) return jsonResponse([baseInstrument])
+    if (url.pathname.endsWith('/candles')) {
+      return jsonResponse([{ open_time: '2026-08-29T00:00:00Z', close: '777', source: 'binance_public' }])
+    }
+    if (url.pathname.endsWith('/candle-coverage')) {
+      return jsonResponse({
+        timeframe: '1m', requested_from: null, requested_to: null,
+        actual_from: '2017-08-17T04:00:00Z', actual_to: '2026-10-03T00:00:00Z',
+        stored_count: 1000, expected_count: null, missing_count: 7,
+        coverage_status: 'partial_gaps', source_limitation: null,
+      })
+    }
+    return jsonResponse([])
+  })
+  vi.stubGlobal('fetch', request)
+  const { container } = render(
+    <MemoryRouter initialEntries={['/workspaces/ws/markets/binance_public']}><App /></MemoryRouter>,
+  )
+  await screen.findByLabelText('時間足')
+  expect(screen.getByRole('heading', { name: '公開履歴(検証用)' })).toBeInTheDocument()
+  expect(screen.queryByText('ページが見つかりません')).not.toBeInTheDocument()
+  expect(screen.getByRole('option', { name: 'BINANCE_PUBLIC ETHUSDT' })).toBeInTheDocument()
+  await waitFor(() => expect(screen.getByTestId('market-chart')).toHaveTextContent('777'))
+  await waitFor(() => expect(container.textContent).toContain('取得元: binance_public(公開履歴)'))
+  expect(container.textContent).toContain('保存範囲内の欠損 7 本')
+  expect(screen.queryByRole('button', { name: 'この銘柄の全時間足を開始' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'この銘柄の全時間足を停止' })).not.toBeInTheDocument()
+  const urls = request.mock.calls.map(([url]) => url)
+  expect(urls.some((url) => url.includes('/instruments/pub/candles'))).toBe(true)
+  expect(urls.some((url) => url.includes('market-stream'))).toBe(false)
+})

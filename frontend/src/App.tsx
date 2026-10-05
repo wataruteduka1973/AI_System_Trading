@@ -37,12 +37,16 @@ function App() {
   const instruments = useInstruments()
   const {
     workspaceInstruments,
+    researchInstruments,
     instrumentMessage,
     selectedInstrumentId,
     setSelectedInstrumentId,
   } = instruments
+  const isResearchMarket = route.kind === 'market' && route.exchange === 'binance_public'
   const visibleInstruments = route.kind === 'market'
-    ? workspaceInstruments.filter((instrument) => instrument.exchange_code === route.exchange)
+    ? (isResearchMarket ? researchInstruments : workspaceInstruments).filter(
+        (instrument) => instrument.exchange_code === route.exchange,
+      )
     : workspaceInstruments
   const activeInstrumentId = visibleInstruments.some(
     (instrument) => instrument.id === selectedInstrumentId,
@@ -87,7 +91,7 @@ function App() {
     selectedWorkspaceId,
     activeInstrumentId,
     marketData.timeframe,
-    route.kind === 'market',
+    route.kind === 'market' && !isResearchMarket,
     marketData.reloadMarketData,
   )
 
@@ -145,6 +149,10 @@ function App() {
         <Route
           path="/workspaces/:workspaceId/markets/binance"
           element={<ExchangeMarketPage exchange="binance">{null}</ExchangeMarketPage>}
+        />
+        <Route
+          path="/workspaces/:workspaceId/markets/binance_public"
+          element={<ExchangeMarketPage exchange="binance_public">{null}</ExchangeMarketPage>}
         />
         <Route
           path="/workspaces/:workspaceId/trading"
@@ -206,6 +214,7 @@ function App() {
       <MarketDataPanel
         visible={route.kind === 'market' && Boolean(selectedWorkspaceId)}
         visibleInstruments={visibleInstruments}
+        isResearch={isResearchMarket}
         activeInstrumentId={activeInstrumentId}
         onSelectInstrument={setSelectedInstrumentId}
         selectedWorkspaceId={selectedWorkspaceId}
@@ -288,7 +297,7 @@ function App() {
       <BacktestForm
         visible={route.kind === 'backtests' && Boolean(selectedWorkspaceId)}
         workspaceInstruments={workspaceInstruments}
-        researchInstruments={backtests.researchInstruments}
+        researchInstruments={researchInstruments}
         backtestMessage={backtests.backtestMessage}
         instrumentId={backtests.instrumentId}
         onInstrumentIdChange={backtests.setInstrumentId}

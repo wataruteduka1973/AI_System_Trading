@@ -3,6 +3,7 @@
 `market_data_gap` rows (docs/plans/market-data-services-consolidation.md)."""
 
 from datetime import UTC, datetime
+from typing import NamedTuple
 from uuid import UUID
 
 from sqlalchemy import Boolean, func, literal_column, select
@@ -22,6 +23,13 @@ from app.models.instruments import Instrument
 from app.models.market_data import Candle, MarketDataGap
 
 
+class UpsertCounts(NamedTuple):
+    inserted: int
+    updated: int
+    rejected: int
+    """Points whose stored row came from a different `source` and was left untouched."""
+
+
 def upsert_candle_points(
     db: Session,
     instrument_id: UUID,
@@ -29,12 +37,17 @@ def upsert_candle_points(
     source: str,
     quality_status: str,
     points: list[CandlePoint],
-) -> tuple[int, int]:
+) -> UpsertCounts:
     """Extracted from the former `CandleIngestionService._upsert_points` (2026-09-26, when
     `app/market_data/application/public_research.py` needed the identical
     upsert against `uq_candle_business_key` without going through the rest of
-    that service's credentialed-account machinery). Returns (inserted,
-    updated)."""
+    that service's credentialed-account machinery).
+
+    Source precedence (docs/plans/candle-chart-and-coverage.md Phase C): the source that
+    first stored a candle owns it. A write from a different `source` never overwrites
+    the stored row; it is counted in `rejected` so the caller can audit it. Within one
+    instrument every legitimate writer uses the same source, so a mismatch means two
+    datasets were pointed at one instrument."""
     received_at = datetime.now(UTC)
     values = [
         {
@@ -58,6 +71,7 @@ def upsert_candle_points(
     statement = pg_insert(Candle).values(values)
     returning_statement = statement.on_conflict_do_update(
         constraint="uq_candle_business_key",
+        where=Candle.source == statement.excluded.source,
         set_={
             "close_time": statement.excluded.close_time,
             "open": statement.excluded.open,
@@ -75,7 +89,7 @@ def upsert_candle_points(
     ).returning(literal_column("xmax = 0", Boolean))
     inserted_flags = list(db.scalars(returning_statement).all())
     inserted = sum(bool(flag) for flag in inserted_flags)
-    return inserted, len(inserted_flags) - inserted
+    return UpsertCounts(inserted, len(inserted_flags) - inserted, len(points) - len(inserted_flags))
 
 
 def build_candle_coverage(
@@ -162,7 +176,7 @@ def persist_internal_gaps(
                 MarketDataGap.instrument_id == instrument_id,
                 MarketDataGap.timeframe == timeframe,
                 MarketDataGap.reason_code == "internal_missing_candles",
-                MarketDataGap.status == "open",
+                MarketDataGap.status.in_(("open", "ignored")),
                 MarketDataGap.from_time < requested_to,
                 MarketDataGap.to_time > requested_from,
             )

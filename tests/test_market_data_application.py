@@ -173,3 +173,34 @@ def test_direct_backfill_commands_validate_bounds(days, frame) -> None:
     assert error.value.code == "invalid_input"
     db.add.assert_not_called()
     validator.assert_not_called()
+
+
+def test_a_research_instrument_is_readable_but_never_writable_without_an_account(
+    monkeypatch,
+) -> None:
+    """Public research data has no connection or account: reads (candles, coverage) admit
+    it, collection / backfill / subscription writes keep requiring a selected account."""
+    db = MagicMock()
+    monkeypatch.setattr(cases, "is_research_instrument", lambda _db, _instrument_id: True)
+    monkeypatch.setattr(cases, "instrument_is_readable", lambda *_args: False)
+
+    cases.require_instrument_readable(db, uuid4(), uuid4())
+
+    with pytest.raises(cases.MarketDataApplicationError) as error:
+        cases.require_instrument_access(db, uuid4(), uuid4())
+    assert error.value.code == "instrument_unavailable"
+    for write in (
+        cases.enqueue_backfill,
+        cases.update_subscriptions,
+    ):
+        source = inspect.getsource(write)
+        assert "require_instrument_access(" in source
+        assert "require_instrument_readable(" not in source
+
+
+def test_an_ordinary_instrument_still_needs_an_account_to_be_read(monkeypatch) -> None:
+    monkeypatch.setattr(cases, "is_research_instrument", lambda _db, _instrument_id: False)
+    monkeypatch.setattr(cases, "instrument_is_readable", lambda *_args: False)
+
+    with pytest.raises(cases.MarketDataApplicationError):
+        cases.require_instrument_readable(MagicMock(), uuid4(), uuid4())

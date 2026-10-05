@@ -917,3 +917,51 @@ def test_database_disconnect_rolls_back_checkpoint_then_recovers(context, engine
     expire(sessions, work)
     assert store.recover_expired() == 1
     assert not store.heartbeat(claim)
+
+
+def test_candle_upsert_keeps_the_first_source_and_counts_the_rejected(context):
+    """Phase C source precedence against the real constraint: another source's write is
+    left out of the update, the same source's write goes through."""
+    from app.market_data.infrastructure.candle_store import upsert_candle_points
+
+    _, sessions, work, _ = context
+    instrument_id = work.feed.instrument_id
+    start = datetime(2026, 8, 1, tzinfo=UTC)
+
+    def point(close: str) -> CandlePoint:
+        return CandlePoint(
+            open_time=start,
+            close_time=start + timedelta(minutes=1),
+            open=Decimal("100"),
+            high=Decimal("200"),
+            low=Decimal("50"),
+            close=Decimal(close),
+            volume=Decimal("1"),
+            trade_count=1,
+            is_final=True,
+        )
+
+    def stored() -> tuple[str, Decimal]:
+        with sessions() as db:
+            row = db.scalars(
+                select(Candle).where(
+                    Candle.instrument_id == instrument_id, Candle.open_time == start
+                )
+            ).one()
+            return row.source, row.close
+
+    with sessions.begin() as db:
+        first = upsert_candle_points(
+            db, instrument_id, "1m", "binance_public", "backfilled", [point("110")]
+        )
+    with sessions.begin() as db:
+        other = upsert_candle_points(db, instrument_id, "1m", "binance", "complete", [point("120")])
+    assert (tuple(first), tuple(other)) == ((1, 0, 0), (0, 0, 1))
+    assert stored() == ("binance_public", Decimal("110"))
+
+    with sessions.begin() as db:
+        same = upsert_candle_points(
+            db, instrument_id, "1m", "binance_public", "complete", [point("130")]
+        )
+    assert tuple(same) == (0, 1, 0)
+    assert stored() == ("binance_public", Decimal("130"))
