@@ -16,8 +16,9 @@ dependencies = [
   "fastapi>=0.139,<0.143",
   "httpx>=0.28,<1",
   "oandapyV20>=0.7.2,<1",
+  "pydantic>=2.9,<3",
   "pydantic-settings>=2.14,<3",
-  "psycopg[binary,pool]>=3.3.4,<4",
+  "psycopg[binary]>=3.3.4,<4",
   "PyJWT[crypto]>=2.10,<3",
   "python-binance>=1.0.37,<2",
   "requests>=2.32,<3",
@@ -35,6 +36,15 @@ dependencies = [
 # 50.0.0. Verified via `python -m pip_audit` against 50.0.1 before pinning. This
 # project's only use of cryptography is Fernet symmetric encryption
 # (app/security/secret_store.py) -- a narrow, stable API untouched by this jump.
+#
+# pydantic is imported directly by the schemas and settings (app/schemas/, app/core/),
+# so it is declared here rather than relied on as a transitive dependency of fastapi /
+# pydantic-settings. The floor is the one fastapi itself requires. psycopg's "pool" extra
+# is not requested: the engine uses SQLAlchemy's own connection pool (app/db/session.py),
+# nothing imports psycopg_pool.
+#
+# Exact versions are pinned in requirements-lock.txt (see README "依存関係の更新");
+# the ranges above only say what the code is allowed to run on.
 #
 # requests is imported directly (exception types caught around the OANDA SDK calls in
 # app/exchanges/oanda.py and app/market_data/infrastructure/), so it is declared here

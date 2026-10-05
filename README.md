@@ -16,7 +16,7 @@ AIモデルとテクニカル分析指標を利用し、複数の取引所にま
 python -m venv .venv313
 .\.venv313\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev]" -c requirements-lock.txt
 ```
 
 `.env.example`を`.env`へコピーし、ローカルPostgreSQLの接続情報を設定します。実際のパスワードやAPIキーはコミットしないでください。
@@ -146,7 +146,7 @@ OANDA検証は公式practice APIの口座一覧、口座summary、USD/JPY instru
 プロジェクトのPython 3.13環境を有効にして、開発用ツールを更新します。
 
 ```powershell
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev]" -c requirements-lock.txt
 ```
 
 ```powershell
@@ -162,6 +162,22 @@ Ruffは検証済みの0.16.8に固定し、ローカルとCIで整形結果が�
 型定義のないBinance/OANDA SDK以外のエラーは無効化しません。
 Windows用分岐も確認する場合は `python -m mypy --platform win32` を実行します。
 テストやmigration自身の厳格な型付けは対象外ですが、整形・lint・実行テストは継続します。
+
+### 依存関係の更新
+
+ライブラリの版は `requirements-lock.txt` に固定しています(`pip install ... -c requirements-lock.txt` で使う制約ファイル)。
+`pyproject.toml` の範囲は「コードが動作を許す範囲」、ロックは「実際に使う版」です。ロックが無いと、CIが毎回その時点の最新を取得し、
+上流の変更(例: SQLAlchemy 2.1の型の変更)で、手元で通っていたコードがCIだけ落ちます。
+
+`pyproject.toml` の依存を足す・範囲を変えるときは、ロックを作り直してください(`uv`は生成にだけ使うツールで、プロジェクトの依存ではありません)。
+
+```powershell
+python -m pip install uv
+uv pip compile pyproject.toml --extra dev --universal --python-version 3.13 -o requirements-lock.txt
+```
+
+作り直したら、上のチェックと `python -m pip_audit` を実行してからコミットします。`pyproject.toml` の範囲外の版がロックに残っていると、インストールがエラーになります。
+`pyproject.toml` に足した依存がロックに無い場合はエラーにならず、その依存だけ範囲内の最新で入るので、ロックの作り直しを忘れないでください。
 
 ### Worker DB基盤の統合試験（開発者向け）
 
