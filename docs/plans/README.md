@@ -10,6 +10,7 @@
 | 計画書 | 内容 | 状態 |
 |---|---|---|
 | [paper-trading-live-data.md](paper-trading-live-data.md) | 本番の公開価格でのペーパートレード | Unit 1〜6完了。2つのボット群(承認済み 4h 55/20 ×6、比較用 4h 110/40 ×6)が稼働中で、データを貯める段階。月1回 `scripts/report_paper_performance.py` で想定範囲と比べる |
+| [paper-trading-server.md](paper-trading-server.md) | ペーパートレードの Worker と DB を AWS(EC2 + RDS)で動かし続ける | 2026-10-05 承認(東京、CloudFormation)。Unit 0(利用者による AWS の準備)待ち。それまでは手元 PC の自動起動でつなぐ |
 
 ## 一部完了・一部先送り
 
@@ -47,7 +48,6 @@
 
 | 計画書 | 内容 | 状態 |
 |---|---|---|
-| [paper-trading-server.md](paper-trading-server.md) | ペーパートレードの Worker と DB を AWS(EC2 + RDS)で動かし続ける | ドラフト。利用者の承認待ち(有料インフラ)。それまでは手元 PC の自動起動でつなぐ |
 | [horizon6-entry-checklist.md](horizon6-entry-checklist.md) | Horizon 6(AI Model Lab)の着手前タスク | 未着手 |
 | [license-checkin-and-customer-management.md](license-checkin-and-customer-management.md) | ライセンスcheck-in・顧客管理 | ドラフト。2026-09-25から保留 |
 | [horizon5-distribution-and-auth.md](horizon5-distribution-and-auth.md) | Horizon 5のドラフト計画 | horizon5-implementation-plan.md が具体化して引き継いだ |
