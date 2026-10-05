@@ -395,7 +395,7 @@ def test_coverage_accepts_an_explicit_timezone_aware_requested_range(monkeypatch
     build_coverage.assert_called_once_with(
         session, instrument_id, "1h", requested_from, requested_to
     )
-    assert session.scalar.call_count == 1
+    assert session.scalar.call_count == 2  # research-exchange check, then account access
 
 
 def test_coverage_without_explicit_range_preserves_latest_backfill_fallback(monkeypatch) -> None:
@@ -406,7 +406,7 @@ def test_coverage_without_explicit_range_preserves_latest_backfill_fallback(monk
     latest_job = MagicMock(from_time=requested_from, to_time=requested_to)
     session = MagicMock()
     session.get.return_value = Workspace(id=workspace_id, name="Personal", status="active")
-    session.scalar.side_effect = [instrument_id, latest_job]
+    session.scalar.side_effect = ["binance", instrument_id, latest_job]
     build_coverage = MagicMock(
         return_value={
             "requested_from": requested_from.isoformat(),

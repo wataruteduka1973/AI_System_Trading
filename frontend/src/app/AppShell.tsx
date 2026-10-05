@@ -20,6 +20,7 @@ export default function AppShell({ workspaceId, children, user, onLogout }: AppS
             <NavLink to={connectionPath(workspaceId)}>接続管理</NavLink>
             <NavLink to={marketPath(workspaceId, 'oanda')}>OANDA市場</NavLink>
             <NavLink to={marketPath(workspaceId, 'binance')}>Binance市場</NavLink>
+            <NavLink to={marketPath(workspaceId, 'binance_public')}>公開履歴(検証用)</NavLink>
             <NavLink to={tradingPath(workspaceId)}>Bot管理</NavLink>
             <NavLink to={backtestPath(workspaceId)}>バックテスト</NavLink>
           </>

@@ -15,6 +15,7 @@ from app.market_data.infrastructure.candle_store import (
     upsert_candle_points,
 )
 from app.models.market_data import MarketDataGap
+from sqlalchemy.dialects import postgresql
 
 
 def candle_point(open_time: datetime) -> CandlePoint:
@@ -360,7 +361,7 @@ def test_upsert_reports_actual_insert_and_update_counts() -> None:
     session.scalars.return_value = scalar_result
     start = datetime(2026, 8, 27, tzinfo=UTC)
 
-    inserted, updated = upsert_candle_points(
+    inserted, updated, rejected = upsert_candle_points(
         session,
         uuid4(),
         "1m",
@@ -375,3 +376,46 @@ def test_upsert_reports_actual_insert_and_update_counts() -> None:
 
     assert inserted == 2
     assert updated == 1
+    assert rejected == 0
+
+
+def test_upsert_never_overwrites_a_candle_stored_by_another_source() -> None:
+    session = MagicMock()
+    scalar_result = MagicMock()
+    scalar_result.all.return_value = [True]  # one of three points was written
+    session.scalars.return_value = scalar_result
+    start = datetime(2026, 8, 27, tzinfo=UTC)
+
+    counts = upsert_candle_points(
+        session,
+        uuid4(),
+        "1m",
+        "binance_public",
+        "backfilled",
+        [candle_point(start + timedelta(minutes=i)) for i in range(3)],
+    )
+
+    assert counts == (1, 0, 2)  # inserted, updated, rejected
+    sql = str(session.scalars.call_args.args[0].compile(dialect=postgresql.dialect()))
+    assert "ON CONFLICT ON CONSTRAINT uq_candle_business_key DO UPDATE" in sql
+    assert "WHERE fx.candle.source = excluded.source" in sql
+
+
+def test_public_series_coverage_reports_an_expected_count_like_binance() -> None:
+    start = datetime(2026, 8, 1, tzinfo=UTC)
+    end = start + timedelta(hours=24)
+    report = classify_candle_coverage(
+        exchange_code="binance_public",
+        timeframe="1h",
+        requested_from=start,
+        requested_to=end,
+        stored_count=22,
+        actual_from=start,
+        actual_to=end,
+        internal_missing_count=2,
+    )
+
+    assert report["expected_count"] == 24
+    assert report["missing_count"] == 2
+    assert report["coverage_status"] == "partial_gaps"
+    assert report["source_limitation"] is None  # the Testnet reset does not apply

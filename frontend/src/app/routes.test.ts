@@ -19,6 +19,9 @@ describe('application routes', () => {
     expect(resolveAppRoute('/workspaces/workspace-1/markets/binance')).toEqual({
       kind: 'market', workspaceId: 'workspace-1', exchange: 'binance',
     })
+    expect(resolveAppRoute('/workspaces/workspace-1/markets/binance_public')).toEqual({
+      kind: 'market', workspaceId: 'workspace-1', exchange: 'binance_public',
+    })
   })
 
   it('rejects unknown exchanges and preserves encoded workspace ids', () => {

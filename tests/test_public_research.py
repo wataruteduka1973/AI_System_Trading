@@ -14,8 +14,12 @@ import pytest
 from app.exchanges.binance import BinanceInstrumentRules
 from app.exchanges.types import CandlePoint
 from app.market_data.application import public_research
+from app.market_data.domain.coverage import GapWindow
+from app.market_data.infrastructure.candle_store import UpsertCounts
+from app.models.audit import AuditLog
 from app.models.connections import Exchange, Market
 from app.models.instruments import Instrument
+from app.models.market_data import MarketDataGap
 
 
 def _rules(**overrides: object) -> BinanceInstrumentRules:
@@ -141,14 +145,12 @@ async def test_backfill_public_klines_upserts_only_final_candles_within_range(
     client = MagicMock()
     points = [_candle(0), _candle(1, is_final=False)]
     client.get_candles = AsyncMock(return_value=points)
-    upsert = MagicMock(return_value=(1, 0))
+    upsert = MagicMock(return_value=UpsertCounts(1, 0, 0))
     monkeypatch.setattr(public_research, "upsert_candle_points", upsert)
 
-    inserted, updated = await public_research.backfill_public_klines(
-        db, client, instrument, "1h", days=1
-    )
+    counts = await public_research.backfill_public_klines(db, client, instrument, "1h", days=1)
 
-    assert (inserted, updated) == (1, 0)
+    assert counts == (1, 0, 0)
     upsert.assert_called_once()
     call_args = upsert.call_args[0]
     assert call_args[0] is db
@@ -170,11 +172,9 @@ async def test_backfill_public_klines_pages_across_a_multi_day_range(
     client.get_candles = AsyncMock(return_value=[])
     monkeypatch.setattr(public_research, "_PAGE_SIZE_CANDLES", 24)
 
-    inserted, updated = await public_research.backfill_public_klines(
-        db, client, instrument, "1h", days=3
-    )
+    counts = await public_research.backfill_public_klines(db, client, instrument, "1h", days=3)
 
-    assert (inserted, updated) == (0, 0)
+    assert counts == (0, 0, 0)
     assert client.get_candles.call_count == 3  # 3 days * 24h / 24-candle pages
     db.commit.assert_not_called()  # no final points on any page
 
@@ -234,7 +234,7 @@ async def test_refresh_fetches_from_the_latest_stored_bar_once_a_new_one_is_due(
     )  # fmt: skip
     client = MagicMock()
     client.get_candles = AsyncMock(return_value=[fresh, forming])
-    upsert = MagicMock(return_value=(1, 0))
+    upsert = MagicMock(return_value=UpsertCounts(1, 0, 0))
     monkeypatch.setattr(public_research, "upsert_candle_points", upsert)
 
     inserted = await public_research.refresh_public_klines(
@@ -267,3 +267,186 @@ async def test_refresh_with_no_stored_bars_fetches_initial_history(
 
     first_start = client.get_candles.call_args_list[0][0][2]
     assert first_start == now - timedelta(hours=4 * 300)
+
+
+# ---- source precedence, audit, validation (Phase C) ----
+
+
+def _audits(db: MagicMock) -> list[AuditLog]:
+    return [c.args[0] for c in db.add.call_args_list if isinstance(c.args[0], AuditLog)]
+
+
+@pytest.mark.anyio
+async def test_backfill_with_a_workspace_records_a_summary_audit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instrument = Instrument(id=uuid4(), symbol="BTCUSDT")
+    workspace_id = uuid4()
+    db = MagicMock()
+    client = MagicMock()
+    client.get_candles = AsyncMock(return_value=[_candle(0)])
+    monkeypatch.setattr(
+        public_research, "upsert_candle_points", MagicMock(return_value=UpsertCounts(1, 0, 0))
+    )
+
+    await public_research.backfill_public_klines(
+        db, client, instrument, "1h", days=1, audit_workspace_id=workspace_id
+    )
+
+    (audit,) = _audits(db)
+    assert audit.action == "public_candles.backfill"
+    assert audit.workspace_id == workspace_id
+    assert audit.resource_id == instrument.id
+    data = audit.after_data
+    assert data is not None
+    assert (data["symbol"], data["source"], data["timeframe"]) == (
+        "BTCUSDT",
+        "binance_public",
+        "1h",
+    )
+    assert (data["inserted"], data["updated"], data["rejected"]) == (1, 0, 0)
+    assert data["quality_status"] == "backfilled"
+
+
+@pytest.mark.anyio
+async def test_a_source_conflict_is_audited_and_never_overwritten(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instrument = Instrument(id=uuid4(), symbol="BTCUSDT")
+    db = MagicMock()
+    client = MagicMock()
+    client.get_candles = AsyncMock(return_value=[_candle(0), _candle(1)])
+    monkeypatch.setattr(
+        public_research, "upsert_candle_points", MagicMock(return_value=UpsertCounts(0, 0, 2))
+    )
+
+    counts = await public_research.backfill_public_klines(
+        db, client, instrument, "1h", days=1, audit_workspace_id=uuid4()
+    )
+
+    assert counts.rejected == 2
+    conflict = [a for a in _audits(db) if a.action == "public_candles.source_conflict"]
+    assert len(conflict) == 1
+    assert conflict[0].after_data is not None
+    assert conflict[0].after_data["rejected"] == 2
+
+
+@pytest.mark.anyio
+async def test_a_refresh_conflict_without_a_workspace_is_logged_not_audited(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    instrument = Instrument(id=uuid4(), symbol="BTCUSDT")
+    db = MagicMock()
+    db.scalar.return_value = None
+    client = MagicMock()
+    client.get_candles = AsyncMock(return_value=[_candle(0)])
+    monkeypatch.setattr(
+        public_research, "upsert_candle_points", MagicMock(return_value=UpsertCounts(0, 0, 1))
+    )
+
+    with caplog.at_level("WARNING"):
+        await public_research.refresh_public_klines(
+            db, client, instrument, "1h", initial_bars=5, now=datetime(2026, 9, 2, tzinfo=UTC)
+        )
+
+    assert _audits(db) == []
+    assert "another source" in caplog.text
+
+
+def test_resolve_audit_workspace_id_never_guesses_between_workspaces() -> None:
+    only, other = uuid4(), uuid4()
+    db = MagicMock()
+    db.scalars.return_value.all.return_value = [only]
+    assert public_research.resolve_audit_workspace_id(db, None) == only
+
+    db.scalars.return_value.all.return_value = [only, other]
+    with pytest.raises(public_research.PublicResearchError) as several:
+        public_research.resolve_audit_workspace_id(db, None)
+    assert several.value.code == "workspace_required"
+
+    db.scalars.return_value.all.return_value = []
+    with pytest.raises(public_research.PublicResearchError):
+        public_research.resolve_audit_workspace_id(db, None)
+
+    db.get.return_value = None
+    with pytest.raises(public_research.PublicResearchError) as missing:
+        public_research.resolve_audit_workspace_id(db, other)
+    assert missing.value.code == "workspace_not_found"
+
+
+def test_is_research_instrument_matches_only_the_public_exchange() -> None:
+    db = MagicMock()
+    db.scalar.return_value = "binance_public"
+    assert public_research.is_research_instrument(db, uuid4()) is True
+    db.scalar.return_value = "binance"
+    assert public_research.is_research_instrument(db, uuid4()) is False
+
+
+def _gap(start_hour: int, count: int) -> GapWindow:
+    start = datetime(2026, 9, 1, start_hour, tzinfo=UTC)
+    return GapWindow(start, start + timedelta(hours=count), count, count)
+
+
+def _gap_row(gap: GapWindow) -> MarketDataGap:
+    return MarketDataGap(
+        from_time=gap.from_time,
+        to_time=gap.to_time,
+        status="open",
+        reason_code="internal_missing_candles",
+    )
+
+
+@pytest.mark.anyio
+async def test_validation_refetches_gaps_and_keeps_source_side_windows_as_ignored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instrument = Instrument(id=uuid4(), symbol="BTCUSDT")
+    workspace_id = uuid4()
+    first, last = datetime(2026, 9, 1, tzinfo=UTC), datetime(2026, 9, 2, tzinfo=UTC)
+    filled, unfillable = _gap(2, 3), _gap(10, 2)
+    db = MagicMock()
+    db.execute.return_value.one.return_value = (20, first, last)
+    still_open = _gap_row(unfillable)
+    db.scalars.side_effect = [
+        MagicMock(all=MagicMock(return_value=[_gap_row(filled), still_open])),
+        MagicMock(all=MagicMock(return_value=[still_open])),
+    ]
+    persist = MagicMock(side_effect=[[filled, unfillable], [unfillable]])
+    fetch = AsyncMock(return_value=public_research.PublicFetchCounts(3, 0, 0))
+    monkeypatch.setattr(public_research, "persist_internal_gaps", persist)
+    monkeypatch.setattr(public_research, "_fetch_and_upsert", fetch)
+
+    result = await public_research.validate_public_series(
+        db, MagicMock(), instrument, "1h", audit_workspace_id=workspace_id
+    )
+
+    assert (result.missing_before, result.missing_after) == (5, 2)
+    assert [call.kwargs["start"] for call in fetch.call_args_list] == [
+        filled.from_time,
+        unfillable.from_time,
+    ]
+    assert all(call.kwargs["quality_status"] == "backfilled" for call in fetch.call_args_list)
+    assert still_open.status == "ignored"
+    (audit,) = _audits(db)
+    assert audit.action == "public_candles.gap_validation"
+    assert audit.after_data is not None
+    assert audit.after_data["missing_before"] == 5
+    assert audit.after_data["unfillable_window_count"] == 1
+
+
+@pytest.mark.anyio
+async def test_validation_of_an_empty_series_does_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = MagicMock()
+    db.execute.return_value.one.return_value = (0, None, None)
+    persist = MagicMock()
+    monkeypatch.setattr(public_research, "persist_internal_gaps", persist)
+
+    result = await public_research.validate_public_series(
+        db, MagicMock(), Instrument(id=uuid4(), symbol="X"), "1h", audit_workspace_id=uuid4()
+    )
+
+    assert result.stored_count == 0
+    persist.assert_not_called()
+    assert _audits(db) == []

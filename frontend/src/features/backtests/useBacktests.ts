@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
 import { apiBaseUrl, apiErrorMessage, apiFetch } from '../../lib/api'
-import type { WorkspaceInstrument } from '../instruments/types'
 import type { Timeframe } from '../market-data/types'
 import type { BacktestRun, BacktestTrade } from './types'
 
@@ -18,7 +17,6 @@ export function useBacktests(selectedWorkspaceId: string) {
   const [selectedRunTrades, setSelectedRunTrades] = useState<
     { runId: string; trades: BacktestTrade[] } | null
   >(null)
-  const [researchInstruments, setResearchInstruments] = useState<WorkspaceInstrument[]>([])
 
   const [instrumentId, setInstrumentId] = useState('')
   const [timeframe, setTimeframe] = useState<Timeframe>('1m')
@@ -42,23 +40,6 @@ export function useBacktests(selectedWorkspaceId: string) {
     }
   }, [])
 
-  const loadResearchInstruments = useCallback(async (workspaceId: string) => {
-    if (!workspaceId) {
-      setResearchInstruments([])
-      return
-    }
-    try {
-      const response = await apiFetch(
-        `${apiBaseUrl}/api/v1/workspaces/${workspaceId}/research-instruments`,
-      )
-      if (response.ok) {
-        setResearchInstruments((await response.json()) as WorkspaceInstrument[])
-      }
-    } catch {
-      setBacktestMessage('検証用銘柄一覧APIへ接続できません。')
-    }
-  }, [])
-
   useEffect(() => {
     if (!selectedWorkspaceId) return
     // Deferred by one tick (mirrors useMarketData.ts's own initial-load effect):
@@ -66,10 +47,9 @@ export function useBacktests(selectedWorkspaceId: string) {
     // avoidable extra render.
     const timer = window.setTimeout(() => {
       void load(selectedWorkspaceId)
-      void loadResearchInstruments(selectedWorkspaceId)
     }, 0)
     return () => window.clearTimeout(timer)
-  }, [load, loadResearchInstruments, selectedWorkspaceId])
+  }, [load, selectedWorkspaceId])
 
   const createBacktest = async () => {
     if (!selectedWorkspaceId || !instrumentId || !fromTime || !toTime || !initialEquity) return
@@ -121,7 +101,6 @@ export function useBacktests(selectedWorkspaceId: string) {
     backtests,
     backtestMessage,
     selectedRunTrades,
-    researchInstruments,
     instrumentId,
     setInstrumentId,
     timeframe,

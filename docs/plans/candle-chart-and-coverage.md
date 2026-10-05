@@ -275,28 +275,68 @@ so a reader who lands here first is not misled into thinking the work has not st
 
 ### Phase C — optional one-year Binance historical source
 
-Status: `Approval gate`; not required for Testnet connection validation.
+Status: `Implemented` (2026-10-05 audit against the code); not required for Testnet connection
+validation.
 
-#### Decision required before implementation
+#### Decisions (approved 2026-09-26, roadmap approval gate「Binance Public履歴の併用」)
 
-- Confirm that one-year Binance BTC/JPY history is a product requirement.
-- Verify exact public symbol and interval availability.
-- Approve source provenance, precedence, and conflict behavior.
-- Decide whether public data fills gaps only or forms a separate dataset.
+- Public data is a **separate dataset**, never a gap filler for Testnet: it lives under the
+  `binance_public` pseudo-exchange as its own `Instrument` rows, so it cannot share a
+  `uq_candle_business_key` slot with a Testnet candle. Scope grew from BTC/JPY to the USDT majors
+  (BTC/ETH/BNB/LTC/XRP/ADA) up to ~9 years for backtests; paper-trading signals may read it
+  (`paper-trading-live-data.md`), orders never do.
+- **Source precedence**: the source that first stored a candle owns it
+  (`upsert_candle_points`: `ON CONFLICT DO UPDATE ... WHERE candle.source = excluded.source`).
+  A write from another source is not applied, is counted as `rejected`, and is logged; the
+  public backfill path also writes `public_candles.source_conflict` to `audit_log`. Within one
+  instrument every legitimate writer uses one source, so a conflict means two datasets were
+  pointed at one instrument. Existing rows carry `source = exchange code` (verified: the only
+  exception is 5 `local-test-fixture` OANDA rows).
+- **Audit**: `audit_log` requires a `workspace_id` but public data has none, so the operator
+  names one (`--workspace-id`; defaults to the only workspace, errors if several exist).
+  Recorded: `public_candles.backfill` (range, counts), `public_candles.source_conflict`,
+  `public_candles.gap_validation` (missing before/after, unfillable windows). Only symbols,
+  ranges and counts; the public client has no credentials. The refresh run by the trading
+  worker has no single workspace and only logs a conflict.
+- **Gap validation**: `scripts/validate_public_history.py` finds internal gaps, asks Binance
+  again for each, and re-checks. A window still missing is one the source does not have
+  (Binance maintenance outages in 2017–2018); it is kept as a `market_data_gap` row with status
+  `ignored` (`persist_internal_gaps` treats `ignored` like `open` when matching, so re-runs do
+  not duplicate it or ask again). A later fill resolves it.
+- **Read access**: candles and coverage of a research instrument are readable by any workspace
+  member (`use_cases.require_instrument_readable`); collection, backfill requests,
+  subscriptions and streams keep requiring a selected account and still refuse it.
 
-#### Deliverables after approval
+#### Deliverables
 
-- [ ] Add a separate read-only public historical adapter.
-- [ ] Record source provenance on every candle.
-- [ ] Audit source-mixing or precedence decisions without secrets.
-- [ ] Backfill approved gaps and re-run Phase A validation.
-- [ ] Keep order execution and account credentials on Testnet/Practice only.
+- [x] Add a separate read-only public historical adapter (`app/exchanges/binance_public.py`,
+  `public_research.py`, `scripts/fetch_binance_public_history.py`).
+- [x] Record source provenance on every candle (`candle.source`, `quality_status`; API
+  `source`; chart detail「取得元」).
+- [x] Audit source-mixing or precedence decisions without secrets (rule above; audit actions
+  above; `tests/test_public_research.py`, `tests/test_market_data.py`).
+- [x] Backfill approved gaps and re-run Phase A validation (2026-10-05, local DB: 7
+  instruments; 273 windows / 3,038 candles are absent from Binance itself and are `ignored`;
+  nothing fillable remained; the BTCJPY 1-year series has no gaps).
+- [x] Keep order execution and account credentials on Testnet/Practice only
+  (`tests/test_public_data_isolation.py`; bot start rejects `binance_public` without a Binance
+  connection).
 
 #### Completion criteria
 
-- The UI identifies the source and final available range accurately.
-- Public data cannot enable production order execution.
-- Conflicts are deterministic, tested, and auditable.
+- [x] The UI identifies the source and final available range accurately
+  (`/workspaces/:id/markets/binance_public`: 取得元, 最終取得足, 欠損本数; checked in the
+  browser 2026-10-05).
+- [x] Public data cannot enable production order execution.
+- [x] Conflicts are deterministic (first writer wins), tested, and auditable.
+
+#### Known limits
+
+- The coverage status of a series with source-side gaps is `partial_gaps` permanently; the UI
+  states the missing count but does not yet separate "ignored" from "unvalidated" windows.
+- A backfill that dies midway keeps its stored pages but writes no summary audit row.
+- The database-level conflict behaviour is verified by compiled SQL in unit tests and by a
+  rolled-back run against the local database; there is no `postgres`-marked CI test for it.
 
 ### Phase D — paper-trading foundation
 

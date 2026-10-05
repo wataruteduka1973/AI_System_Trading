@@ -25,6 +25,7 @@ const backfillStatusLabel = (status: BackfillJob['status']) =>
 export default function MarketDataPanel({
   visible,
   visibleInstruments,
+  isResearch,
   activeInstrumentId,
   onSelectInstrument,
   selectedWorkspaceId,
@@ -53,6 +54,8 @@ export default function MarketDataPanel({
 }: {
   visible: boolean
   visibleInstruments: WorkspaceInstrument[]
+  /** Public history (binance_public): read-only, no collection controls. */
+  isResearch: boolean
   activeInstrumentId: string
   onSelectInstrument: (instrumentId: string) => void
   selectedWorkspaceId: string
@@ -85,7 +88,11 @@ export default function MarketDataPanel({
     return (
       <section className="workspace-panel market-empty-state">
         <h2>表示できる銘柄がありません</h2>
-        <p>接続管理ページで利用口座を選択し、銘柄ルールを同期してください。</p>
+        <p>
+          {isResearch
+            ? '公開履歴データがまだ取得されていません。scripts/fetch_binance_public_history.py で取得すると表示されます。'
+            : '接続管理ページで利用口座を選択し、銘柄ルールを同期してください。'}
+        </p>
       </section>
     )
   }
@@ -95,10 +102,18 @@ export default function MarketDataPanel({
       <div>
         <p className="eyebrow">CANDLE DATA</p>
         <h2>ローソク足取得・保存</h2>
-        <p className="panel-description">
-          確定済みデータだけを保存します。接続管理で銘柄ルールを同期すると、過去1年分の取得と
-          自動取得が自動的に始まります(手動での取得開始は不要です)。
-        </p>
+        {isResearch ? (
+          <p className="panel-description">
+            Binance本番の公開API(認証不要)から取得した履歴データです。取得元は binance_public で、
+            Testnetのローソク足とは別の銘柄として保存されています。閲覧とバックテスト専用で、
+            注文や自動取得の対象にはなりません。
+          </p>
+        ) : (
+          <p className="panel-description">
+            確定済みデータだけを保存します。接続管理で銘柄ルールを同期すると、過去1年分の取得と
+            自動取得が自動的に始まります(手動での取得開始は不要です)。
+          </p>
+        )}
       </div>
       <div className="market-data-controls">
         <label>
@@ -119,13 +134,17 @@ export default function MarketDataPanel({
             ))}
           </select>
         </label>
-        <button type="button" disabled={submittingMarketAction} onClick={onStartAutomaticCollection}>この銘柄の全時間足を開始</button>
-        <button type="button" disabled={submittingMarketAction} onClick={onStopAutomaticCollection}>この銘柄の全時間足を停止</button>
+        {!isResearch && (
+          <>
+            <button type="button" disabled={submittingMarketAction} onClick={onStartAutomaticCollection}>この銘柄の全時間足を開始</button>
+            <button type="button" disabled={submittingMarketAction} onClick={onStopAutomaticCollection}>この銘柄の全時間足を停止</button>
+          </>
+        )}
       </div>
-      <p className="workspace-message">{marketDataMessage}</p>
-      <p>時間足の選択は表示と手動の過去取得に使用します。自動取得の開始・停止は全7時間足に適用します。</p>
-      <p>自動取得中の時間足: {subscriptions.filter((item) => item.instrument_id === activeInstrumentId && item.enabled).map((item) => item.timeframe).join(', ') || 'なし'}。画面の5秒ごとの更新は保存済みデータの読込であり、取引所からの自動取得とは別です。</p>
-      {subscriptions
+      {!isResearch && <p className="workspace-message">{marketDataMessage}</p>}
+      {!isResearch && <p>時間足の選択は表示と手動の過去取得に使用します。自動取得の開始・停止は全7時間足に適用します。</p>}
+      {!isResearch && <p>自動取得中の時間足: {subscriptions.filter((item) => item.instrument_id === activeInstrumentId && item.enabled).map((item) => item.timeframe).join(', ') || 'なし'}。画面の5秒ごとの更新は保存済みデータの読込であり、取引所からの自動取得とは別です。</p>}
+      {!isResearch && subscriptions
         .filter((item) => item.instrument_id === activeInstrumentId && item.timeframe === timeframe)
         .map((item) => (
           <div
@@ -146,7 +165,7 @@ export default function MarketDataPanel({
             )}
           </div>
         ))}
-      {backfillJobs.length > 0 && (
+      {!isResearch && backfillJobs.length > 0 && (
         <div className={`backfill-status ${backfillJobs[0].status}`}>
           <strong>過去取得 ({timeframe}): {backfillStatusLabel(backfillJobs[0].status)}</strong>
           <span>完了後は5秒以内に再読込します。古い保存済みデータはチャートを左へ移動して表示できます。</span>
@@ -174,6 +193,12 @@ export default function MarketDataPanel({
             {coverage.actual_to ? new Date(coverage.actual_to).toLocaleString('ja-JP') : 'データなし'}
           </span>
           <span>保存件数: {coverage.stored_count.toLocaleString()}</span>
+          {isResearch && (
+            <span>
+              取得元: binance_public(公開履歴)。最終取得足: {coverage.actual_to ? new Date(coverage.actual_to).toLocaleString('ja-JP') : 'データなし'}
+              {coverage.missing_count ? `。保存範囲内の欠損 ${coverage.missing_count.toLocaleString()} 本を含みます` : ''}
+            </span>
+          )}
           {coverage.source_limitation === 'binance_testnet_periodic_reset' && (
             <span>Binance Testnetの定期リセットにより、要求した1年より短い範囲です。</span>
           )}

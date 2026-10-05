@@ -188,6 +188,10 @@ button:disabled {
   border-color: rgba(245, 184, 75, 0.55);
 }
 
+.source-binance_public {
+  border-color: rgba(120, 170, 255, 0.55);
+}
+
 .not-found-page,
 .market-empty-state {
   margin-top: 1rem;
