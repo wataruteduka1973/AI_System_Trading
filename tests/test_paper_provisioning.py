@@ -195,3 +195,24 @@ def test_the_api_bot_is_refused_on_an_account_without_a_connection() -> None:
         pp.create_approved_bot(db, account.workspace_id, account, _instrument(), bot_name="b")
     assert exc.value.code == "account_without_connection"
     db.add.assert_not_called()
+
+
+# ---- the comparison group (4h Donchian 110/40, user decision 2026-10-05) ----
+
+
+def test_the_comparison_strategy_resolves_and_fits_the_live_history_window() -> None:
+    from app.trading.application.backtest_replay import _HISTORY_WINDOW
+    from app.trading.application.live_strategies import resolve_live_strategy
+
+    strategy = resolve_live_strategy(pp.COMPARISON_STRATEGY_DEFINITION)
+
+    assert strategy.parameters == {"entry_period": 110, "exit_period": 40}
+    assert strategy.exit_policy == "stop_loss"
+    # The generator needs entry_period + 2 bars; the live pipeline reads _HISTORY_WINDOW.
+    assert strategy.parameters["entry_period"] + 2 <= _HISTORY_WINDOW
+
+
+def test_the_comparison_group_is_a_separate_strategy_from_the_approved_one() -> None:
+    assert pp.COMPARISON_STRATEGY_NAME != pp.APPROVED_STRATEGY_NAME
+    assert pp.COMPARISON_STRATEGY_DEFINITION != pp.APPROVED_STRATEGY_DEFINITION
+    assert pp.COMPARISON_STRATEGY_DEFINITION["exit_policy"] == "stop_loss"
