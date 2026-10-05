@@ -47,6 +47,7 @@
 
 | 計画書 | 内容 | 状態 |
 |---|---|---|
+| [paper-trading-server.md](paper-trading-server.md) | ペーパートレードの Worker と DB を AWS(EC2 + RDS)で動かし続ける | ドラフト。利用者の承認待ち(有料インフラ)。それまでは手元 PC の自動起動でつなぐ |
 | [horizon6-entry-checklist.md](horizon6-entry-checklist.md) | Horizon 6(AI Model Lab)の着手前タスク | 未着手 |
 | [license-checkin-and-customer-management.md](license-checkin-and-customer-management.md) | ライセンスcheck-in・顧客管理 | ドラフト。2026-09-25から保留 |
 | [horizon5-distribution-and-auth.md](horizon5-distribution-and-auth.md) | Horizon 5のドラフト計画 | horizon5-implementation-plan.md が具体化して引き継いだ |
