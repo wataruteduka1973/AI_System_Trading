@@ -44,12 +44,15 @@ class StoredSecrets(Protocol):
     def get(self, secret_ref: str) -> dict[str, str]: ...
 
 
-def _restrict_to_selected_account[T: tuple[object, ...]](
-    statement: Select[T], workspace_id: UUID
-) -> Select[T]:
+def _restrict_to_selected_account[S: Select](statement: S, workspace_id: UUID) -> S:
     """Joins `statement` (whose FROM already has `Exchange`) to the workspace's selected,
     active account on a verified connection of that exchange in the account's own
-    environment. Every access decision in this module goes through these conditions."""
+    environment. Every access decision in this module goes through these conditions.
+
+    Typed on the statement itself (`S`) rather than on its column tuple: SQLAlchemy 2.1
+    made `Select` variadic (`Select[A, B]`), while 2.0 takes one tuple parameter
+    (`Select[tuple[A, B]]`), so a signature written for either breaks under the other.
+    `join`/`where` return `Self`, so the caller's own row type is preserved."""
     return (
         statement.join(
             WorkspaceAccountSelection,
@@ -71,12 +74,12 @@ def _restrict_to_selected_account[T: tuple[object, ...]](
     )
 
 
-def selected_account_statement(
-    workspace_id: UUID,
-) -> Select[tuple[Exchange, ExchangeConnection, ExternalAccount, WorkspaceAccountSelection]]:
+def selected_account_statement(workspace_id: UUID) -> Select:
     """Rows of (exchange, connection, account, selection) the workspace may use, under a
     shared lock that holds the decision until the caller commits; callers narrow it to
-    one exchange or one instrument."""
+    one exchange or one instrument. Returns a bare `Select` (row type unchecked): the
+    precise row type is spelled differently in SQLAlchemy 2.0 and 2.1 (see
+    `_restrict_to_selected_account`), and callers unpack the four columns themselves."""
     return _restrict_to_selected_account(
         select(Exchange, ExchangeConnection, ExternalAccount, WorkspaceAccountSelection),
         workspace_id,
