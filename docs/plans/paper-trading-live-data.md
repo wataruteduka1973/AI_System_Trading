@@ -123,6 +123,12 @@
   開始時点: シグナル1件一致、取りこぼし0件、取引なし。
 
 **運用**
+- **手元PCでの自動起動(2026-10-05、サーバーができるまでのつなぎ)**: Workerが約2日止まり、各ボットで12本の足が
+  未評価になったため、ログオン時にトレーディングWorkerを起動するタスクを登録した
+  (`scripts/windows/register_trading_worker_task.ps1` → `scripts/windows/run_trading_worker.cmd`)。Workerが
+  止まっても30秒後に起動し直す。ログは `logs/trading-worker-autostart.log`。この間は `scripts/start_local.py` の
+  トレーディングWorkerと同時に動かさない(同じ足を2つのWorkerが同時に評価してしまう)。PCのスリープは利用者が無効にする。
+  サーバー(EC2+RDS)へ移したら、このタスクは解除する。
 - トレーディングWorkerを動かし続ける(`python scripts/start_local.py` または `python -m app.trading.worker`)。
   **PCは常時起動にする**(利用者決定 2026-10-02)。エントリーはブレイクアウトが起きた足でしか発生しないので、
   その足の確定時にWorkerが止まっていると、そのエントリーは発生しない(損切りは再開時にさかのぼって判定する)。
