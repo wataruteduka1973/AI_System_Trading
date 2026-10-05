@@ -58,6 +58,19 @@ APPROVED_STRATEGY_DEFINITION: dict[str, Any] = {
 APPROVED_RISK_PROFILE_NAME = "conservative-v1"
 APPROVED_RISK_RULES: dict[str, Any] = CONSERVATIVE_V1_RULES
 
+COMPARISON_STRATEGY_NAME = "donchian-110-40-stop-loss"
+COMPARISON_STRATEGY_DEFINITION: dict[str, Any] = {
+    "kind": "donchian_breakout",
+    "entry_period": 110,
+    "exit_period": 40,
+    "exit_policy": "stop_loss",
+}
+"""A second paper group run beside the approved one (user decision 2026-10-05,
+docs/plans/decision-timeframes.md): the same 4h bars with a ~18-day lookback
+(110/40 bars, the horizon of 8h 55/20), which backtested better than 55/20's
+~9 days. Paper comparison only -- the Bot management API keeps creating
+`APPROVED_*` bots -- under the same `conservative-v1` risk rules."""
+
 
 class ProvisioningError(Exception):
     def __init__(self, code: str, message: str) -> None:
