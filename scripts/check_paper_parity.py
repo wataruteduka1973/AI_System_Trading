@@ -10,7 +10,7 @@
    (quantities may differ slightly: the live Risk Gate's daily/weekly baselines
    come from real snapshots, the replay's from its own bars).
 
-Read-only: nothing is written.
+Read-only: nothing is written. All times are UTC.
 
 Run: python scripts/check_paper_parity.py [--bot btcusdt-4h-donchian | --all]
 """
@@ -38,6 +38,12 @@ from app.trading.application.paper_parity import (
 )
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+
+
+def _utc(time: datetime) -> str:
+    # The database returns times in the session's time zone (e.g. JST); every time this
+    # script prints is UTC, which is how bars are aligned (2026-10-05: they printed as JST).
+    return f"{time.astimezone(UTC):%Y-%m-%d %H:%M}"
 
 
 def _check_bot(db: Session, bot: TradingBot) -> int:
@@ -79,7 +85,7 @@ def _check_bot(db: Session, bot: TradingBot) -> int:
     print(f"1. signals: {comparison.matched} match, {len(comparison.mismatches)} mismatch")
     for mismatch in comparison.mismatches:
         print(
-            f"   [NG] {mismatch.candle_open_time:%Y-%m-%d %H:%M} recorded="
+            f"   [NG] {_utc(mismatch.candle_open_time)} recorded="
             f"{mismatch.recorded} recomputed={mismatch.recomputed}"
         )
 
@@ -109,7 +115,7 @@ def _check_bot(db: Session, bot: TradingBot) -> int:
             note = "  (nothing held; spot cannot short, so no order)"
         else:
             note = ""
-        print(f"   {candle.open_time:%Y-%m-%d %H:%M} would have been {action}{note}")
+        print(f"   {_utc(candle.open_time)} would have been {action}{note}")
 
     initial_equity = db.scalar(
         select(func.coalesce(func.sum(LedgerEntry.amount), 0)).where(
@@ -130,11 +136,11 @@ def _check_bot(db: Session, bot: TradingBot) -> int:
     )
     print(f"3. live fills: {len(fills)} / backtest closed trades: {len(replay.trades)}")
     for side, price, quantity, executed_at in fills:
-        print(f"   live     {executed_at:%Y-%m-%d %H:%M} {side:<4} {quantity} @ {price}")
+        print(f"   live     {_utc(executed_at)} {side:<4} {quantity} @ {price}")
     for trade in replay.trades:
         print(
-            f"   backtest {trade.entry_time:%Y-%m-%d %H:%M} buy  {trade.quantity} @ "
-            f"{trade.entry_price} -> {trade.exit_time:%Y-%m-%d %H:%M} {trade.exit_reason} "
+            f"   backtest {_utc(trade.entry_time)} buy  {trade.quantity} @ "
+            f"{trade.entry_price} -> {_utc(trade.exit_time)} {trade.exit_reason} "
             f"@ {trade.exit_price}"
         )
     if replay.ending_position is not None:

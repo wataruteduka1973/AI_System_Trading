@@ -9,7 +9,7 @@
 
 | 計画書 | 内容 | 状態 |
 |---|---|---|
-| [paper-trading-live-data.md](paper-trading-live-data.md) | 本番の公開価格でのペーパートレード | Unit 1〜5完了(6銘柄のボットが稼働中)。Unit 6(ライブの成績とバックテストの期待値の比較)は未着手 |
+| [paper-trading-live-data.md](paper-trading-live-data.md) | 本番の公開価格でのペーパートレード | Unit 1〜6完了。2つのボット群(承認済み 4h 55/20 ×6、比較用 4h 110/40 ×6)が稼働中で、データを貯める段階。月1回 `scripts/report_paper_performance.py` で想定範囲と比べる |
 
 ## 一部完了・一部先送り
 
