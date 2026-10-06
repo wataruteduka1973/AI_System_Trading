@@ -30,7 +30,10 @@ from app.core.logging import configure_logging
 from app.db.session import SessionLocal
 from app.exchanges.binance_public import BinancePublicClient, get_binance_public_client
 from app.trading.application.bot_execution_loop import run_active_bots_once
-from app.trading.application.public_price_refresh import refresh_public_prices_for_active_bots
+from app.trading.application.public_price_refresh import (
+    refresh_public_prices_for_active_bots,
+    refresh_public_spreads_for_active_bots,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +46,11 @@ async def _refresh_public_prices(db: Session, client: BinancePublicClient) -> No
     except Exception as exc:
         db.rollback()
         logger.warning("trading.worker: public price refresh failed (%s)", type(exc).__name__)
+    try:
+        await refresh_public_spreads_for_active_bots(db, client, now=datetime.now(UTC))
+    except Exception as exc:
+        db.rollback()
+        logger.warning("trading.worker: public spread refresh failed (%s)", type(exc).__name__)
 
 
 async def _run(stop: asyncio.Event) -> None:

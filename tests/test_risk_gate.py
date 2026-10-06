@@ -400,3 +400,17 @@ def test_sync_trading_halts_relaxes_when_all_checks_pass() -> None:
     gate._sync_trading_halts(db, bot, account, result, datetime.now(UTC))
 
     assert existing.level == "warning"
+
+
+def test_spread_is_read_for_binance_as_well_as_oanda() -> None:
+    from unittest.mock import MagicMock
+
+    from app.models.market_data import InstrumentSpread
+
+    db = MagicMock()
+    db.get.return_value = InstrumentSpread(bid=Decimal("100.00"), ask=Decimal("100.05"))
+    assert gate._spread(db, "binance", uuid4()) == Decimal("0.05")
+    assert gate._spread(db, "oanda", uuid4()) == Decimal("0.05")
+    assert gate._spread(db, "unknown", uuid4()) == Decimal(0)
+    db.get.return_value = None
+    assert gate._spread(db, "binance", uuid4()) == Decimal(0)

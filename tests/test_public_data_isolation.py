@@ -17,7 +17,7 @@ def test_the_public_client_has_no_credentials_and_no_order_surface() -> None:
         for name, member in inspect.getmembers(BinancePublicClient, inspect.isfunction)
         if not name.startswith("_")
     }
-    assert methods == {"get_candles", "get_instrument_rules"}
+    assert methods == {"get_candles", "get_instrument_rules", "get_book_tickers"}
     tree = ast.parse(inspect.getsource(binance_public))
     names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
     names |= {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}

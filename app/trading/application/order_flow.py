@@ -21,8 +21,11 @@ coefficient. If no spread row exists yet for the instrument (nothing has streame
 since this feature shipped, or the DB write raced/failed -- see
 `OandaFeedWorker.record_spread`'s docstring), this falls back to `expected_slippage = 0`,
 same as before, rather than failing the fill: a missing spread degrades slippage accuracy,
-it does not mean the order can't be filled. TODO(binance-spread): Binance still has no
-bid/ask concept at all (kline-only adapter) and stays hardcoded to 0. `fee_buffer` from
+it does not mean the order can't be filled. Binance (2026-10-06): the trading worker stores
+the public book ticker's bid/ask for the `binance_public` instruments its bots trade
+(`public_price_refresh.refresh_public_spreads_for_active_bots`), so the same `spread * 1.0`
+applies; instruments with no stored spread still fall back to 0. Binance Testnet instruments
+have no spread source (their order book is too thin to mean anything). `fee_buffer` from
 08_取引アルゴリズムとリスク初期値.md§5.1's draft (unapproved) values does not depend on
 spread and is unchanged: OANDA=0, Binance=notional×0.1%.
 
@@ -474,13 +477,10 @@ SLIPPAGE_COEFFICIENT_BY_EXCHANGE = {"oanda": Decimal("0.5"), "binance": Decimal(
 (2026-09-19). Public (not `_`-prefixed) and shared with `risk_gate.py` and
 `backtest_replay.py` -- /code-review finding: those two modules previously
 hardcoded their own copies of these same two numbers inline, and could silently
-drift out of sync with this module and each other. Binance's `1.0` entry does
-not currently change `_expected_slippage`'s behavior below: no bid/ask source
-exists for Binance yet (TODO(binance-spread), see module docstring), so it
-still degrades to 0 there regardless of this dict's value -- absence of spread
-*data*, not the coefficient, is what makes Binance 0 today. The moment a
-Binance spread source exists, this coefficient applies consistently everywhere
-without another find-and-replace across three files."""
+drift out of sync with this module and each other. A coefficient
+applies wherever a spread row exists: for Binance, the `binance_public` instruments the
+worker keeps a book-ticker spread for (see module docstring); with no row it degrades to 0.
+One coefficient is shared by `order_flow`, `risk_gate` and the backtest."""
 
 
 def _expected_slippage(db: Session, exchange_code: str, instrument_id: UUID) -> Decimal:
