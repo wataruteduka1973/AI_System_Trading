@@ -65,6 +65,21 @@ ADR 0003が明示的に「Horizon 6着手の前提条件とはせず、公開運
     `feature_schema`/`quality_report`等はML学習パイプライン向けの列を簡易的に
     埋めているのみで、Horizon 6本体で使う際に再設計が必要になりうる
     (`docs/plans/horizon4-lite-backtest.md`参照)。
+- [ ] `model_security_review`/`model_evaluation`/`model_deployment`テーブルのORMマッピング
+  (2026-10-06追記: 上のクラスタ記述から漏れていた3テーブル。`database/postgresql_schema_v0.1.sql`
+  に存在し、全て0行で、`app/`のどこからも参照されていない。`app/models/strategy.py`・
+  `app/models/backtest.py`のモジュールdocstringも、未マッピングのクラスタをこの3つを除く
+  5テーブルとして書いている)。Horizon 6本体の項目と次のように対応する。
+  - `model_security_review`(`model_candidate_id`+`revision`で一意。license・format・malware・
+    remote code・checksumの結果と`passed`/`failed`/`manual_review`): 「外部artifactを信頼境界の
+    内側へ入れる審査記録」(完了条件)と、§2の外部AIモデル承認ゲートの記録先。
+  - `model_evaluation`(`evaluation_type`は`holdout`/`walk_forward`/`backtest`/`paper`、
+    `leakage_checks`を持つ): 「out-of-sampleとPaper期間の双方で説明できる」(完了条件)の記録先。
+    `dataset_snapshot`への外部キーがあるため、`DatasetSnapshot`の再設計(下記)とセットで扱う。
+  - `model_deployment`(Botごとに`active`は1つだけ。`approved_by`/`approved_at`を持つ):
+    「model failureやdrift時に安全にbaselineへ戻せる」(完了条件)のrollback先。
+    `environment`のCHECK制約は`paper`と`live`を許すので、着手時は`paper`のみを受け付ける
+    検証をアプリ層で必ず加える(実取引は別プロジェクト、ADR 0002・ロードマップ「実取引について」)。
 - [ ] `Signal.model_artifact_id`へのForeignKeyオブジェクト付与。DB側のFK/RESTRICTは
   既に効いているが、ORM側の宣言は`model_artifact`クラスタが未マッピングのため
   意図的に省略されている(`app/models/strategy.py`)。
