@@ -14,6 +14,7 @@ from app.models.trading import (
     Fill,
     LedgerEntry,
     OrderIntent,
+    OrderStatusHistory,
     TradeOrder,
     TradingAccount,
     TradingPosition,
@@ -302,6 +303,11 @@ def test_place_order_buy_opens_position_and_records_ledger() -> None:
     assert ledger_entries[0].amount == -(Decimal("150.000") * Decimal("1000"))
 
     assert {audit.action for audit in audits} == {"trade_order.submitted", "trade_order.filled"}
+    history = [obj for obj in added if isinstance(obj, OrderStatusHistory)]
+    assert [(h.from_status, h.to_status) for h in history] == [
+        (None, "submitted"),
+        ("submitted", "filled"),
+    ]
     db.commit.assert_called_once()
 
 
@@ -783,6 +789,13 @@ def test_cancel_order_transitions_from_submitted() -> None:
         "reason_code": "user_requested",
         "previous_status": "submitted",
     }
+    [history] = [
+        call.args[0]
+        for call in db.add.call_args_list
+        if isinstance(call.args[0], OrderStatusHistory)
+    ]
+    assert (history.from_status, history.to_status) == ("submitted", "cancelled")
+    assert history.reason_code == "user_requested"
 
 
 @pytest.mark.parametrize("status", ["filled", "cancelled", "rejected", "expired"])
@@ -870,3 +883,52 @@ def test_a_stop_fill_price_is_only_accepted_for_closing_a_whole_position(
         flow.place_order(db, _stop_close(account, instrument, **overrides))
     assert exc.value.code == "invalid_input"
     assert not [c for c in db.add.call_args_list if isinstance(c.args[0], Fill)]
+
+
+def test_place_order_without_commit_only_flushes_for_the_caller_to_commit() -> None:
+    db = MagicMock()
+    account = _account()
+    instrument = _instrument()
+    candle = _candle(Decimal("150.000"), instrument_id=instrument.id)
+    db.scalar.side_effect = [account, "oanda", None, candle, None, None, Decimal("0")]
+    db.scalars.return_value.all.return_value = []
+    db.get.side_effect = [instrument, None]
+    command = flow.PlaceOrderCommand(
+        workspace_id=account.workspace_id,
+        account_id=account.id,
+        instrument_id=instrument.id,
+        side="buy",
+        order_type="market",
+        quantity=Decimal("1000"),
+        client_order_id="c1",
+    )
+
+    order = flow.place_order(db, command, commit=False)
+
+    assert order.status == "filled"
+    db.commit.assert_not_called()
+    db.flush.assert_called()
+
+
+def test_create_order_intent_without_commit_only_flushes() -> None:
+    db = MagicMock()
+    signal_id, risk_decision_id = uuid4(), uuid4()
+    db.get.side_effect = [
+        Signal(id=signal_id),
+        RiskDecision(id=risk_decision_id, signal_id=signal_id),
+    ]
+
+    flow.create_order_intent(
+        db,
+        flow.OrderIntentCommand(
+            signal_id=signal_id,
+            risk_decision_id=risk_decision_id,
+            side="buy",
+            order_type="market",
+            requested_quantity=Decimal("1"),
+        ),
+        commit=False,
+    )
+
+    db.commit.assert_not_called()
+    db.flush.assert_called()

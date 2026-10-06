@@ -38,14 +38,14 @@ have reconstructed information this natural two-call statefulness already provid
 An informational `AuditLog` entry is still written when a close-only happens, for
 audit visibility -- it is not read back by anything.
 
-**Known limitation**: each stage below (Signal write, `create_order_intent`,
-`place_order`) commits its own transaction rather than the whole cycle being one
-atomic unit -- `order_flow.py`'s entry points are each independently
-self-committing by design (see their own docstrings), and composing them from here
-does not change that. A failure partway through a cycle can therefore leave a Signal
-row with no `RiskDecision`/order after it, which is a valid DB state (nothing
-requires every Signal to have one) but not a full rollback of "this evaluation cycle
-never happened."
+**One evaluation cycle is one transaction** (2026-10-06): the stop-loss close, the Signal,
+the RiskDecision (and any trading_halt it sets), the OrderIntent, the order with its fill,
+position, ledger and snapshot rows, and the stop on a new position are committed together
+by `evaluate_bot_on_latest_bar`, or rolled back together if anything raises. A failure no
+longer leaves a Signal committed without its order -- which, with the per-candle idempotency
+below, would have made the Worker skip that candle on every later poll. Now the whole cycle
+is retried on the next poll. A denied or held cycle is not a failure: its Signal and
+RiskDecision are committed. `order_flow` is called with `commit=False` for this.
 """
 
 import hashlib
@@ -165,6 +165,7 @@ def _close_at_stop(
             stop_fill_price=exit_price,
             bot_id=bot.id,
         ),
+        commit=False,
     )
     db.add(
         AuditLog(
@@ -180,7 +181,6 @@ def _close_at_stop(
             user_agent=None,
         )
     )
-    db.commit()
 
 
 def _set_entry_stop(
@@ -199,11 +199,12 @@ def _set_entry_stop(
     if fill is None or position is None:
         return
     position.stop_price = _entry_stop_price(side, fill.price, stop_distance)
-    db.commit()
 
 
 def evaluate_bot_on_latest_bar(db: Session, bot: TradingBot, bot_run: BotRun) -> dict:
-    """Runs one evaluation cycle for `bot`. Returns a small dict describing what
+    """Runs one evaluation cycle for `bot` as a single transaction (see the module
+    docstring): committed once on success, rolled back entirely on any exception.
+    Returns a small dict describing what
     happened (`action`: "hold" | "already_processed" | "close_only" | "denied" |
     "opened", plus the row ids involved) -- meant for tests/scripts to assert
     against, not a public API.
@@ -217,10 +218,21 @@ def evaluate_bot_on_latest_bar(db: Session, bot: TradingBot, bot_run: BotRun) ->
     often see the same still-latest final candle more than once before a new one
     closes. Without a guard, a second call for the same candle would call
     the strategy's signal generator again (deterministic, same result) and then fail on
-    `db.commit()` below with an uncaught `IntegrityError` against
+    the final commit with an uncaught `IntegrityError` against
     `uq_signal_idempotency` -- this function had no callers before the Worker, so
     that path was never exercised. Returning "already_processed" early makes
     repeated polling safe without the Worker needing to track per-bot state itself."""
+    try:
+        result = _evaluate(db, bot, bot_run)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return result
+
+
+def _evaluate(db: Session, bot: TradingBot, bot_run: BotRun) -> dict:
+    """The cycle itself; never commits (the caller owns the transaction)."""
     if bot.actual_state not in ("running", "paused"):
         return {"action": "hold", "reason": "bot_not_active", "actual_state": bot.actual_state}
 
@@ -272,7 +284,7 @@ def evaluate_bot_on_latest_bar(db: Session, bot: TradingBot, bot_run: BotRun) ->
         input_checksum=input_checksum,
     )
     db.add(signal)
-    db.commit()
+    db.flush()
     db.refresh(signal)
 
     if signal_action == "hold":
@@ -298,6 +310,7 @@ def evaluate_bot_on_latest_bar(db: Session, bot: TradingBot, bot_run: BotRun) ->
                 client_order_id=f"dote-close-{uuid4().hex[:12]}",
                 bot_id=bot.id,
             ),
+            commit=False,
         )
         db.add(
             AuditLog(
@@ -313,7 +326,6 @@ def evaluate_bot_on_latest_bar(db: Session, bot: TradingBot, bot_run: BotRun) ->
                 user_agent=None,
             )
         )
-        db.commit()
         return {"action": "close_only", "signal_id": signal.id, "order_id": order.id}
 
     if bot.actual_state == "paused":
@@ -331,7 +343,6 @@ def evaluate_bot_on_latest_bar(db: Session, bot: TradingBot, bot_run: BotRun) ->
     result = evaluate_signal(
         db, signal, account, instrument, bot, risk_profile_version, exchange_code
     )
-    db.commit()
     if result.decision.outcome == "deny":
         return {
             "action": "denied",
@@ -352,6 +363,7 @@ def evaluate_bot_on_latest_bar(db: Session, bot: TradingBot, bot_run: BotRun) ->
             order_type="market",
             requested_quantity=result.approved_quantity,
         ),
+        commit=False,
     )
     order = order_flow.place_order(
         db,
@@ -366,6 +378,7 @@ def evaluate_bot_on_latest_bar(db: Session, bot: TradingBot, bot_run: BotRun) ->
             order_intent_id=intent.id,
             bot_id=bot.id,
         ),
+        commit=False,
     )
     if strategy.exit_policy == "stop_loss" and existing is None:
         _set_entry_stop(db, account, instrument, order, signal_action, stop_distance)
