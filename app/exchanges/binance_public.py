@@ -9,13 +9,16 @@ short timeframes (1m/15m) due to thin testnet liquidity, making it unsuitable
 for validating whether a trading strategy would actually work. Production
 BTCJPY, confirmed live and liquid via `GET /api/v3/exchangeInfo`, does not have
 this problem. This client never places orders, never needs credentials (klines
-is a public endpoint), and is never wired into live/paper execution -- see
+is a public endpoint), and is never wired into live/paper execution (its book ticker
+only feeds the paper simulation's spread, `public_price_refresh.py`) -- see
 `docs/architecture/architecture-alignment-and-long-term-roadmap.md`'s 承認ゲート
 "Binance Public履歴の併用" for the approved scope, and
 `app/market_data/application/public_research.py` for the one caller.
 """
 
+import json
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 
 import httpx
 
@@ -68,6 +71,36 @@ class BinancePublicClient:
             return [parse_binance_kline(item) for item in payload]
         except BinanceKlineFormatError as exc:
             raise BinancePublicApiError(str(exc)) from exc
+
+    async def get_book_tickers(self, symbols: list[str]) -> dict[str, tuple[Decimal, Decimal]]:
+        """Best bid and ask per symbol from the public `/api/v3/ticker/bookTicker`, in one
+        request. Symbols Binance does not return are simply absent from the result.
+        Read-only market data: used for the paper simulation's spread, never for orders."""
+        if not symbols:
+            return {}
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                response = await client.get(
+                    f"{self.base_url}/api/v3/ticker/bookTicker",
+                    params={"symbols": json.dumps(symbols, separators=(",", ":"))},
+                )
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise BinancePublicApiError("Could not reach Binance's public API") from exc
+        payload = response.json()
+        if not isinstance(payload, list):
+            raise BinancePublicApiError("Binance book ticker response has an invalid format")
+        quotes: dict[str, tuple[Decimal, Decimal]] = {}
+        try:
+            for item in payload:
+                bid, ask = Decimal(item["bidPrice"]), Decimal(item["askPrice"])
+                if bid > 0 and ask >= bid:
+                    quotes[item["symbol"]] = (bid, ask)
+        except (KeyError, TypeError, InvalidOperation) as exc:
+            raise BinancePublicApiError(
+                "Binance book ticker response has an invalid format"
+            ) from exc
+        return quotes
 
     async def get_instrument_rules(self, symbol: str) -> BinanceInstrumentRules:
         """Real production trading filters (tick/step size, notional floor) for

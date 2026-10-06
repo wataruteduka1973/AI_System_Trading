@@ -225,7 +225,10 @@ def _stop_distance(
 
 
 def _spread(db: Session, exchange_code: str, instrument_id: UUID) -> Decimal:
-    if exchange_code != "oanda":
+    """Latest persisted bid/ask spread (`fx.instrument_spread`): OANDA's from the live
+    stream, Binance's from the public book ticker (`public_price_refresh.py`). 0 when none
+    has been stored yet."""
+    if exchange_code not in ("oanda", "binance"):
         return Decimal(0)
     row = db.get(InstrumentSpread, instrument_id)
     if row is None:

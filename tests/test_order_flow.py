@@ -727,19 +727,17 @@ def test_expected_slippage_binance_falls_back_to_zero_without_a_spread_row() -> 
     entry (unified with risk_gate.py/backtest_replay.py, which already
     assumed 1.0), so this no longer short-circuits before any DB lookup the
     way it used to -- it degrades to 0 for the same reason OANDA does when no
-    `InstrumentSpread` row exists, which is still true for Binance today (no
-    code streams one yet, see module docstring's TODO(binance-spread))."""
+    `InstrumentSpread` row exists (e.g. before the worker's first book-ticker
+    refresh, or for a Testnet instrument, which has no spread source)."""
     db = MagicMock()
     db.get.return_value = None
     assert flow._expected_slippage(db, "binance", uuid4()) == Decimal("0")
 
 
 def test_expected_slippage_binance_uses_persisted_spread_once_one_exists() -> None:
-    """Confirms the unified coefficient actually applies the moment a Binance
-    `InstrumentSpread` row exists -- forward-looking coverage for whenever
-    TODO(binance-spread) is implemented, and a direct check that this
-    module's own value now matches what risk_gate.py/backtest_replay.py
-    already assumed."""
+    """The unified coefficient applies to the book-ticker spread the trading worker
+    stores for Binance (`public_price_refresh.py`), and matches what
+    risk_gate.py/backtest_replay.py assume."""
     db = MagicMock()
     instrument_id = uuid4()
     db.get.return_value = InstrumentSpread(
