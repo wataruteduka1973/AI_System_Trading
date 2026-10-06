@@ -149,7 +149,7 @@ def test_evaluate_bot_on_latest_bar_is_idempotent_for_an_already_processed_candl
 
     assert result == {"action": "already_processed", "signal_id": existing_signal.id}
     db.add.assert_not_called()  # no second Signal row attempted
-    db.commit.assert_not_called()
+    db.commit.assert_called_once_with()  # the (empty) cycle's single commit
 
 
 # ---- strategy selection (docs/plans/paper-trading-live-data.md Unit 2) ----
@@ -326,7 +326,7 @@ def test_a_reached_stop_closes_the_whole_position_at_the_stop_before_the_signal(
     from app.trading.application import order_flow
 
     placed: list[order_flow.PlaceOrderCommand] = []
-    monkeypatch.setattr(order_flow, "place_order", lambda db, command: placed.append(command))
+    monkeypatch.setattr(order_flow, "place_order", lambda db, command, **kw: placed.append(command))
     db = MagicMock()
     bot = _bot(actual_state=actual_state)
     position = _held_long("95", _OPENED)
@@ -355,9 +355,16 @@ def test_a_reached_stop_closes_the_whole_position_at_the_stop_before_the_signal(
     assert [a.action for a in audits] == ["protective_exit.stop_loss"]
 
 
-def _enter_long(monkeypatch: pytest.MonkeyPatch, definition: dict) -> TradingPosition:
+def _enter_long(
+    monkeypatch: pytest.MonkeyPatch,
+    definition: dict,
+    place_order=None,
+    seen_db: list | None = None,
+    create_intent=None,
+) -> TradingPosition:
     """One "buy" through a stubbed Risk Gate and order flow; returns the position
-    the entry opened, as the pipeline sees it afterwards."""
+    the entry opened, as the pipeline sees it afterwards. `place_order` replaces the
+    stubbed order placement; `seen_db` receives the session used."""
     from types import SimpleNamespace
 
     from app.models.trading import Fill
@@ -373,12 +380,16 @@ def _enter_long(monkeypatch: pytest.MonkeyPatch, definition: dict) -> TradingPos
         lambda *args: SimpleNamespace(decision=decision, approved_quantity=Decimal("1")),
     )
     monkeypatch.setattr(
-        order_flow, "create_order_intent", lambda db, c: SimpleNamespace(id=uuid4())
+        order_flow,
+        "create_order_intent",
+        create_intent or (lambda db, c, **kw: SimpleNamespace(id=uuid4())),
     )
     order = SimpleNamespace(id=uuid4())
-    monkeypatch.setattr(order_flow, "place_order", lambda db, c: order)
+    monkeypatch.setattr(order_flow, "place_order", place_order or (lambda db, c, **kw: order))
 
     db = MagicMock()
+    if seen_db is not None:
+        seen_db.append(db)
     bot = _bot()
     opened = _held_long("1", _OPENED)
     opened.stop_price = None
@@ -411,3 +422,47 @@ def test_a_signal_only_strategy_never_records_a_stop(monkeypatch: pytest.MonkeyP
     definition = {k: v for k, v in _DONCHIAN_STOP.items() if k != "exit_policy"}
     position = _enter_long(monkeypatch, definition)
     assert position.stop_price is None
+
+
+def test_an_entry_cycle_commits_once_and_every_stage_defers_to_that_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    flags: list[object] = []
+
+    def intent(db, c, **kw):
+        flags.append(kw.get("commit"))
+        return SimpleNamespace(id=uuid4())
+
+    def place(db, c, **kw):
+        flags.append(kw.get("commit"))
+        return SimpleNamespace(id=uuid4())
+
+    seen: list[MagicMock] = []
+    _enter_long(monkeypatch, _DONCHIAN_STOP, place_order=place, seen_db=seen, create_intent=intent)
+
+    assert flags == [False, False]
+    db = seen[0]
+    db.commit.assert_called_once_with()
+    db.rollback.assert_not_called()
+
+
+def test_a_failure_after_the_signal_rolls_the_whole_cycle_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for the per-stage commits: the Signal used to be committed before the
+    order was placed, so a failing order left the candle marked processed and the
+    entry was never retried."""
+    from app.trading.application.order_flow import OrderFlowError
+
+    def failing_place(db, c, **kw):
+        raise OrderFlowError("market_price_unavailable", "no candle")
+
+    seen: list[MagicMock] = []
+    with pytest.raises(OrderFlowError):
+        _enter_long(monkeypatch, _DONCHIAN_STOP, place_order=failing_place, seen_db=seen)
+
+    db = seen[0]
+    db.commit.assert_not_called()
+    db.rollback.assert_called_once_with()

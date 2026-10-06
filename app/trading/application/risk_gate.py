@@ -515,16 +515,17 @@ def _evaluate_conservative_v1(state: RiskState) -> PureRiskResult:
     elif state.consecutive_losses > int(rules["consecutive_loss_limit"]):
         initial_breach = True
 
-    # --- reward/risk (see dummy_signal.py: constructed to satisfy this by design) ---
-    reward_risk = Decimal("2.0")
+    # --- reward/risk: not applicable (decided 2026-10-06) ---
+    # Entries carry a stop but no fixed profit target: live strategies exit on their own
+    # signal, so there is no reward to divide by the risk. The check used to compare a
+    # constant 2.0 with the minimum, which could never fail. It is recorded as not
+    # applicable instead of pretending to judge. `min_reward_risk`/`_hard` stay in the
+    # rules: the backtest's take-profit exit policy (research) places its target from them.
     results["reward_risk"] = {
-        "passed": reward_risk >= _decimal(rules, "min_reward_risk_hard"),
-        "ratio": str(reward_risk),
+        "passed": True,
+        "applicable": False,
+        "note": "no fixed profit target on entries; exits follow the strategy's own signal",
     }
-    if reward_risk < _decimal(rules, "min_reward_risk_hard"):
-        hard_breach = True
-    elif reward_risk < _decimal(rules, "min_reward_risk"):
-        initial_breach = True
 
     # --- order interval ---
     if state.minutes_since_last_order is None:

@@ -181,6 +181,27 @@ class TradeOrder(Base):
     fills: Mapped[list["Fill"]] = relationship(back_populates="order")
 
 
+class OrderStatusHistory(Base):
+    """One row per `TradeOrder.status` transition (`from_status` is NULL for the first),
+    written by `order_flow.py` next to the status change itself. Append-only like
+    `Fill`/`LedgerEntry`: rows are deleted only with their order (`ON DELETE CASCADE`)."""
+
+    __tablename__ = "order_status_history"
+    __table_args__ = {"schema": SCHEMA}
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, server_default=func.gen_random_uuid())
+    order_id: Mapped[UUID] = mapped_column(
+        ForeignKey(f"{SCHEMA}.trade_order.id", ondelete="CASCADE")
+    )
+    from_status: Mapped[str | None] = mapped_column(Text)
+    to_status: Mapped[str] = mapped_column(Text)
+    reason_code: Mapped[str | None] = mapped_column(Text)
+    raw_ref: Mapped[str | None] = mapped_column(Text)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class Fill(Base):
     __tablename__ = "fill"
     __table_args__ = (
