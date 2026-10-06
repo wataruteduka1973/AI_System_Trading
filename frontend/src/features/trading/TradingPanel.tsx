@@ -1,7 +1,8 @@
+import { useState } from 'react'
 import type { ConnectionSummary } from '../connections/types'
 import type { WorkspaceInstrument } from '../instruments/types'
 import { findStaleBots } from './botStaleness'
-import type { BotRunSummary, TradingAccount, TradingBot } from './types'
+import type { BotRunSummary, TradingAccount, TradingBot, TradingHalt } from './types'
 
 const stateLabel: Record<TradingBot['desired_state'], string> = {
   stopped: '停止中',
@@ -27,18 +28,69 @@ export default function TradingPanel({
   tradingAccounts,
   bots,
   latestRuns,
+  halts,
   onCommand,
+  onEmergencyStop,
+  onReleaseHalt,
 }: {
   visible: boolean
   tradingAccounts: TradingAccount[]
   bots: TradingBot[]
   latestRuns: Record<string, BotRunSummary>
+  halts: TradingHalt[]
   onCommand: (bot: TradingBot, command: 'start' | 'pause' | 'resume' | 'stop') => void
+  /** `bot === null` stops the whole workspace. */
+  onEmergencyStop: (bot: TradingBot | null, closePositions: boolean) => void
+  onReleaseHalt: (halt: TradingHalt) => void
 }) {
+  const [closePositions, setClosePositions] = useState(false)
   if (!visible) return null
   const staleBots = findStaleBots(bots, latestRuns, new Date())
+  const emergencyHalts = halts.filter((halt) => halt.level === 'emergency_stopped')
+  const haltScopeLabel = (halt: TradingHalt) =>
+    halt.scope_type === 'workspace'
+      ? 'ワークスペース全体'
+      : (bots.find((bot) => bot.id === halt.scope_id)?.name ?? `${halt.scope_type}`)
+  const confirmStop = (bot: TradingBot | null) => {
+    const target = bot ? `「${bot.name}」` : 'このワークスペースの全Bot'
+    const policy = closePositions ? '建玉は成行で決済します。' : '建玉はそのまま残します。'
+    if (window.confirm(`${target}を緊急停止します。${policy}解除はOwnerのみ可能です。よろしいですか?`)) {
+      onEmergencyStop(bot, closePositions)
+    }
+  }
   return (
     <>
+      {emergencyHalts.length > 0 && (
+        <div role="alert" className="worker-alert">
+          <strong>緊急停止中です。</strong>
+          新規の注文は出ません。解除はOwnerのみ可能で、解除してもBotは停止したままです。
+          <ul>
+            {emergencyHalts.map((halt) => (
+              <li key={halt.id}>
+                {haltScopeLabel(halt)}({new Date(halt.halted_at).toLocaleString()}から){' '}
+                <button type="button" onClick={() => onReleaseHalt(halt)}>
+                  緊急停止を解除
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {bots.length > 0 && (
+        <div className="emergency-stop-controls">
+          <button type="button" className="danger-button" onClick={() => confirmStop(null)}>
+            全Botを緊急停止
+          </button>
+          <label>
+            <input
+              type="checkbox"
+              checked={closePositions}
+              onChange={(event) => setClosePositions(event.target.checked)}
+            />
+            建玉を成行で決済する
+          </label>
+        </div>
+      )}
       {staleBots.length > 0 && (
         <div role="alert" className="worker-alert">
           <strong>トレーディングWorkerが止まっている可能性があります。</strong>
@@ -84,6 +136,9 @@ export default function TradingPanel({
                     開始
                   </button>
                 )}
+                <button type="button" className="danger-button" onClick={() => confirmStop(bot)}>
+                  緊急停止
+                </button>
                 {bot.desired_state === 'running' && (
                   <>
                     <button type="button" onClick={() => onCommand(bot, 'pause')}>

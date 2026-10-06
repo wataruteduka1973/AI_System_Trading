@@ -66,9 +66,11 @@ blocks a new/increasing entry when an `entry_halted`-or-more active halt covers 
 (or bot, if `PlaceOrderCommand.bot_id` is given) -- closing/reducing an opposite-direction
 position is always allowed. This module still never activates/escalates/releases a halt
 itself (that remains `trading_halt.py`'s and `risk_gate.py`'s job); it only reads. Only the
-two causes ADR 0004 wired up (data delay, daily/weekly loss·peak drawdown) can ever set one
-of these halts today -- the other 8 causes in 05番's 取引停止マトリクス have no detection
-code anywhere and so can never block an order here yet.
+three causes wired up so far (data delay, daily/weekly loss·peak drawdown -- ADR 0004 -- and
+the user's emergency stop, `emergency_stop.py`, 2026-10-06, which may also be a
+`workspace`-scope halt, checked below) can ever set one of these halts today -- the other 7
+causes in 05番's 取引停止マトリクス have no detection code anywhere and so can never block
+an order here yet.
 
 `order_status_history` (mapped 2026-10-06): every `TradeOrder.status` change is also
 recorded as an `OrderStatusHistory` row, written next to the change by `_set_status`.
@@ -259,7 +261,7 @@ def place_order(db: Session, command: PlaceOrderCommand, *, commit: bool = True)
         # in 05番's 取引停止マトリクス, which permits 決済 at entry_halted). Only the
         # two causes ADR 0004 wired up in risk_gate.py can ever set one of these
         # halts today; see that module and trading_halt.py's own docstrings for why
-        # the other 8 causes never reach this check yet, and why a broader
+        # the other 7 causes never reach this check yet, and why a broader
         # workspace/system-scoped halt is not checked here either.
         existing_position = _open_position(db, account, instrument)
         is_closing_or_reducing = existing_position is not None and (
@@ -289,6 +291,13 @@ def place_order(db: Session, command: PlaceOrderCommand, *, commit: bool = True)
             halted = trading_halt.has_active_halt_at_or_above(
                 db, account_scope, min_level="entry_halted"
             )
+            if not halted:
+                workspace_scope = trading_halt.HaltScope(
+                    workspace_id=command.workspace_id, scope_type="workspace", scope_id=None
+                )
+                halted = trading_halt.has_active_halt_at_or_above(
+                    db, workspace_scope, min_level="entry_halted"
+                )
             if not halted and command.bot_id is not None:
                 bot_scope = trading_halt.HaltScope(
                     workspace_id=command.workspace_id, scope_type="bot", scope_id=command.bot_id
@@ -365,7 +374,9 @@ def place_order(db: Session, command: PlaceOrderCommand, *, commit: bool = True)
         return order
 
 
-def cancel_order(db: Session, order: TradeOrder, *, reason_code: str) -> TradeOrder:
+def cancel_order(
+    db: Session, order: TradeOrder, *, reason_code: str, commit: bool = True
+) -> TradeOrder:
     """Cancel a TradeOrder still in a cancellable state. This implementation fills
     synchronously and immediately inside `place_order`, so in practice `order.status` is
     already a terminal state by the time any caller could reach this function -- there is no
@@ -389,7 +400,7 @@ def cancel_order(db: Session, order: TradeOrder, *, reason_code: str) -> TradeOr
             order.id,
             {"reason_code": reason_code, "previous_status": previous_status},
         )
-        db.commit()
+        _finish(db, commit)
         db.refresh(order)
         return order
 

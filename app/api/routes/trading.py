@@ -41,6 +41,8 @@ from app.models.workspace import AppUser
 from app.schemas.trading import (
     BotRunRead,
     BotRunSummaryRead,
+    EmergencyStopRead,
+    EmergencyStopRequest,
     LatestSignalRead,
     TradingAccountCreate,
     TradingAccountDepositCreate,
@@ -50,7 +52,7 @@ from app.schemas.trading import (
     TradingBotRead,
 )
 from app.security.rbac import require_operator_role, require_viewer_role
-from app.trading.application import account_funding, bot_lifecycle
+from app.trading.application import account_funding, bot_lifecycle, emergency_stop
 from app.trading.application.bot_lifecycle import BotLifecycleError, BotStateConflictError
 from app.trading.application.paper_provisioning import ProvisioningError, create_approved_bot
 
@@ -323,3 +325,69 @@ def stop_trading_bot(
         return bot_lifecycle.stop_bot(db, bot)
     except BotLifecycleError as exc:
         raise _lifecycle_error_response(exc) from exc
+
+
+def _emergency_stop_response(result: emergency_stop.EmergencyStopResult) -> EmergencyStopRead:
+    halt = result.halt
+    return EmergencyStopRead(
+        halt_id=halt.id,
+        scope_type=halt.scope_type,
+        scope_id=halt.scope_id,
+        level=halt.level,
+        already_active=result.already_active,
+        stopped_bot_ids=result.stopped_bot_ids,
+        bot_stop_failures=result.bot_stop_failures,
+        closing_order_ids=result.closing_order_ids,
+        close_failures=result.close_failures,
+    )
+
+
+@router.post(
+    "/workspaces/{workspace_id}/bots/{bot_id}/emergency-stop",
+    response_model=EmergencyStopRead,
+    tags=["bots"],
+)
+def emergency_stop_trading_bot(
+    workspace_id: UUID,
+    bot_id: UUID,
+    payload: EmergencyStopRequest,
+    db: DatabaseSession,
+    operator: Operator,
+) -> EmergencyStopRead:
+    """Stops this bot and blocks new orders until an Owner releases the halt
+    (`/trading-halts/{id}/emergency-release`). Idempotent: repeating it while the halt
+    is active changes nothing and answers 200 with `already_active=true`."""
+    bot = _get_bot(db, workspace_id, bot_id)
+    return _emergency_stop_response(
+        emergency_stop.emergency_stop_bot(
+            db,
+            bot,
+            requested_by=operator.id,
+            close_positions=payload.close_positions,
+            reason=payload.reason,
+        )
+    )
+
+
+@router.post(
+    "/workspaces/{workspace_id}/emergency-stop",
+    response_model=EmergencyStopRead,
+    tags=["bots"],
+)
+def emergency_stop_workspace(
+    workspace_id: UUID,
+    payload: EmergencyStopRequest,
+    db: DatabaseSession,
+    operator: Operator,
+) -> EmergencyStopRead:
+    """The same for every bot of the workspace, with one workspace-wide halt that also
+    keeps new bots from starting."""
+    return _emergency_stop_response(
+        emergency_stop.emergency_stop_workspace(
+            db,
+            workspace_id,
+            requested_by=operator.id,
+            close_positions=payload.close_positions,
+            reason=payload.reason,
+        )
+    )

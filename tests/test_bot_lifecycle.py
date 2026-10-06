@@ -5,7 +5,13 @@ from uuid import uuid4
 import pytest
 from app.models.connections import Exchange, ExchangeConnection
 from app.models.market_data import Candle
-from app.models.strategy import BotRun, RiskProfileVersion, StrategyVersion, TradingBot
+from app.models.strategy import (
+    BotRun,
+    RiskProfileVersion,
+    StrategyVersion,
+    TradingBot,
+    TradingHalt,
+)
 from app.models.trading import TradeOrder, TradingAccount
 from app.trading.application import bot_lifecycle as lifecycle
 
@@ -133,6 +139,33 @@ def test_validate_bot_startup_fails_on_inactive_account() -> None:
     assert exc.value.code == "startup_validation_failed_account"
 
 
+@pytest.mark.parametrize("scope_type", ["bot", "workspace"])
+def test_validate_bot_startup_refuses_while_an_emergency_stop_is_active(scope_type: str) -> None:
+    """The emergency stop is released only by an Owner; neither start nor resume may bring
+    a bot back under it (both run this validation)."""
+    bot = _bot()
+    db = MagicMock()
+    db.get.side_effect = [_connection(), _account()]
+    emergency = TradingHalt(
+        id=uuid4(),
+        workspace_id=bot.workspace_id,
+        scope_type=scope_type,
+        scope_id=bot.id if scope_type == "bot" else None,
+        level="emergency_stopped",
+        reason_code="user_emergency_stop",
+        status="active",
+    )
+    # one scope lookup per scope type, bot first; only the matching one has the halt
+    empty = MagicMock(all=MagicMock(return_value=[]))
+    holding = MagicMock(all=MagicMock(return_value=[emergency]))
+    db.scalars.side_effect = [holding] if scope_type == "bot" else [empty, holding]
+
+    with pytest.raises(lifecycle.BotLifecycleError) as exc:
+        lifecycle.validate_bot_startup(db, bot)
+
+    assert exc.value.code == "startup_validation_failed_emergency_stop"
+
+
 def test_validate_bot_startup_fails_on_draft_strategy() -> None:
     db = MagicMock()
     db.get.side_effect = [_connection(), _account(), _strategy_version(lifecycle_status="draft")]
@@ -232,7 +265,7 @@ def test_pause_bot_cancels_open_orders_and_keeps_the_same_bot_run() -> None:
 
     original_cancel = order_flow.cancel_order
     order_flow.cancel_order = MagicMock(
-        side_effect=lambda db_, order, *, reason_code: (
+        side_effect=lambda db_, order, *, reason_code, commit=True: (
             setattr(order, "status", "cancelled") or order
         )
     )

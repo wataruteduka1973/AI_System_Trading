@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiBaseUrl, apiErrorMessage, apiFetch } from '../../lib/api'
-import type { BotRunSummary, TradingAccount, TradingBot } from './types'
+import type {
+  BotRunSummary,
+  EmergencyStopResult,
+  TradingAccount,
+  TradingBot,
+  TradingHalt,
+} from './types'
 
 /** `selectedWorkspaceId` is shared across features (see useWorkspaces); this hook
  * receives it rather than owning it, matching useConnections/useInstruments.
@@ -15,6 +21,7 @@ export function useTrading(selectedWorkspaceId: string) {
   const [tradingAccounts, setTradingAccounts] = useState<TradingAccount[]>([])
   const [bots, setBots] = useState<TradingBot[]>([])
   const [latestRuns, setLatestRuns] = useState<Record<string, BotRunSummary>>({})
+  const [halts, setHalts] = useState<TradingHalt[]>([])
   const [tradingMessage, setTradingMessage] = useState('')
 
   const [accountConnectionId, setAccountConnectionId] = useState('')
@@ -52,14 +59,17 @@ export function useTrading(selectedWorkspaceId: string) {
       setTradingAccounts([])
       setBots([])
       setLatestRuns({})
+      setHalts([])
       return
     }
     try {
-      const [accountsResponse, botsResponse] = await Promise.all([
+      const [accountsResponse, botsResponse, haltsResponse] = await Promise.all([
         apiFetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/trading-accounts`),
         apiFetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/bots`),
+        apiFetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/trading-halts`),
       ])
       if (myGeneration !== generation.current) return
+      if (haltsResponse.ok) setHalts((await haltsResponse.json()) as TradingHalt[])
       if (accountsResponse.ok) setTradingAccounts((await accountsResponse.json()) as TradingAccount[])
       if (botsResponse.ok) {
         const loadedBots = (await botsResponse.json()) as TradingBot[]
@@ -167,9 +177,62 @@ export function useTrading(selectedWorkspaceId: string) {
     }
   }
 
+  const describeStop = (scopeLabel: string, result: EmergencyStopResult): string => {
+    const problems =
+      result.bot_stop_failures.length + result.close_failures.length
+    const base = result.already_active
+      ? `${scopeLabel}は既に緊急停止中です。`
+      : `${scopeLabel}を緊急停止しました(停止したBot ${result.stopped_bot_ids.length}件)。`
+    const closing = result.closing_order_ids.length > 0 ? ` 決済注文 ${result.closing_order_ids.length}件。` : ''
+    return problems > 0 ? `${base}${closing} 一部を処理できませんでした(${problems}件)。` : `${base}${closing}`
+  }
+
+  const emergencyStop = async (bot: TradingBot | null, closePositions: boolean) => {
+    if (!selectedWorkspaceId) return
+    const scopeLabel = bot ? bot.name : 'ワークスペース全体'
+    const path = bot ? `bots/${bot.id}/emergency-stop` : 'emergency-stop'
+    try {
+      const response = await apiFetch(
+        `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/${path}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ close_positions: closePositions }),
+        },
+      )
+      setTradingMessage(
+        response.ok
+          ? describeStop(scopeLabel, (await response.json()) as EmergencyStopResult)
+          : await apiErrorMessage(response, `${scopeLabel}の緊急停止に失敗しました`),
+      )
+      await load(selectedWorkspaceId)
+    } catch {
+      setTradingMessage('緊急停止APIへ接続できません。API停止時は scripts/emergency_stop.py を使ってください。')
+    }
+  }
+
+  const releaseEmergencyStop = async (halt: TradingHalt) => {
+    if (!selectedWorkspaceId) return
+    try {
+      const response = await apiFetch(
+        `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/trading-halts/${halt.id}/emergency-release`,
+        { method: 'POST' },
+      )
+      setTradingMessage(
+        response.ok
+          ? '緊急停止を解除しました。Botは停止したままなので、必要なら開始してください。'
+          : await apiErrorMessage(response, '緊急停止を解除できませんでした(Ownerのみ可能です)'),
+      )
+      await load(selectedWorkspaceId)
+    } catch {
+      setTradingMessage('緊急停止解除APIへ接続できません。')
+    }
+  }
+
   return {
     tradingAccounts,
     bots,
+    halts,
     latestRuns,
     tradingMessage,
     accountConnectionId,
@@ -193,5 +256,7 @@ export function useTrading(selectedWorkspaceId: string) {
     createDeposit,
     createBot,
     runBotCommand,
+    emergencyStop,
+    releaseEmergencyStop,
   }
 }

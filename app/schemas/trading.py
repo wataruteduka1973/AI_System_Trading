@@ -112,3 +112,22 @@ class BotRunSummaryRead(OrmModel):
     stop_reason: str | None
     heartbeat_at: datetime | None
     latest_signal: LatestSignalRead | None
+
+
+class EmergencyStopRequest(BaseModel):
+    close_positions: bool = False
+    """The emergency stop's 決済 policy: leave open positions as they are (default) or
+    close them at market after the stop is in place."""
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class EmergencyStopRead(BaseModel):
+    halt_id: UUID
+    scope_type: str
+    scope_id: UUID | None
+    level: str
+    already_active: bool
+    stopped_bot_ids: list[UUID]
+    bot_stop_failures: list[dict[str, str]]
+    closing_order_ids: list[UUID]
+    close_failures: list[dict[str, str]]

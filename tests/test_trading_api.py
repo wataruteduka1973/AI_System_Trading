@@ -570,3 +570,136 @@ def test_start_trading_bot_requires_operator_role() -> None:
         app.dependency_overrides.clear()
 
     assert response.status_code == 401
+
+
+# ---- emergency stop ----
+
+
+def _stop_result(workspace_id, *, scope_type="bot", scope_id=None, already_active=False):
+    from app.models.strategy import TradingHalt
+    from app.trading.application.emergency_stop import EmergencyStopResult
+
+    halt = TradingHalt(
+        id=uuid4(),
+        workspace_id=workspace_id,
+        scope_type=scope_type,
+        scope_id=scope_id,
+        level="emergency_stopped",
+        reason_code="user_emergency_stop",
+        status="active",
+    )
+    return EmergencyStopResult(halt=halt, already_active=already_active, stopped_bot_ids=[uuid4()])
+
+
+def test_emergency_stop_a_bot(monkeypatch) -> None:
+    from app.trading.application import emergency_stop
+
+    workspace_id = uuid4()
+    bot = _bot(workspace_id=workspace_id, desired_state="running")
+    session = MagicMock()
+    session.scalar.return_value = bot
+    _override_database(session)
+    stop = MagicMock(return_value=_stop_result(workspace_id, scope_id=bot.id))
+    monkeypatch.setattr(emergency_stop, "emergency_stop_bot", stop)
+    try:
+        response = client.post(
+            f"/api/v1/workspaces/{workspace_id}/bots/{bot.id}/emergency-stop",
+            json={"close_positions": True, "reason": "exchange outage"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["scope_type"], body["level"], body["already_active"]) == (
+        "bot",
+        "emergency_stopped",
+        False,
+    )
+    assert len(body["stopped_bot_ids"]) == 1
+    stop.assert_called_once()
+    assert stop.call_args.args[1] is bot
+    assert stop.call_args.kwargs == {
+        "requested_by": _TEST_USER.id,
+        "close_positions": True,
+        "reason": "exchange outage",
+    }
+
+
+def test_emergency_stop_defaults_to_leaving_positions_open(monkeypatch) -> None:
+    from app.trading.application import emergency_stop
+
+    workspace_id = uuid4()
+    bot = _bot(workspace_id=workspace_id)
+    session = MagicMock()
+    session.scalar.return_value = bot
+    _override_database(session)
+    stop = MagicMock(return_value=_stop_result(workspace_id, already_active=True))
+    monkeypatch.setattr(emergency_stop, "emergency_stop_bot", stop)
+    try:
+        response = client.post(
+            f"/api/v1/workspaces/{workspace_id}/bots/{bot.id}/emergency-stop", json={}
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["already_active"] is True  # a repeat is a 200, not a 409
+    assert stop.call_args.kwargs["close_positions"] is False
+
+
+def test_emergency_stop_of_an_unknown_bot_is_404() -> None:
+    session = MagicMock()
+    session.scalar.return_value = None
+    _override_database(session)
+    try:
+        response = client.post(
+            f"/api/v1/workspaces/{uuid4()}/bots/{uuid4()}/emergency-stop", json={}
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 404
+
+
+def test_emergency_stop_the_whole_workspace(monkeypatch) -> None:
+    from app.trading.application import emergency_stop
+
+    workspace_id = uuid4()
+    _override_database(MagicMock())
+    stop = MagicMock(return_value=_stop_result(workspace_id, scope_type="workspace"))
+    monkeypatch.setattr(emergency_stop, "emergency_stop_workspace", stop)
+    try:
+        response = client.post(f"/api/v1/workspaces/{workspace_id}/emergency-stop", json={})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["scope_type"] == "workspace"
+    assert response.json()["scope_id"] is None
+    assert stop.call_args.args[1] == workspace_id
+
+
+def test_emergency_stop_reason_is_length_limited() -> None:
+    _override_database(MagicMock())
+    try:
+        response = client.post(
+            f"/api/v1/workspaces/{uuid4()}/emergency-stop", json={"reason": "x" * 501}
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 422
+
+
+def test_emergency_stop_requires_operator_role() -> None:
+    session = MagicMock()
+    app.dependency_overrides[get_db] = lambda: session
+    app.dependency_overrides[require_viewer_role] = lambda: _TEST_USER
+    try:
+        workspace = client.post(f"/api/v1/workspaces/{uuid4()}/emergency-stop", json={})
+        bot = client.post(f"/api/v1/workspaces/{uuid4()}/bots/{uuid4()}/emergency-stop", json={})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert workspace.status_code == 401 and bot.status_code == 401

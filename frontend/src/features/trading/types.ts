@@ -43,3 +43,28 @@ export type BotRunSummary = {
   heartbeat_at: string | null
   latest_signal: LatestSignal | null
 }
+
+/** Mirrors `app.schemas.trading_halts.TradingHaltRead`. */
+export type TradingHalt = {
+  id: string
+  scope_type: string
+  scope_id: string | null
+  level: 'warning' | 'entry_halted' | 'all_trading_halted' | 'emergency_stopped'
+  reason_code: string
+  status: string
+  halted_at: string
+  released_at: string | null
+}
+
+/** Mirrors `app.schemas.trading.EmergencyStopRead`. */
+export type EmergencyStopResult = {
+  halt_id: string
+  scope_type: string
+  scope_id: string | null
+  level: string
+  already_active: boolean
+  stopped_bot_ids: string[]
+  bot_stop_failures: { bot_id: string; code: string }[]
+  closing_order_ids: string[]
+  close_failures: { position_id: string; code: string }[]
+}
