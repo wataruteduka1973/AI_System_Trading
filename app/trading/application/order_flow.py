@@ -70,12 +70,15 @@ two causes ADR 0004 wired up (data delay, daily/weekly loss·peak drawdown) can 
 of these halts today -- the other 8 causes in 05番's 取引停止マトリクス have no detection
 code anywhere and so can never block an order here yet.
 
-TODO(order_status_history): the live DB has an `order_status_history` table (order_id,
-from_status, to_status, reason_code, raw_ref, occurred_at) with no ORM mapping anywhere in
-this codebase yet. This module records lifecycle events via the existing `AuditLog`
-mechanism instead (matching every other application module), but does not dual-write
-`order_status_history`. Flagged for a future decision on whether that table should be
-mapped and populated.
+`order_status_history` (mapped 2026-10-06): every `TradeOrder.status` change is also
+recorded as an `OrderStatusHistory` row, written next to the change by `_set_status`.
+`AuditLog` keeps the business-level events (`trade_order.submitted`/`filled`/
+`cancelled`); the history table is the per-order state-transition trail.
+
+Transaction boundary: `create_order_intent` and `place_order` commit by default, as a
+standalone call (API/manual order) expects. A caller composing a larger unit of work
+(`bot_evaluation.py`) passes `commit=False` and commits once itself -- the functions
+then only flush, and a failure still rolls the caller's whole transaction back.
 """
 
 from collections.abc import Iterator
@@ -99,6 +102,7 @@ from app.models.trading import (
     LedgerEntry,
     LedgerTransaction,
     OrderIntent,
+    OrderStatusHistory,
     TradeOrder,
     TradingAccount,
     TradingPosition,
@@ -174,7 +178,9 @@ def _validate_order_type_price(order_type: OrderTypeLiteral, limit_price: Decima
         raise OrderFlowError("invalid_input", "limit orders require a positive limit_price")
 
 
-def create_order_intent(db: Session, command: OrderIntentCommand) -> OrderIntent:
+def create_order_intent(
+    db: Session, command: OrderIntentCommand, *, commit: bool = True
+) -> OrderIntent:
     """Create an OrderIntent from an already-decided Signal/RiskDecision pair. Both are
     mandatory at the DB level (`order_intent.signal_id`/`risk_decision_id` are NOT NULL and
     unique) -- there is no "manual OrderIntent" path; manual/test order placement instead
@@ -210,12 +216,12 @@ def create_order_intent(db: Session, command: OrderIntentCommand) -> OrderIntent
             expires_at=command.expires_at,
         )
         db.add(intent)
-        db.commit()
+        _finish(db, commit)
         db.refresh(intent)
         return intent
 
 
-def place_order(db: Session, command: PlaceOrderCommand) -> TradeOrder:
+def place_order(db: Session, command: PlaceOrderCommand, *, commit: bool = True) -> TradeOrder:
     """Create a TradeOrder (optionally from an OrderIntent, otherwise a direct/manual
     order) and synchronously simulate its fill. See module docstring for the execution
     model and its TODOs (spread, trading_halt)."""
@@ -314,6 +320,7 @@ def place_order(db: Session, command: PlaceOrderCommand) -> TradeOrder:
         )
         db.add(order)
         db.flush()
+        _record_status(db, order, None, "submitted")
         _audit(
             db,
             command.workspace_id,
@@ -353,7 +360,7 @@ def place_order(db: Session, command: PlaceOrderCommand) -> TradeOrder:
                 "realized_pnl": str(realized_pnl),
             },
         )
-        db.commit()
+        _finish(db, commit)
         db.refresh(order)
         return order
 
@@ -373,10 +380,7 @@ def cancel_order(db: Session, order: TradeOrder, *, reason_code: str) -> TradeOr
                 f"Cannot cancel a TradeOrder in status '{order.status}'",
             )
         previous_status = order.status
-        now = datetime.now(UTC)
-        order.status = "cancelled"
-        order.updated_at = now
-        db.flush()
+        _set_status(db, order, "cancelled", reason_code=reason_code)
         _audit(
             db,
             order.workspace_id,
@@ -388,6 +392,42 @@ def cancel_order(db: Session, order: TradeOrder, *, reason_code: str) -> TradeOr
         db.commit()
         db.refresh(order)
         return order
+
+
+def _finish(db: Session, commit: bool) -> None:
+    if commit:
+        db.commit()
+    else:
+        db.flush()
+
+
+def _record_status(
+    db: Session,
+    order: TradeOrder,
+    from_status: str | None,
+    to_status: str,
+    reason_code: str | None = None,
+) -> None:
+    db.add(
+        OrderStatusHistory(
+            order_id=order.id,
+            from_status=from_status,
+            to_status=to_status,
+            reason_code=reason_code,
+            occurred_at=datetime.now(UTC),
+        )
+    )
+
+
+def _set_status(
+    db: Session, order: TradeOrder, to_status: str, *, reason_code: str | None = None
+) -> None:
+    """Every `TradeOrder.status` change after creation goes through here: sets the
+    status and appends the `OrderStatusHistory` row, so the trail cannot miss one."""
+    _record_status(db, order, order.status, to_status, reason_code)
+    order.status = to_status
+    order.updated_at = datetime.now(UTC)
+    db.flush()
 
 
 def _simulate_fill(
@@ -431,9 +471,7 @@ def _simulate_fill(
     )
     db.add(fill)
     order.filled_quantity = order.quantity
-    order.status = "filled"
-    order.updated_at = now
-    db.flush()
+    _set_status(db, order, "filled")
     db.refresh(fill)
     return fill
 

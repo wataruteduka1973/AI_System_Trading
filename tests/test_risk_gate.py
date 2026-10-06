@@ -210,6 +210,16 @@ def test_evaluate_conservative_v1_allows_a_healthy_signal() -> None:
     assert result.reason_code is None
 
 
+def test_reward_risk_is_recorded_as_not_applicable_and_never_decides() -> None:
+    """Entries have a stop but no profit target, so there is no ratio to judge; the gate
+    must say so instead of passing a constant."""
+    result = gate._evaluate_conservative_v1(_state())
+    check = result.rule_results["reward_risk"]
+    assert check["applicable"] is False
+    assert check["passed"] is True
+    assert "ratio" not in check
+
+
 def test_evaluate_conservative_v1_is_a_pure_function_of_its_state() -> None:
     state = _state()
     first = gate._evaluate_conservative_v1(state)
