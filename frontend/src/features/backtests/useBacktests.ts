@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { apiBaseUrl, apiErrorMessage, apiFetch } from '../../lib/api'
 import type { Timeframe } from '../market-data/types'
-import type { BacktestRun, BacktestTrade } from './types'
+import type { BacktestRun, BacktestRunDetail, BacktestTrade, EquityCurve } from './types'
 
 /** `selectedWorkspaceId` is shared across features (see useWorkspaces); this hook
  * receives it rather than owning it, matching useConnections/useTrading.
@@ -14,9 +14,7 @@ import type { BacktestRun, BacktestTrade } from './types'
 export function useBacktests(selectedWorkspaceId: string) {
   const [backtests, setBacktests] = useState<BacktestRun[]>([])
   const [backtestMessage, setBacktestMessage] = useState('')
-  const [selectedRunTrades, setSelectedRunTrades] = useState<
-    { runId: string; trades: BacktestTrade[] } | null
-  >(null)
+  const [selectedRunDetail, setSelectedRunDetail] = useState<BacktestRunDetail | null>(null)
 
   const [instrumentId, setInstrumentId] = useState('')
   const [timeframe, setTimeframe] = useState<Timeframe>('1m')
@@ -83,24 +81,33 @@ export function useBacktests(selectedWorkspaceId: string) {
     }
   }
 
-  const loadTrades = async (run: BacktestRun) => {
+  const loadRunDetail = async (run: BacktestRun) => {
     if (!selectedWorkspaceId) return
+    const base = `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/backtests/${run.id}`
     try {
-      const response = await apiFetch(
-        `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/backtests/${run.id}/trades`,
-      )
-      if (response.ok) {
-        setSelectedRunTrades({ runId: run.id, trades: (await response.json()) as BacktestTrade[] })
+      const [tradesResponse, curveResponse] = await Promise.all([
+        apiFetch(`${base}/trades`),
+        apiFetch(`${base}/equity-curve`),
+      ])
+      if (!tradesResponse.ok) {
+        setBacktestMessage(await apiErrorMessage(tradesResponse, '取引一覧を取得できませんでした'))
+        return
       }
+      const emptyCurve: EquityCurve = { initial_equity: null, points: [] }
+      setSelectedRunDetail({
+        runId: run.id,
+        trades: (await tradesResponse.json()) as BacktestTrade[],
+        equityCurve: curveResponse.ok ? ((await curveResponse.json()) as EquityCurve) : emptyCurve,
+      })
     } catch {
-      setBacktestMessage('取引一覧APIへ接続できません。')
+      setBacktestMessage('バックテスト詳細APIへ接続できません。')
     }
   }
 
   return {
     backtests,
     backtestMessage,
-    selectedRunTrades,
+    selectedRunDetail,
     instrumentId,
     setInstrumentId,
     timeframe,
@@ -119,6 +126,6 @@ export function useBacktests(selectedWorkspaceId: string) {
     setTrainRatio,
     load,
     createBacktest,
-    loadTrades,
+    loadRunDetail,
   }
 }

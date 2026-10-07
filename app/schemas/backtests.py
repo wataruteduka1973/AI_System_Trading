@@ -11,7 +11,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.base import OrmModel
 
@@ -44,9 +44,15 @@ class BacktestRunRead(OrmModel):
     code_version: str
     status: str
     summary_metrics: dict[str, object]
+    """Without `equity_curve`: runs are listed in bulk, and the curve has its own endpoint."""
     started_at: datetime | None
     finished_at: datetime | None
     created_at: datetime
+
+    @field_validator("summary_metrics")
+    @classmethod
+    def _without_equity_curve(cls, value: dict[str, object]) -> dict[str, object]:
+        return {key: item for key, item in value.items() if key != "equity_curve"}
 
 
 class BacktestCreateResponse(BaseModel):
@@ -68,3 +74,15 @@ class BacktestTradeRead(OrmModel):
     quantity: Decimal
     fees: Decimal
     realized_pnl: Decimal | None
+
+
+class EquityPoint(BaseModel):
+    time: datetime
+    equity: Decimal
+
+
+class BacktestEquityCurveRead(BaseModel):
+    initial_equity: Decimal | None
+    points: list[EquityPoint]
+    """Downsampled (`backtest_metrics.EQUITY_CURVE_MAX_POINTS`), keeping each stretch's
+    high and low. Empty for a run made before curves were stored."""

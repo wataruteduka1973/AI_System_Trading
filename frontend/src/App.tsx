@@ -196,8 +196,8 @@ function App() {
         <BacktestPanel
           visible={route.kind === 'backtests'}
           backtests={backtests.backtests}
-          selectedRunTrades={backtests.selectedRunTrades}
-          onViewTrades={(run) => void backtests.loadTrades(run)}
+          selectedRunDetail={backtests.selectedRunDetail}
+          onViewDetail={(run) => void backtests.loadRunDetail(run)}
         />
       </section>
       )}

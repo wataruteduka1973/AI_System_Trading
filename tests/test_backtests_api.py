@@ -297,3 +297,77 @@ def test_create_backtest_requires_operator_role() -> None:
         app.dependency_overrides.clear()
 
     assert response.status_code == 401
+
+
+_CURVE = [["2026-09-01T00:00:00+00:00", "10000"], ["2026-09-02T00:00:00+00:00", "10250.5"]]
+
+
+def test_backtest_responses_leave_out_the_equity_curve() -> None:
+    """Runs are listed in bulk; the curve is fetched per run."""
+    workspace_id = uuid4()
+    run = _backtest_run(
+        workspace_id=workspace_id,
+        summary_metrics={"metrics": {"net_pnl": "250.5"}, "equity_curve": _CURVE},
+    )
+    session = MagicMock()
+    session.scalars.return_value.all.return_value = [run]
+    session.scalar.return_value = run
+    _override_database(session)
+    try:
+        listed = client.get(f"/api/v1/workspaces/{workspace_id}/backtests")
+        single = client.get(f"/api/v1/workspaces/{workspace_id}/backtests/{run.id}")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert listed.json()[0]["summary_metrics"] == {"metrics": {"net_pnl": "250.5"}}
+    assert single.json()["summary_metrics"] == {"metrics": {"net_pnl": "250.5"}}
+    assert run.summary_metrics["equity_curve"] == _CURVE  # the stored row is untouched
+
+
+def test_get_backtest_equity_curve() -> None:
+    workspace_id = uuid4()
+    run = _backtest_run(
+        workspace_id=workspace_id,
+        parameters={"initial_equity": "10000"},
+        summary_metrics={"equity_curve": _CURVE},
+    )
+    session = MagicMock()
+    session.scalar.return_value = run
+    _override_database(session)
+    try:
+        response = client.get(f"/api/v1/workspaces/{workspace_id}/backtests/{run.id}/equity-curve")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert Decimal(body["initial_equity"]) == Decimal("10000")
+    assert [Decimal(p["equity"]) for p in body["points"]] == [Decimal("10000"), Decimal("10250.5")]
+    assert body["points"][0]["time"].startswith("2026-09-01T00:00:00")
+
+
+def test_a_run_from_before_curves_were_stored_has_an_empty_curve() -> None:
+    workspace_id = uuid4()
+    run = _backtest_run(workspace_id=workspace_id, parameters={})
+    session = MagicMock()
+    session.scalar.return_value = run
+    _override_database(session)
+    try:
+        response = client.get(f"/api/v1/workspaces/{workspace_id}/backtests/{run.id}/equity-curve")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {"initial_equity": None, "points": []}
+
+
+def test_equity_curve_404_for_a_run_in_another_workspace() -> None:
+    session = MagicMock()
+    session.scalar.return_value = None
+    _override_database(session)
+    try:
+        response = client.get(f"/api/v1/workspaces/{uuid4()}/backtests/{uuid4()}/equity-curve")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 404

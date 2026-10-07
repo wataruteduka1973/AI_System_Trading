@@ -1,6 +1,6 @@
 /** Mirrors `app.schemas.backtests` (app/api/routes/backtests.py). */
 
-type BacktestMetrics = {
+export type BacktestMetrics = {
   trade_count: number
   win_count: number
   loss_count: number
@@ -14,9 +14,17 @@ type BacktestMetrics = {
   max_drawdown_pct: string
 }
 
+type BaselineComparison = {
+  baseline: BacktestMetrics
+  net_pnl_diff: string
+  win_rate_diff: string
+  max_drawdown_pct_diff: string
+  profit_factor_diff: string | null
+}
+
 type BacktestSummaryMetrics = {
   metrics?: BacktestMetrics
-  baseline_comparison?: unknown
+  baseline_comparison?: BaselineComparison
 }
 
 export type BacktestRun = {
@@ -47,4 +55,18 @@ export type BacktestTrade = {
   quantity: string
   fees: string
   realized_pnl: string | null
+}
+
+/** Mirrors `app.schemas.backtests.BacktestEquityCurveRead`: downsampled, empty for a run
+ * made before curves were stored. */
+export type EquityCurve = {
+  initial_equity: string | null
+  points: { time: string; equity: string }[]
+}
+
+/** What the run-detail view shows for the run the user picked. */
+export type BacktestRunDetail = {
+  runId: string
+  trades: BacktestTrade[]
+  equityCurve: EquityCurve
 }

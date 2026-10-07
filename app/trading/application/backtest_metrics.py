@@ -153,13 +153,46 @@ def _metrics_to_dict(metrics: ReplayMetrics) -> dict[str, object]:
     }
 
 
+EQUITY_CURVE_MAX_POINTS = 400
+"""Stored points per run. A 1-minute year has ~500,000 bars; the chart needs the shape,
+not every bar."""
+
+
+def downsample_equity_curve(
+    curve: Sequence[tuple[datetime, Decimal]], max_points: int = EQUITY_CURVE_MAX_POINTS
+) -> list[tuple[datetime, Decimal]]:
+    """At most `max_points` points that keep the first and last bar and, in each bucket of
+    consecutive bars, the lowest and highest equity -- so a drawdown trough or a peak is
+    never averaged away, which a plain every-nth sample would do."""
+    if len(curve) <= max_points:
+        return list(curve)
+    bucket_count = max(1, (max_points - 2) // 2)
+    bucket_size = -(-len(curve) // bucket_count)  # ceil
+    kept: dict[int, tuple[datetime, Decimal]] = {0: curve[0], len(curve) - 1: curve[-1]}
+    for start in range(0, len(curve), bucket_size):
+        indexes = range(start, min(start + bucket_size, len(curve)))
+        for index in (
+            min(indexes, key=lambda i: curve[i][1]),
+            max(indexes, key=lambda i: curve[i][1]),
+        ):
+            kept[index] = curve[index]
+    return [kept[index] for index in sorted(kept)]
+
+
 def summary_metrics_dict(
-    metrics: ReplayMetrics, baseline_comparison: BaselineComparison | None = None
+    metrics: ReplayMetrics,
+    baseline_comparison: BaselineComparison | None = None,
+    equity_curve: Sequence[tuple[datetime, Decimal]] | None = None,
 ) -> dict[str, object]:
     """Shaped for `backtest_run.summary_metrics` (JSONB) -- every `Decimal` is a
     `str` (matches `risk_gate.py`'s `rule_results` convention), so this round-trips
     through JSON without precision loss."""
     summary: dict[str, object] = {"metrics": _metrics_to_dict(metrics)}
+    if equity_curve:
+        summary["equity_curve"] = [
+            [time.isoformat(), str(equity)]
+            for time, equity in downsample_equity_curve(equity_curve)
+        ]
     if baseline_comparison is not None:
         summary["baseline_comparison"] = {
             "baseline": _metrics_to_dict(baseline_comparison.baseline),
@@ -231,7 +264,7 @@ def persist_backtest_run(
             )
         )
 
-    run.summary_metrics = summary_metrics_dict(metrics, baseline_comparison)
+    run.summary_metrics = summary_metrics_dict(metrics, baseline_comparison, result.equity_curve)
     run.status = "succeeded"
     run.finished_at = datetime.now(UTC)
     db.flush()

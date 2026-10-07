@@ -333,3 +333,64 @@ def test_run_and_persist_backtest_replays_and_records_the_exit_policy(
 
     assert [kwargs["exit_policy"] for kwargs in replay_kwargs] == ["stop_loss"]
     assert run.parameters["exit_policy"] == "stop_loss"
+
+
+# ---- equity curve storage ----
+
+
+def _long_curve(values: list[int]) -> list[tuple[datetime, Decimal]]:
+    start = datetime(2026, 9, 21, tzinfo=UTC)
+    return [(start + timedelta(minutes=i), Decimal(v)) for i, v in enumerate(values)]
+
+
+def test_a_short_equity_curve_is_kept_whole() -> None:
+    curve = _long_curve([100, 101, 99])
+    assert metrics_mod.downsample_equity_curve(curve, max_points=10) == curve
+
+
+def test_downsampling_keeps_the_ends_and_never_loses_the_trough_or_the_peak() -> None:
+    values = [1000 + (i % 7) for i in range(5000)]
+    values[1234] = 400  # a one-bar drawdown trough
+    values[3333] = 2000  # a one-bar peak
+    curve = _long_curve(values)
+
+    sampled = metrics_mod.downsample_equity_curve(curve, max_points=100)
+
+    assert len(sampled) <= 100
+    assert sampled[0] == curve[0] and sampled[-1] == curve[-1]
+    assert [t for t, _ in sampled] == sorted(t for t, _ in sampled)
+    assert min(e for _, e in sampled) == Decimal(400)
+    assert max(e for _, e in sampled) == Decimal(2000)
+
+
+def test_the_stored_curve_has_the_default_cap_and_iso_strings() -> None:
+    curve = _long_curve(list(range(2000)))
+    metrics = metrics_mod.compute_metrics(_result([], curve), initial_equity=Decimal("1000"))
+
+    summary = metrics_mod.summary_metrics_dict(metrics, None, curve)
+
+    stored = summary["equity_curve"]
+    assert len(stored) <= metrics_mod.EQUITY_CURVE_MAX_POINTS
+    assert stored[0] == ["2026-09-21T00:00:00+00:00", "0"]
+    assert "equity_curve" not in metrics_mod.summary_metrics_dict(metrics)
+
+
+def test_persist_backtest_run_stores_the_curve_of_the_replay() -> None:
+    db = MagicMock()
+    result = _result([_trade()], _curve("1000", "1100"))
+    metrics = metrics_mod.compute_metrics(result, initial_equity=Decimal("1000"))
+
+    run = metrics_mod.persist_backtest_run(
+        db,
+        workspace_id=uuid4(),
+        strategy_version_id=uuid4(),
+        risk_profile_version_id=uuid4(),
+        dataset_snapshot_id=uuid4(),
+        instrument_id=uuid4(),
+        code_version="test",
+        parameters={},
+        result=result,
+        metrics=metrics,
+    )
+
+    assert [equity for _, equity in run.summary_metrics["equity_curve"]] == ["1000", "1100"]
