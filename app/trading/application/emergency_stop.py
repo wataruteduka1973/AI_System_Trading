@@ -14,8 +14,9 @@ Releasing is manual and Owner-only (`trading_halts.py`'s `/emergency-release`); 
 restart any bot. The call is idempotent: stopping again while the halt is active returns it
 unchanged (FR-UI-03: a double click is safe).
 
-The halt, the bot stops and the audit/event rows are one transaction. The system event
-(`trigger_event_id`) is what a notification will hang off; this module does not enqueue one.
+The halt, the bot stops and the audit/event rows are one transaction. The halt's announcement
+(`trading_halt.activate_or_escalate`: a system event and an outbox row) is what notifies the
+workspace's Owners and Operators; see docs/plans/notification-wiring.md.
 """
 
 from dataclasses import dataclass, field
@@ -24,13 +25,14 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.audit import AuditLog, SystemEvent
+from app.models.audit import AuditLog
 from app.models.strategy import TradingBot, TradingHalt
 from app.models.trading import TradingAccount, TradingPosition
 from app.trading.application import bot_lifecycle, order_flow, trading_halt
 
 REASON_CODE = "user_emergency_stop"
 _STOP_REASON = "emergency stop"
+_SCOPE_LABEL = {"bot": "Bot単位", "workspace": "ワークスペース全体"}
 
 
 @dataclass
@@ -112,32 +114,21 @@ def _activate_and_stop(
 ) -> EmergencyStopResult:
     correlation_id = uuid4()
     existing = trading_halt.find_active_halt(db, scope, REASON_CODE)
-    trigger_event_id: UUID | None = None
-    if existing is None:
-        event = SystemEvent(
-            workspace_id=scope.workspace_id,
-            severity="critical",
-            category="risk",
-            event_type="user_emergency_stop",
-            reason_code=REASON_CODE,
-            source_type="user" if requested_by else "operator_script",
-            source_id=requested_by,
-            target_type=scope.scope_type,
-            target_id=scope.scope_id,
-            correlation_id=correlation_id,
-            message=f"Emergency stop requested for the {scope.scope_type}",
-            payload={"close_positions": close_positions, "reason": reason},
-        )
-        db.add(event)
-        db.flush()
-        trigger_event_id = event.id
+    scope_label = _SCOPE_LABEL.get(scope.scope_type, scope.scope_type)
     halt = trading_halt.activate_or_escalate(
         db,
         scope,
         reason_code=REASON_CODE,
         level="emergency_stopped",
         auto_releasable=False,
-        trigger_event_id=trigger_event_id,
+        event=trading_halt.HaltEvent(
+            event_type="user_emergency_stop",
+            message=f"緊急停止が実行されました({scope_label})",
+            payload={"close_positions": close_positions, "reason": reason},
+            source_type="user" if requested_by else "operator_script",
+            source_id=requested_by,
+            correlation_id=correlation_id,
+        ),
     )
     result = EmergencyStopResult(halt=halt, already_active=existing is not None)
 

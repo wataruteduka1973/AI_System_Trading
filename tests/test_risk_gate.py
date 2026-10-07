@@ -330,6 +330,11 @@ def _pure_result(rule_results: dict[str, object]) -> gate.PureRiskResult:
     )
 
 
+def _added_halt(db: MagicMock) -> TradingHalt:
+    (halt,) = [c.args[0] for c in db.add.call_args_list if isinstance(c.args[0], TradingHalt)]
+    return halt
+
+
 def test_sync_trading_halts_activates_bot_scoped_halt_on_data_delay_breach() -> None:
     db = MagicMock()
     db.scalar.return_value = None
@@ -339,8 +344,7 @@ def test_sync_trading_halts_activates_bot_scoped_halt_on_data_delay_breach() -> 
 
     gate._sync_trading_halts(db, bot, account, result, datetime.now(UTC))
 
-    db.add.assert_called_once()
-    added = db.add.call_args[0][0]
+    added = _added_halt(db)
     assert added.scope_type == "bot"
     assert added.scope_id == bot.id
     assert added.reason_code == "data_delay"
@@ -356,8 +360,7 @@ def test_sync_trading_halts_activates_account_scoped_halt_on_daily_loss_breach()
 
     gate._sync_trading_halts(db, bot, account, result, datetime.now(UTC))
 
-    db.add.assert_called_once()
-    added = db.add.call_args[0][0]
+    added = _added_halt(db)
     assert added.scope_type == "account"
     assert added.scope_id == account.id
     assert added.reason_code == "daily_loss_dd_limit"

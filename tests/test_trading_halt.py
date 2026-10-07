@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import pytest
 import structlog.testing
+from app.models.audit import OutboxEvent, SystemEvent
 from app.models.strategy import TradingHalt
 from app.trading.application import trading_halt as halt
 
@@ -42,12 +43,22 @@ def test_activate_creates_a_new_row_when_none_exists() -> None:
 
     result = halt.activate_or_escalate(db, scope, reason_code="data_delay", level="entry_halted")
 
-    db.add.assert_called_once()
-    added = db.add.call_args[0][0]
-    assert isinstance(added, TradingHalt)
-    assert added.level == "entry_halted"
-    assert added.status == "active"
-    assert result is added
+    added = [call.args[0] for call in db.add.call_args_list]
+    (new_halt,) = [obj for obj in added if isinstance(obj, TradingHalt)]
+    assert new_halt.level == "entry_halted"
+    assert new_halt.status == "active"
+    assert result is new_halt
+    # ...and announced: one system event + one outbox row, sharing a correlation id
+    (system_event,) = [obj for obj in added if isinstance(obj, SystemEvent)]
+    (outbox_event,) = [obj for obj in added if isinstance(obj, OutboxEvent)]
+    assert system_event.correlation_id == outbox_event.correlation_id
+    assert (system_event.severity, system_event.category) == ("warning", "risk")
+    assert system_event.event_type == "trading_halt.data_delay"
+    assert system_event.workspace_id == scope.workspace_id
+    assert new_halt.trigger_event_id == system_event.id
+    assert outbox_event.aggregate_type == "trading_halt"
+    assert system_event.payload["level"] == "entry_halted"
+    assert system_event.payload["previous_level"] is None
 
 
 def test_activate_escalates_an_existing_less_severe_row() -> None:
@@ -59,7 +70,48 @@ def test_activate_escalates_an_existing_less_severe_row() -> None:
 
     assert result is existing
     assert existing.level == "entry_halted"
-    db.add.assert_not_called()  # rewrites the same row, never adds a second one
+    added = [call.args[0] for call in db.add.call_args_list]
+    assert not [obj for obj in added if isinstance(obj, TradingHalt)]  # never a second row
+    (system_event,) = [obj for obj in added if isinstance(obj, SystemEvent)]  # but announced
+    assert system_event.payload["previous_level"] == "warning"
+    assert system_event.severity == "warning"
+
+
+def test_a_halt_that_is_already_that_severe_is_not_announced_again() -> None:
+    db = MagicMock()
+    existing = _existing_halt(_scope(), level="entry_halted", reason_code="data_delay")
+    db.scalar.return_value = existing
+
+    halt.activate_or_escalate(db, _scope(), reason_code="data_delay", level="entry_halted")
+
+    db.add.assert_not_called()
+
+
+def test_the_severity_follows_the_level_and_a_cause_can_word_its_own_event() -> None:
+    db = MagicMock()
+    db.scalar.return_value = None
+
+    halt.activate_or_escalate(
+        db,
+        _scope(),
+        reason_code="user_emergency_stop",
+        level="emergency_stopped",
+        event=halt.HaltEvent(
+            event_type="user_emergency_stop",
+            message="Emergency stop requested for the bot",
+            payload={"reason": "outage"},
+            source_type="user",
+        ),
+    )
+
+    (system_event,) = [
+        c.args[0] for c in db.add.call_args_list if isinstance(c.args[0], SystemEvent)
+    ]
+    assert system_event.severity == "critical"
+    assert system_event.event_type == "user_emergency_stop"
+    assert system_event.source_type == "user"
+    assert system_event.payload["reason"] == "outage"
+    assert system_event.payload["level"] == "emergency_stopped"
 
 
 def test_activate_does_not_downgrade_a_more_severe_existing_row() -> None:
