@@ -34,6 +34,27 @@ class BacktestCreate(BaseModel):
         return self
 
 
+class BacktestBatchCreate(BaseModel):
+    """The same settings as `BacktestCreate`, for several instruments at once."""
+
+    instrument_ids: list[UUID] = Field(min_length=1, max_length=12)
+    timeframe: str = "1m"
+    from_time: datetime
+    to_time: datetime
+    initial_equity: Decimal = Field(gt=0)
+    spread: Decimal = Field(default=Decimal(0), ge=0)
+    mode: Literal["single", "walk_forward"] = "single"
+    train_ratio: Decimal = Field(default=Decimal("0.7"), gt=0, lt=1)
+
+    @model_validator(mode="after")
+    def _check(self) -> "BacktestBatchCreate":
+        if self.to_time <= self.from_time:
+            raise ValueError("to_time must be after from_time")
+        if len(set(self.instrument_ids)) != len(self.instrument_ids):
+            raise ValueError("instrument_ids must not repeat an instrument")
+        return self
+
+
 class BacktestRunRead(OrmModel):
     id: UUID
     workspace_id: UUID
@@ -86,3 +107,20 @@ class BacktestEquityCurveRead(BaseModel):
     points: list[EquityPoint]
     """Downsampled (`backtest_metrics.EQUITY_CURVE_MAX_POINTS`), keeping each stretch's
     high and low. Empty for a run made before curves were stored."""
+
+
+class BacktestBatchItemRead(BaseModel):
+    instrument_id: UUID
+    symbol: str
+    bars: int
+    """The candles in the requested range -- what counted against the batch's budget."""
+    runs: list[BacktestRunRead]
+    """Empty when this instrument failed (`error_code`/`error`)."""
+    error_code: str | None
+    error: str | None
+
+
+class BacktestBatchResponse(BaseModel):
+    total_bars: int
+    items: list[BacktestBatchItemRead]
+    """In the order of the request."""
