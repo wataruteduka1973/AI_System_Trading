@@ -18,9 +18,10 @@ row's `level` rather than adding another.
 
 **Which causes call this module at all** is deliberately narrow per ADR 0004: only
 `risk_gate.evaluate_signal` (data delay, daily/weekly loss, peak drawdown) does, for
-now. The user's emergency stop (`emergency_stop.py`, 2026-10-06) is the one other cause
-wired up; the other 7 causes in 05番's "取引停止マトリクス" have no detection code yet
-and are out of scope here.
+now. The user's emergency stop (`emergency_stop.py`, 2026-10-06), the two lock halts
+(`risk_locks.py`) and the ledger mismatch (`ledger_check.py`, 2026-10-07) are the others wired up;
+the remaining causes in 05番's "取引停止マトリクス" have no detection code yet and are out of
+scope here.
 """
 
 from dataclasses import dataclass
@@ -72,6 +73,7 @@ _REASON_LABEL = {
     "data_delay": "データ遅延",
     "daily_loss_dd_limit": "日次・週次の損失または最大ドローダウンの上限",
     "user_emergency_stop": "利用者の緊急停止",
+    "ledger_mismatch": "注文・台帳の不整合",
 }
 """Words for the notification, which a person reads. A cause not listed shows its code."""
 
