@@ -67,6 +67,8 @@ _LEVEL_LABEL = {
 }
 
 _REASON_LABEL = {
+    "consecutive_loss_limit": "連敗の上限",
+    "peak_drawdown_limit": "最大ドローダウンの上限",
     "data_delay": "データ遅延",
     "daily_loss_dd_limit": "日次・週次の損失または最大ドローダウンの上限",
     "user_emergency_stop": "利用者の緊急停止",
@@ -296,6 +298,29 @@ def most_recently_released_halt(
         .order_by(TradingHalt.released_at.desc())
         .limit(1)
     )
+
+
+def last_release_time(db: Session, scope: HaltScope, reason_code: str) -> datetime | None:
+    """When the `(scope, reason_code)` halt was last released, or `None` if it never was. The
+    consecutive-loss and peak-drawdown limits start counting again from this moment
+    (`risk_locks`)."""
+    last = most_recently_released_halt(db, scope, reason_code)
+    return last.released_at if last is not None else None
+
+
+def release_lock(
+    db: Session, halt: TradingHalt, *, released_by: UUID, now: datetime
+) -> TradingHalt:
+    """Owner release of a lock halt (`risk_locks.LOCK_REASONS`) straight to `released`, skipping
+    the one-level-at-a-time step down: stepping down to `warning` would let the next evaluation
+    raise it again at once, since nothing about the measures has changed. The release is what
+    resets them."""
+    halt.status = "released"
+    halt.released_at = now
+    halt.released_by = released_by
+    db.flush()
+    db.refresh(halt)
+    return halt
 
 
 def release_emergency_stop(

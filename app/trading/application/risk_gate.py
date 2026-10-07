@@ -278,19 +278,28 @@ def _equity_at(db: Session, account: TradingAccount, since: datetime) -> Decimal
     return row.equity if row is not None else None
 
 
-def _peak_equity(db: Session, account: TradingAccount) -> Decimal | None:
-    return db.scalar(
-        select(func.max(AccountSnapshot.equity)).where(AccountSnapshot.account_id == account.id)
+def _peak_equity(
+    db: Session, account: TradingAccount, since: datetime | None = None
+) -> Decimal | None:
+    """The best recorded equity, from `since` (the last release of the peak-drawdown lock, see
+    `risk_locks`) or from the beginning."""
+    statement = select(func.max(AccountSnapshot.equity)).where(
+        AccountSnapshot.account_id == account.id
     )
+    if since is not None:
+        statement = statement.where(AccountSnapshot.captured_at >= since)
+    return db.scalar(statement)
 
 
-def _consecutive_losses(db: Session, account: TradingAccount) -> int:
-    rows = db.scalars(
-        select(LedgerEntry.amount)
-        .where(LedgerEntry.account_id == account.id, LedgerEntry.entry_type == "realized_pnl")
-        .order_by(LedgerEntry.occurred_at.desc())
-        .limit(50)
-    ).all()
+def _consecutive_losses(db: Session, account: TradingAccount, since: datetime | None = None) -> int:
+    """The latest run of losing trades, counting only trades closed after `since` (the last
+    release of the consecutive-loss lock, see `risk_locks`) when given."""
+    statement = select(LedgerEntry.amount).where(
+        LedgerEntry.account_id == account.id, LedgerEntry.entry_type == "realized_pnl"
+    )
+    if since is not None:
+        statement = statement.where(LedgerEntry.occurred_at > since)
+    rows = db.scalars(statement.order_by(LedgerEntry.occurred_at.desc()).limit(50)).all()
     count = 0
     for amount in rows:
         if amount < 0:
@@ -674,8 +683,17 @@ def evaluate_signal(
     week_start = day_start - timedelta(days=now.weekday())
     day_start_equity = _equity_at(db, account, day_start)
     week_start_equity = _equity_at(db, account, week_start)
-    peak_equity = _peak_equity(db, account)
-    consecutive_losses = _consecutive_losses(db, account)
+    # Both limits count from their lock's last release, so an Owner's release starts them
+    # over (see `risk_locks`): `account_scope` is where those halts live.
+    lock_scope = trading_halt.HaltScope(bot.workspace_id, "account", account.id)
+    peak_equity = _peak_equity(
+        db, account, since=trading_halt.last_release_time(db, lock_scope, "peak_drawdown_limit")
+    )
+    consecutive_losses = _consecutive_losses(
+        db,
+        account,
+        since=trading_halt.last_release_time(db, lock_scope, "consecutive_loss_limit"),
+    )
     minutes_since_last_order = _minutes_since_last_order(db, bot.id, now)
     # Matches the original code's query count exactly: `_open_position` was only
     # ever queried a second time (on top of `_existing_open_risk`'s own internal

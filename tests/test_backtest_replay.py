@@ -640,3 +640,94 @@ def test_a_trailing_stop_never_moves_down(monkeypatch: pytest.MonkeyPatch) -> No
         candles, monkeypatch, stop_monitor=None, exit_policy="trailing_stop"
     ).trades
     assert trade.exit_price == Decimal("97")
+
+
+# ---- lock_release_days (docs/plans/lock-halts.md) ----
+
+
+def _losing_round_trips(count: int) -> list[Candle]:
+    """`count` minute bars of a steadily falling price: a buy every 40 bars and the closing
+    sell 20 bars later, each round trip a small loss."""
+    return [_candle(Decimal(100_000) - Decimal(i), i) for i in range(count)]
+
+
+def _buy_then_sell_every_40_minutes(history: Sequence[Candle]) -> str:
+    start = datetime(2026, 9, 21, 0, 0, tzinfo=UTC)
+    minute = int((history[-1].open_time - start).total_seconds() // 60)
+    return {0: "buy", 20: "sell"}.get(minute % 40, "hold")
+
+
+def _replay_losing(days: int | None, bars: int = 4000) -> replay.ReplayResult:
+    return replay.run_replay(
+        _losing_round_trips(bars),
+        instrument=_instrument(symbol="BTCUSDT", price_scale=2, quantity_scale=6),
+        timeframe="1m",
+        exchange_code="binance",
+        rules=gate.CONSERVATIVE_V1_RULES,
+        initial_equity=Decimal(1_000_000),
+        signal_generator=_buy_then_sell_every_40_minutes,
+        lock_release_days=days,
+    )
+
+
+def test_without_a_release_the_first_losing_streak_ends_the_trading() -> None:
+    result = _replay_losing(None)
+
+    assert len(result.trades) == 4  # the fourth loss is past the limit of three
+    assert all(trade.realized_pnl < 0 for trade in result.trades)
+
+
+def test_a_release_after_the_lock_lets_the_trading_resume() -> None:
+    locked = _replay_losing(None)
+    released = _replay_losing(1)  # the lock is released after a day: 1,440 bars
+
+    assert len(released.trades) > len(locked.trades)
+    resumed = [t for t in released.trades if t.entry_time > locked.trades[-1].exit_time]
+    assert resumed  # trades after the first lock
+
+
+def test_the_release_waits_for_the_period_to_pass() -> None:
+    """Locked at about bar 160 (the fourth loss); a 3-day wait is not over within the 4,000
+    bars (2.8 days) of the series."""
+    assert len(_replay_losing(3).trades) == len(_replay_losing(None).trades)
+
+
+def test_the_monthly_release_resets_the_streak_and_the_peak() -> None:
+    state = replay._ReplayState(cash_equity=Decimal(1_000_000))
+    state.consecutive_losses = 4
+    state.peak_equity = Decimal(1_100_000)
+    start = datetime(2026, 9, 1, tzinfo=UTC)
+    equity = Decimal(1_000_000)
+    after = timedelta(days=30)
+
+    replay._release_expired_lock(state, gate.CONSERVATIVE_V1_RULES, start, equity, after)
+    assert state.lock_since == start  # noticed
+    replay._release_expired_lock(
+        state, gate.CONSERVATIVE_V1_RULES, start + timedelta(days=29), equity, after
+    )
+    assert state.consecutive_losses == 4  # not yet
+
+    replay._release_expired_lock(
+        state, gate.CONSERVATIVE_V1_RULES, start + timedelta(days=30), equity, after
+    )
+
+    assert state.consecutive_losses == 0
+    assert state.peak_equity == equity  # the drawdown is measured from here
+    assert state.lock_since is None
+
+
+def test_a_recovery_before_the_release_clears_the_lock_timer() -> None:
+    state = replay._ReplayState(cash_equity=Decimal(1_000_000))
+    state.peak_equity = Decimal(1_100_000)
+    start = datetime(2026, 9, 1, tzinfo=UTC)
+    after = timedelta(days=30)
+
+    replay._release_expired_lock(
+        state, gate.CONSERVATIVE_V1_RULES, start, Decimal(1_000_000), after
+    )
+    assert state.lock_since == start  # 9% below the peak: locked
+    replay._release_expired_lock(
+        state, gate.CONSERVATIVE_V1_RULES, start + timedelta(days=5), Decimal(1_099_000), after
+    )
+
+    assert state.lock_since is None

@@ -30,6 +30,10 @@ from app.trading.application.live_strategies import resolve_live_strategy
 from app.trading.application.paper_provisioning import ensure_approved_versions
 
 _CODE_VERSION = "approved-strategy-0.1"
+LOCK_RELEASE_DAYS = 30
+"""A run made through the API assumes the monthly review that releases a lock
+(docs/plans/lock-halts.md); without it a run stops trading after the first losing
+streak or drawdown past its limit, and a multi-year range shows two flat years."""
 """Recorded on each `BacktestRun`. Runs stored as "dummy-pipeline-0.1" were
 computed with the SMA pipeline skeleton before 2026-10-02."""
 
@@ -214,6 +218,7 @@ def run_backtest_for_workspace(
             signal_generator=strategy.generate,
             exit_policy=strategy.exit_policy,
             train_ratio=train_ratio,
+            lock_release_days=LOCK_RELEASE_DAYS,
         )
         db.commit()
         return [train_run, test_run]
@@ -234,6 +239,7 @@ def run_backtest_for_workspace(
         spread=spread,
         signal_generator=strategy.generate,
         exit_policy=strategy.exit_policy,
+        lock_release_days=LOCK_RELEASE_DAYS,
     )
     db.commit()
     return [run]

@@ -46,6 +46,14 @@ def _instrument(**overrides: object) -> Instrument:
 # ---- evaluate_bot_on_latest_bar ----
 
 
+@pytest.fixture(autouse=True)
+def _no_lock_sync(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The lock halts' own checks are in tests/test_risk_locks.py; here they are not under test."""
+    from app.trading.application import risk_locks
+
+    monkeypatch.setattr(risk_locks, "sync_lock_halts", lambda *args, **kwargs: [])
+
+
 def _bot(**overrides: object) -> TradingBot:
     defaults: dict[str, object] = dict(
         id=uuid4(),
@@ -165,6 +173,7 @@ def _evaluate_with(definition: object, candles: list[Candle]) -> tuple[MagicMock
             id=uuid4(), workspace_id=bot.workspace_id, mode="paper", base_currency="JPY"
         ),
         _instrument(id=bot.instrument_id),
+        RiskProfileVersion(id=bot.risk_profile_version_id),
         StrategyVersion(id=bot.strategy_version_id, definition=definition),
     ]
     # db.scalar call order: _exchange_code_for_connection, already-processed guard,
@@ -335,6 +344,7 @@ def test_a_reached_stop_closes_the_whole_position_at_the_stop_before_the_signal(
             id=uuid4(), workspace_id=bot.workspace_id, mode="paper", base_currency="JPY"
         ),
         _instrument(id=bot.instrument_id),
+        RiskProfileVersion(id=bot.risk_profile_version_id),
         StrategyVersion(id=bot.strategy_version_id, definition=_DONCHIAN_STOP),
     ]
     # _exchange_code_for_connection, already-processed guard, the stop check's position.
@@ -398,6 +408,7 @@ def _enter_long(
             id=uuid4(), workspace_id=bot.workspace_id, mode="paper", base_currency="JPY"
         ),
         _instrument(id=bot.instrument_id),
+        RiskProfileVersion(id=bot.risk_profile_version_id),
         StrategyVersion(id=bot.strategy_version_id, definition=definition),
         RiskProfileVersion(id=bot.risk_profile_version_id),
     ]
@@ -501,6 +512,7 @@ def test_an_entry_blocked_by_an_active_halt_is_an_outcome_not_an_error(
             id=uuid4(), workspace_id=bot.workspace_id, mode="paper", base_currency="JPY"
         ),
         _instrument(id=bot.instrument_id),
+        RiskProfileVersion(id=bot.risk_profile_version_id),
         StrategyVersion(id=bot.strategy_version_id, definition=_DONCHIAN_STOP),
         RiskProfileVersion(id=bot.risk_profile_version_id),
     ]
@@ -515,3 +527,57 @@ def test_an_entry_blocked_by_an_active_halt_is_an_outcome_not_an_error(
     place.assert_not_called()
     db.commit.assert_called_once_with()  # the signal and the decision are kept
     db.rollback.assert_not_called()
+
+
+def test_the_locks_are_synced_once_per_new_bar_with_the_bots_risk_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.trading.application import risk_locks
+
+    seen = []
+    monkeypatch.setattr(
+        risk_locks,
+        "sync_lock_halts",
+        lambda db, bot, account, instrument, profile: seen.append(profile),
+    )
+
+    db, bot, result = _evaluate_with(_DONCHIAN_STOP, _flat_candles(3))
+
+    assert result["action"] == "hold"
+    (profile,) = seen
+    assert profile.id == bot.risk_profile_version_id
+
+
+def test_a_bar_already_evaluated_does_not_sync_the_locks_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.trading.application import risk_locks
+
+    seen = []
+    monkeypatch.setattr(risk_locks, "sync_lock_halts", lambda *args: seen.append(args))
+    db = MagicMock()
+    bot = _bot()
+    candle = _candle(instrument_id=bot.instrument_id, timeframe=bot.timeframe)
+    db.get.side_effect = [
+        TradingAccount(
+            id=uuid4(), workspace_id=bot.workspace_id, mode="paper", base_currency="JPY"
+        ),
+        _instrument(id=bot.instrument_id),
+    ]
+    existing_signal = Signal(
+        id=uuid4(),
+        workspace_id=bot.workspace_id,
+        bot_run_id=uuid4(),
+        candle_id=candle.id,
+        strategy_version_id=bot.strategy_version_id,
+        action="hold",
+        rationale={},
+        input_checksum="x",
+    )
+    db.scalar.side_effect = ["binance", existing_signal]
+    db.scalars.return_value = [candle]
+
+    result = evaluate_bot_on_latest_bar(db, bot, _bot_run(bot_id=bot.id))
+
+    assert result["action"] == "already_processed"
+    assert seen == []

@@ -187,6 +187,33 @@ class _ReplayState:
     trades: list[TradeRecord] = field(default_factory=list)
     equity_curve: list[tuple[datetime, Decimal]] = field(default_factory=list)
     next_sequence_no: int = 1
+    lock_since: datetime | None = None
+    """When a lock limit was first found crossed (see `lock_release_days`)."""
+
+
+def _release_expired_lock(
+    state: _ReplayState,
+    rules: dict,
+    now: datetime,
+    equity: Decimal,
+    release_after: timedelta,
+) -> None:
+    """One bar of `lock_release_days`: note when a lock limit is first crossed, and once it
+    has been crossed for `release_after`, start both measures over."""
+    streak_locked = state.consecutive_losses > int(rules["consecutive_loss_limit"])
+    drawdown_locked = state.peak_equity > 0 and (
+        state.peak_equity - equity
+    ) / state.peak_equity > risk_gate._decimal(rules, "peak_drawdown_limit")
+    if not (streak_locked or drawdown_locked):
+        state.lock_since = None
+        return
+    if state.lock_since is None:
+        state.lock_since = now
+        return
+    if now - state.lock_since >= release_after:
+        state.consecutive_losses = 0
+        state.peak_equity = equity
+        state.lock_since = None
 
 
 def _market_value(position: fill_sim.BacktestPosition | None, price: Decimal) -> Decimal:
@@ -363,6 +390,7 @@ def run_replay(
     exit_policy: ExitPolicy = "signal",
     stop_slippage: Decimal = Decimal(0),
     stop_monitor: Mapping[datetime, Sequence[MonitorBar]] | None = None,
+    lock_release_days: int | None = None,
 ) -> ReplayResult:
     """Replay `candles` (ascending by `open_time`, final bars only -- the caller is
     responsible for that, matching `_recent_final_candles`'s live-path filter) bar by
@@ -387,6 +415,13 @@ def run_replay(
     (see `_protective_exit`). Adding to a position keeps the original levels.
     The default `signal` keeps existing callers (the backtest API) on the
     signal-only exit behaviour.
+
+    `lock_release_days` models the monthly review that releases the two locks which
+    would otherwise last for good (`risk_locks`): once the losing streak or the
+    peak drawdown has been past its limit for that many days, both are counted
+    from scratch -- the streak is 0 and the peak is the current equity -- as an
+    Owner's release does live. `None` (the default) never releases: a single run
+    then stops trading for the rest of the period after the first lock.
 
     `stop_slippage` fills a triggered stop that fraction worse than its level
     (see `_slipped_stop_price`); the default 0 fills exactly at the stop, which
@@ -449,6 +484,10 @@ def run_replay(
         mark_to_market_equity = state.cash_equity + _market_value(state.position, candle.close)
         state.equity_curve.append((now, mark_to_market_equity))
         state.peak_equity = max(state.peak_equity, mark_to_market_equity)
+        if lock_release_days is not None:
+            _release_expired_lock(
+                state, rules, now, mark_to_market_equity, timedelta(days=lock_release_days)
+            )
 
         today = now.date()
         if state.day_start_date != today:
