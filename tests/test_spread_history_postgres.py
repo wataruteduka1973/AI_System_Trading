@@ -95,17 +95,18 @@ def _history(engine, instrument_id):
 
 def test_observations_inside_the_window_are_not_stored_again(engine, instrument_id):
     _record(engine, instrument_id, START)
-    _record(engine, instrument_id, START + timedelta(seconds=10), ask="102")
-    _record(engine, instrument_id, START + timedelta(seconds=29), ask="103")
-    _record(engine, instrument_id, START + timedelta(seconds=30), ask="104")
-    _record(engine, instrument_id, START + timedelta(seconds=75), ask="105")
+    _record(engine, instrument_id, START + timedelta(seconds=30), ask="102")
+    _record(engine, instrument_id, START + timedelta(seconds=299), ask="103")
+    _record(engine, instrument_id, START + timedelta(seconds=300), ask="104")
+    _record(engine, instrument_id, START + timedelta(seconds=330), ask="106")
+    _record(engine, instrument_id, START + timedelta(seconds=700), ask="105")
 
     rows = _history(engine, instrument_id)
 
     assert [r.observed_at for r in rows] == [
         START,
-        START + timedelta(seconds=30),
-        START + timedelta(seconds=75),
+        START + timedelta(seconds=300),
+        START + timedelta(seconds=700),
     ]
     assert [r.ask for r in rows] == [Decimal(101), Decimal(104), Decimal(105)]
 

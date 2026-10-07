@@ -33,7 +33,7 @@ def _record(db: MagicMock) -> None:
     )
 
 
-def test_the_history_append_is_sampled_by_a_thirty_second_window() -> None:
+def test_the_history_append_is_sampled_by_a_five_minute_window() -> None:
     db = MagicMock()
     _record(db)
 
@@ -41,7 +41,7 @@ def test_the_history_append_is_sampled_by_a_thirty_second_window() -> None:
     sql = str(history_statement)
     assert "fx.instrument_spread_history" in sql
     assert "NOT EXISTS" in sql  # skipped when a row is already inside the window
-    assert params["seconds"] == 30
+    assert params["seconds"] == 300
     assert params["source"] == "oanda_practice"
 
 

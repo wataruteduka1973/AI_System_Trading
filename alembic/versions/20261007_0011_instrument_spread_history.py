@@ -4,11 +4,12 @@
 use one spread for a whole run (ADR 0003's known approximation). No public source serves
 past order-book quotes, so the only way to have a real spread for a past period is to
 store the observations as they arrive. This table is that record: an append-only,
-sampled series (at most one row per instrument per 30 seconds -- see
-`app/market_data/application/spread_tracking.py`), written next to the latest-value upsert.
+sampled series (at most one row per instrument per interval -- 30 seconds when this was
+written, 5 minutes since 2026-10-07; see `app/market_data/application/spread_tracking.py`),
+written next to the latest-value upsert.
 
 Primary key (instrument_id, observed_at): ordered lookups by instrument and time need no
-extra index. Rows are not pruned; at one row per 30 s a symbol adds ~2,900 rows a day.
+extra index. Rows are not pruned.
 Adding a new table loses no data.
 """
 
