@@ -1,12 +1,22 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, renderHook, screen } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import type { WorkspaceInstrument } from '../instruments/types'
 import BacktestPanel, { BacktestForm } from './BacktestPanel'
-import type { BacktestRun, BacktestTrade } from './types'
+import type { BacktestRun, BacktestRunDetail, BacktestTrade, EquityCurve } from './types'
+import { useBacktests } from './useBacktests'
 
-afterEach(cleanup)
+vi.mock('./EquityCurveChart', () => ({
+  default: ({ curve }: { curve: EquityCurve }) => (
+    <div data-testid="equity-curve">{curve.points.map((point) => point.equity).join(',')}</div>
+  ),
+}))
+
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
 
 const noop = () => undefined
 
@@ -56,6 +66,20 @@ const trade = (overrides: Partial<BacktestTrade> = {}): BacktestTrade => ({
   ...overrides,
 })
 
+const curve = (): EquityCurve => ({
+  initial_equity: '1000',
+  points: [
+    { time: '2026-01-01T00:00:00Z', equity: '1000' },
+    { time: '2026-03-01T00:00:00Z', equity: '1060' },
+  ],
+})
+
+const detail = (trades: BacktestTrade[], equityCurve: EquityCurve = curve()): BacktestRunDetail => ({
+  runId: 'run-1',
+  trades,
+  equityCurve,
+})
+
 const instrument = (id: string, symbol: string): WorkspaceInstrument => ({
   id,
   exchange_code: 'binance',
@@ -76,8 +100,8 @@ it('shows rates as percentages and labels walk-forward windows', () => {
     <BacktestPanel
       visible
       backtests={[run({ parameters: { timeframe: '4h', walk_forward_role: 'test' } })]}
-      selectedRunTrades={null}
-      onViewTrades={noop}
+      selectedRunDetail={null}
+      onViewDetail={noop}
     />,
   )
 
@@ -87,21 +111,21 @@ it('shows rates as percentages and labels walk-forward windows', () => {
   expect(screen.getByText('検証期間')).toBeInTheDocument()
 })
 
-it('says so when a run has no metrics, and opens its trades on request', () => {
-  const onViewTrades = vi.fn()
+it('says so when a run has no metrics, and opens its detail on request', () => {
+  const onViewDetail = vi.fn()
   render(
     <BacktestPanel
       visible
       backtests={[run({ status: 'failed', summary_metrics: {} })]}
-      selectedRunTrades={null}
-      onViewTrades={onViewTrades}
+      selectedRunDetail={null}
+      onViewDetail={onViewDetail}
     />,
   )
 
   expect(screen.getByText('指標なし')).toBeInTheDocument()
   expect(screen.getByText('失敗')).toBeInTheDocument()
-  fireEvent.click(screen.getByRole('button', { name: '取引を見る' }))
-  expect(onViewTrades).toHaveBeenCalledWith(expect.objectContaining({ id: 'run-1' }))
+  fireEvent.click(screen.getByRole('button', { name: '詳細を見る' }))
+  expect(onViewDetail).toHaveBeenCalledWith(expect.objectContaining({ id: 'run-1' }))
 })
 
 it('lists trades, marking a position still open at the end of the range', () => {
@@ -109,11 +133,11 @@ it('lists trades, marking a position still open at the end of the range', () => 
     <BacktestPanel
       visible
       backtests={[]}
-      selectedRunTrades={{
-        runId: 'run-1',
-        trades: [trade(), trade({ id: 't2', sequence_no: 2, exit_price: null, realized_pnl: null })],
-      }}
-      onViewTrades={noop}
+      selectedRunDetail={detail([
+        trade(),
+        trade({ id: 't2', sequence_no: 2, exit_price: null, realized_pnl: null }),
+      ])}
+      onViewDetail={noop}
     />,
   )
 
@@ -127,8 +151,8 @@ it('says so when a run had no trades', () => {
     <BacktestPanel
       visible
       backtests={[]}
-      selectedRunTrades={{ runId: 'run-1', trades: [] }}
-      onViewTrades={noop}
+      selectedRunDetail={detail([])}
+      onViewDetail={noop}
     />,
   )
 
@@ -191,4 +215,145 @@ it('asks for the training share only for a walk-forward run', () => {
   cleanup()
   renderForm({ walkForward: true })
   expect(screen.getByLabelText('訓練期間の割合')).toHaveValue('0.7')
+})
+
+
+it('shows the picked run with every metric, the return on the starting equity and the curve', () => {
+  render(
+    <BacktestPanel
+      visible
+      backtests={[run({ parameters: { timeframe: '4h', initial_equity: '1000', spread: '0' } })]}
+      selectedRunDetail={detail([trade()])}
+      onViewDetail={noop}
+    />,
+  )
+
+  expect(screen.getByText('実行の詳細')).toBeInTheDocument()
+  expect(screen.getByText('+60')).toBeInTheDocument() // 純損益
+  expect(screen.getByText('6.0%')).toBeInTheDocument() // 60 on 1000
+  expect(screen.getByText('5.8%(58,000)')).toBeInTheDocument()
+  expect(screen.getByText('プロフィットファクター').nextSibling).toHaveTextContent('2')
+  expect(screen.getByText('手数料合計').nextSibling).toHaveTextContent('4')
+  expect(screen.getByText('5勝5敗', { exact: false })).toBeInTheDocument()
+  expect(screen.getByTestId('equity-curve')).toHaveTextContent('1000,1060')
+  expect(screen.getByText('期間', { exact: false })).toHaveTextContent('2026/1/1')
+})
+
+it('does not invent a profit factor when no trade lost', () => {
+  const base = run({ parameters: { initial_equity: '1000' } })
+  const metrics = { ...base.summary_metrics.metrics!, profit_factor: null }
+  render(
+    <BacktestPanel
+      visible
+      backtests={[{ ...base, summary_metrics: { metrics } }]}
+      selectedRunDetail={detail([])}
+      onViewDetail={noop}
+    />,
+  )
+
+  expect(screen.getByText('プロフィットファクター').nextSibling).toHaveTextContent('算出不可(負け無し)')
+})
+
+it('rounds the exact Decimal strings the API sends', () => {
+  const base = run({ parameters: { initial_equity: '1000000' } })
+  const metrics = {
+    ...base.summary_metrics.metrics!,
+    net_pnl: '112452.5412724390215028812109',
+    profit_factor: '0E+26',
+    gross_profit: '0',
+    gross_loss: '14.40904431000000000000000000',
+    total_fees: '3.954768310000000000000000000',
+  }
+  render(
+    <BacktestPanel
+      visible
+      backtests={[{ ...base, summary_metrics: { metrics } }]}
+      selectedRunDetail={detail([])}
+      onViewDetail={noop}
+    />,
+  )
+
+  expect(screen.getByText('純損益').nextSibling).toHaveTextContent('+112,452.54')
+  expect(screen.getByText('プロフィットファクター').nextSibling).toHaveTextContent(/^0$/)
+  expect(screen.getByText('総利益 / 総損失').nextSibling).toHaveTextContent('0 / 14.41')
+  expect(screen.getByText('手数料合計').nextSibling).toHaveTextContent(/^3\.95$/)
+})
+
+it('compares with the baseline when the run has one', () => {
+  const base = run({ parameters: { initial_equity: '1000' } })
+  const withBaseline: BacktestRun = {
+    ...base,
+    summary_metrics: {
+      ...base.summary_metrics,
+      baseline_comparison: {
+        baseline: base.summary_metrics.metrics!,
+        net_pnl_diff: '25',
+        win_rate_diff: '0.1',
+        max_drawdown_pct_diff: '-0.02',
+        profit_factor_diff: null,
+      },
+    },
+  }
+  render(
+    <BacktestPanel
+      visible
+      backtests={[withBaseline]}
+      selectedRunDetail={detail([])}
+      onViewDetail={noop}
+    />,
+  )
+
+  expect(screen.getByText('基準(baseline)との差', { exact: false })).toHaveTextContent(
+    '純損益 +25 / 勝率 +10pt / 最大DD -2pt',
+  )
+})
+
+it('shows a run without a stored curve, and leaves the return blank when the start is unknown', () => {
+  render(
+    <BacktestPanel
+      visible
+      backtests={[run()]}
+      selectedRunDetail={detail([], { initial_equity: null, points: [] })}
+      onViewDetail={noop}
+    />,
+  )
+
+  expect(screen.getByText('リターン').nextSibling).toHaveTextContent('-')
+  expect(screen.getByTestId('equity-curve')).toBeEmptyDOMElement()
+})
+
+it('loads a run’s trades and equity curve together', async () => {
+  const fetchMock = vi.fn<typeof fetch>(async (input) => {
+    const url = String(input)
+    if (url.endsWith('/trades')) return new Response(JSON.stringify([trade()]), { status: 200 })
+    if (url.endsWith('/equity-curve')) return new Response(JSON.stringify(curve()), { status: 200 })
+    return new Response('[]', { status: 200 })
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  const { result } = renderHook(() => useBacktests('ws-1'))
+
+  await act(async () => {
+    await result.current.loadRunDetail(run())
+  })
+
+  expect(result.current.selectedRunDetail?.runId).toBe('run-1')
+  expect(result.current.selectedRunDetail?.trades).toHaveLength(1)
+  expect(result.current.selectedRunDetail?.equityCurve.points).toHaveLength(2)
+})
+
+it('still shows the trades when the curve cannot be fetched', async () => {
+  const fetchMock = vi.fn<typeof fetch>(async (input) =>
+    String(input).endsWith('/equity-curve')
+      ? new Response('{}', { status: 500 })
+      : new Response(JSON.stringify([trade()]), { status: 200 }),
+  )
+  vi.stubGlobal('fetch', fetchMock)
+  const { result } = renderHook(() => useBacktests('ws-1'))
+
+  await act(async () => {
+    await result.current.loadRunDetail(run())
+  })
+
+  expect(result.current.selectedRunDetail?.trades).toHaveLength(1)
+  expect(result.current.selectedRunDetail?.equityCurve).toEqual({ initial_equity: null, points: [] })
 })

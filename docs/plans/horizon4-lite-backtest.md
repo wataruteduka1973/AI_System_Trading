@@ -144,3 +144,21 @@ TradingAccountを許容するmigrationを追加する等)を検討すべきか�
 
 `docs/quality/definition-of-done.md`に従う。各Unit完了時にFormatter/Linter/
 TypeChecker/Unit Testを実行し成功を確認する。
+
+## 2026-10-07 追記: 資産曲線の保存と実行詳細の画面
+
+Horizon 4(フル版)の「BacktestのUI拡張」の最初の単位。
+
+- 実行ごとの資産曲線を `backtest_run.summary_metrics.equity_curve` に保存する(新しいテーブルやmigrationはなし)。
+  1分足の1年分は約50万本あるので、最大400点に間引く。区間ごとの最高値・最低値を残すため、ドローダウンの谷や山は消えない
+  (`backtest_metrics.downsample_equity_curve`)。
+- 実行一覧・詳細のAPIは曲線を含めない(一覧が重くならないように)。曲線は
+  `GET /workspaces/{id}/backtests/{run_id}/equity-curve` で取る。曲線を保存する前に実行したものは、点が空の応答になり、
+  画面は「保存されていません」と出す。
+- 画面(`/workspaces/:id/backtests`): 実行の「詳細を見る」で、時間足・開始時の資産・期間、指標(純損益、リターン、
+  最大DD、プロフィットファクター、勝率、総利益/総損失、手数料、取引数)、baselineとの差、資産曲線、取引一覧を出す。
+  Decimalの正確な文字列(`0E+26`、18桁)は小数2桁までに丸めて表示する。
+
+既知の制約: 単一の連続した実行は、連敗ロック・DDロックがかかると、それ以降は取引しない(ロックの解除は
+`rolling-walk-forward.md`の「30日ごとの窓」でだけ模している)。長い期間を1回で実行すると、曲線の後半が
+平らになることがある。BTCUSDT 4h 2024-01〜2026-09 の実行では、取引10件がすべて2024年内で、以降は平らだった。

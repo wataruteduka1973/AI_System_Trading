@@ -1,6 +1,7 @@
 import type { WorkspaceInstrument } from '../instruments/types'
 import type { Timeframe } from '../market-data/types'
-import type { BacktestRun, BacktestTrade } from './types'
+import EquityCurveChart from './EquityCurveChart'
+import type { BacktestMetrics, BacktestRun, BacktestRunDetail } from './types'
 
 const statusLabel: Record<string, string> = {
   queued: 'キュー待ち',
@@ -25,20 +26,80 @@ function formatPercent(value: string): string {
   return Number.isFinite(parsed) ? `${(parsed * 100).toFixed(1)}%` : value
 }
 
+/** The API sends Decimals as exact strings ("0E+26", 18 decimals); show at most 2. */
+function formatNumber(value: string): string {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed.toLocaleString('ja-JP', { maximumFractionDigits: 2 }) : value
+}
+
+function formatSigned(value: string): string {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return value
+  return `${parsed > 0 ? '+' : ''}${formatNumber(value)}`
+}
+
+function formatDate(value: string): string {
+  return new Date(value).toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo' })
+}
+
+/** Net P&L as a share of the starting equity, or null when either is unknown or zero. */
+function returnRate(netPnl: string, initialEquity: string | null | undefined): string | null {
+  const pnl = Number(netPnl)
+  const start = Number(initialEquity)
+  if (!initialEquity || !Number.isFinite(pnl) || !Number.isFinite(start) || start === 0) return null
+  return formatPercent(String(pnl / start))
+}
+
+function MetricsGrid({
+  metrics,
+  initialEquity,
+}: {
+  metrics: BacktestMetrics
+  initialEquity: string | null | undefined
+}) {
+  const rate = returnRate(metrics.net_pnl, initialEquity)
+  const rows: [string, string][] = [
+    ['純損益', formatSigned(metrics.net_pnl)],
+    ['リターン', rate ?? '-'],
+    ['最大DD', `${formatPercent(metrics.max_drawdown_pct)}(${formatNumber(metrics.max_drawdown)})`],
+    ['プロフィットファクター', metrics.profit_factor === null ? '算出不可(負け無し)' : formatNumber(metrics.profit_factor)],
+    ['勝率', `${formatPercent(metrics.win_rate)}(${metrics.win_count}勝${metrics.loss_count}敗)`],
+    ['総利益 / 総損失', `${formatNumber(metrics.gross_profit)} / ${formatNumber(metrics.gross_loss)}`],
+    ['手数料合計', formatNumber(metrics.total_fees)],
+    ['取引数', String(metrics.trade_count)],
+  ]
+  return (
+    <dl className="metric-grid">
+      {rows.map(([label, value]) => (
+        <div key={label}>
+          <dt>{label}</dt>
+          <dd>{value}</dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+
 /** Rendered inside the shared workspace-panel section, mirroring
  * ConnectionsPanel/TradingPanel's placement convention. */
 export default function BacktestPanel({
   visible,
   backtests,
-  selectedRunTrades,
-  onViewTrades,
+  selectedRunDetail,
+  onViewDetail,
 }: {
   visible: boolean
   backtests: BacktestRun[]
-  selectedRunTrades: { runId: string; trades: BacktestTrade[] } | null
-  onViewTrades: (run: BacktestRun) => void
+  selectedRunDetail: BacktestRunDetail | null
+  onViewDetail: (run: BacktestRun) => void
 }) {
   if (!visible) return null
+  const selectedRun = backtests.find((run) => run.id === selectedRunDetail?.runId)
+  const selectedMetrics = selectedRun?.summary_metrics.metrics
+  const baseline = selectedRun?.summary_metrics.baseline_comparison
+  const curve = selectedRunDetail?.equityCurve
+  const initialEquity =
+    curve?.initial_equity ?? (selectedRun?.parameters.initial_equity as string | undefined)
   return (
     <>
       {backtests.length > 0 && (
@@ -63,22 +124,45 @@ export default function BacktestPanel({
                 ) : (
                   <span>指標なし</span>
                 )}
-                <button type="button" onClick={() => onViewTrades(run)}>
-                  取引を見る
+                <button type="button" onClick={() => onViewDetail(run)}>
+                  詳細を見る
                 </button>
               </li>
             )
           })}
         </ul>
       )}
-      {selectedRunTrades && (
+      {selectedRunDetail && (
         <div className="account-selection">
-          <h3>取引一覧({selectedRunTrades.trades.length}件)</h3>
-          {selectedRunTrades.trades.length === 0 ? (
+          <h3>実行の詳細</h3>
+          {selectedRun && (
+            <p className="panel-description">
+              時間足 {String(selectedRun.parameters.timeframe ?? '-')} / 開始時の資産{' '}
+              {initialEquity ? formatNumber(initialEquity) : '-'}
+              {' / '}売買差 {String(selectedRun.parameters.spread ?? '-')}
+              {curve && curve.points.length > 0 && (
+                <>
+                  {' / '}期間 {formatDate(curve.points[0].time)} 〜{' '}
+                  {formatDate(curve.points[curve.points.length - 1].time)}
+                </>
+              )}
+            </p>
+          )}
+          {selectedMetrics && <MetricsGrid metrics={selectedMetrics} initialEquity={initialEquity} />}
+          {baseline && (
+            <p className="panel-description">
+              基準(baseline)との差: 純損益 {formatSigned(baseline.net_pnl_diff)} / 勝率{' '}
+              {formatSigned(String(Number(baseline.win_rate_diff) * 100))}pt / 最大DD{' '}
+              {formatSigned(String(Number(baseline.max_drawdown_pct_diff) * 100))}pt
+            </p>
+          )}
+          {curve && <EquityCurveChart curve={curve} />}
+          <h3>取引一覧({selectedRunDetail.trades.length}件)</h3>
+          {selectedRunDetail.trades.length === 0 ? (
             <p className="panel-description">この実行では取引が発生しませんでした。</p>
           ) : (
             <ul className="account-list">
-              {selectedRunTrades.trades.map((trade) => (
+              {selectedRunDetail.trades.map((trade) => (
                 <li key={trade.id}>
                   <strong>#{trade.sequence_no}</strong>
                   <span>{trade.side}</span>

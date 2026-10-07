@@ -567,3 +567,30 @@ button:hover {
     grid-template-columns: 1fr;
   }
 }
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.metric-grid div {
+  padding: 8px 10px;
+  border: 1px solid #263851;
+  border-radius: 8px;
+}
+
+.metric-grid dt {
+  color: #8aa0b8;
+  font-size: 0.8rem;
+}
+
+.metric-grid dd {
+  margin: 2px 0 0;
+  font-weight: 600;
+}
+
+.equity-curve-chart {
+  margin: 12px 0;
+}

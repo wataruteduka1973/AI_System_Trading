@@ -20,6 +20,7 @@ deferred remains out of scope here too (explicit user decision, 2026-09-26 --
 "公開運用・複数戦略運用が具体化した時点で改めて着手する").
 """
 
+from decimal import Decimal
 from typing import Annotated
 from uuid import UUID
 
@@ -38,8 +39,10 @@ from app.models.workspace import AppUser
 from app.schemas.backtests import (
     BacktestCreate,
     BacktestCreateResponse,
+    BacktestEquityCurveRead,
     BacktestRunRead,
     BacktestTradeRead,
+    EquityPoint,
 )
 from app.schemas.instruments import WorkspaceInstrumentRead
 from app.security.rbac import require_operator_role, require_viewer_role
@@ -169,6 +172,24 @@ def get_backtest(
     workspace_id: UUID, backtest_run_id: UUID, db: DatabaseSession, _viewer: Viewer
 ) -> BacktestRun:
     return _get_backtest_run(db, workspace_id, backtest_run_id)
+
+
+@router.get(
+    "/workspaces/{workspace_id}/backtests/{backtest_run_id}/equity-curve",
+    response_model=BacktestEquityCurveRead,
+    tags=["backtests"],
+)
+def get_backtest_equity_curve(
+    workspace_id: UUID, backtest_run_id: UUID, db: DatabaseSession, _viewer: Viewer
+) -> BacktestEquityCurveRead:
+    run = _get_backtest_run(db, workspace_id, backtest_run_id)
+    stored = run.summary_metrics.get("equity_curve")
+    raw_points = stored if isinstance(stored, list) else []
+    initial_equity = run.parameters.get("initial_equity")
+    return BacktestEquityCurveRead(
+        initial_equity=Decimal(str(initial_equity)) if initial_equity is not None else None,
+        points=[EquityPoint(time=time, equity=equity) for time, equity in raw_points],
+    )
 
 
 @router.get(
