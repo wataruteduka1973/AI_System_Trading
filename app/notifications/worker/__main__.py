@@ -33,6 +33,7 @@ from app.notifications.adapters.in_app import InAppNotificationAdapter
 from app.notifications.adapters.smtp import SmtpConfig, SmtpNotificationAdapter
 from app.notifications.application.deliver_notifications import deliver_pending_notifications
 from app.notifications.application.recipients import workspace_member_recipients
+from app.trading.application.ledger_check import check_ledger_reconciliation
 from app.trading.application.worker_watchdog import check_trading_worker
 
 logger = logging.getLogger(__name__)
@@ -91,12 +92,29 @@ def _run_watchdog() -> None:
             logger.warning("notification.worker: %s watchdog failed (%s)", name, type(exc).__name__)
 
 
+_RECONCILIATION_INTERVAL_SECONDS = 300.0
+
+
+def _run_reconciliation() -> None:
+    try:
+        with SessionLocal() as db:
+            halted = check_ledger_reconciliation(db)
+        if halted:
+            logger.warning("notification.worker: ledger mismatch halted %d account(s)", halted)
+    except Exception as exc:
+        logger.warning("notification.worker: reconciliation failed (%s)", type(exc).__name__)
+
+
 async def _run(adapters: dict[str, NotificationAdapter], stop: asyncio.Event) -> None:
     next_watchdog = 0.0
+    next_reconciliation = 0.0
     while not stop.is_set():
         if time.monotonic() >= next_watchdog:
             _run_watchdog()
             next_watchdog = time.monotonic() + _WATCHDOG_INTERVAL_SECONDS
+        if time.monotonic() >= next_reconciliation:
+            _run_reconciliation()
+            next_reconciliation = time.monotonic() + _RECONCILIATION_INTERVAL_SECONDS
         try:
             with SessionLocal() as db:
                 processed = deliver_pending_notifications(

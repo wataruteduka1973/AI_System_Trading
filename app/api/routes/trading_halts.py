@@ -29,6 +29,7 @@ from app.models.strategy import TradingHalt
 from app.models.workspace import AppUser
 from app.schemas.trading_halts import TradingHaltRead
 from app.security.rbac import require_owner_role, require_viewer_role
+from app.trading.application import ledger_check, ledger_reconciliation
 from app.trading.application import trading_halt as trading_halt_app
 from app.trading.application.risk_locks import LOCK_REASONS
 
@@ -118,6 +119,17 @@ def emergency_release_trading_halt(
     owner: Owner,
 ) -> TradingHalt:
     halt = _get_halt(db, workspace_id, halt_id)
+    if halt.reason_code == ledger_check.REASON_CODE and halt.scope_id is not None:
+        # 「照合完了＋Owner承認」: the Owner approves a reconciled ledger, not a broken one.
+        findings = ledger_reconciliation.reconcile_account(db, halt.scope_id)
+        if findings:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"台帳の不整合が解消されていないため解除できません"
+                    f"({ledger_check.findings_summary(findings)})"
+                ),
+            )
     try:
         updated = trading_halt_app.release_emergency_stop(
             db, halt, released_by=owner.id, now=datetime.now(UTC)
