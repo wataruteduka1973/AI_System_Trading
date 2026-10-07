@@ -17,7 +17,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.backtest import BacktestRun, DatasetSnapshot
@@ -84,6 +84,26 @@ def load_final_candles(
             )
             .order_by(Candle.open_time)
         ).all()
+    )
+
+
+def count_final_candles(
+    db: Session, instrument_id: UUID, timeframe: str, from_time: datetime, to_time: datetime
+) -> int:
+    """How many candles `load_final_candles` would return, without loading them."""
+    return (
+        db.scalar(
+            select(func.count())
+            .select_from(Candle)
+            .where(
+                Candle.instrument_id == instrument_id,
+                Candle.timeframe == timeframe,
+                Candle.is_final.is_(True),
+                Candle.open_time >= from_time,
+                Candle.open_time < to_time,
+            )
+        )
+        or 0
     )
 
 

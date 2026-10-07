@@ -37,6 +37,9 @@ from app.models.connections import Exchange, Market
 from app.models.instruments import Instrument
 from app.models.workspace import AppUser
 from app.schemas.backtests import (
+    BacktestBatchCreate,
+    BacktestBatchItemRead,
+    BacktestBatchResponse,
     BacktestCreate,
     BacktestCreateResponse,
     BacktestEquityCurveRead,
@@ -46,6 +49,7 @@ from app.schemas.backtests import (
 )
 from app.schemas.instruments import WorkspaceInstrumentRead
 from app.security.rbac import require_operator_role, require_viewer_role
+from app.trading.application.backtest_batch import run_backtest_batch
 from app.trading.application.backtest_provisioning import (
     BacktestProvisioningError,
     run_backtest_for_workspace,
@@ -147,6 +151,61 @@ def create_backtest(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
     return BacktestCreateResponse(runs=[BacktestRunRead.model_validate(run) for run in runs])
+
+
+@router.post(
+    "/workspaces/{workspace_id}/backtests/batch",
+    response_model=BacktestBatchResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["backtests"],
+)
+def create_backtest_batch(
+    workspace_id: UUID, payload: BacktestBatchCreate, db: DatabaseSession, _operator: Operator
+) -> BacktestBatchResponse:
+    """Runs the backtest for several instruments in one request, one after the other. All the
+    instruments are checked first (404/409, as the single endpoint does), and the total number of
+    bars is checked against the budget before anything runs (422 `batch_too_large`); after that an
+    instrument that fails is reported in its own item and does not stop the others."""
+    instruments: list[Instrument] = []
+    for instrument_id in payload.instrument_ids:
+        _require_instrument_access(db, workspace_id, instrument_id)
+        instrument = db.get(Instrument, instrument_id)
+        if instrument is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Instrument not found"
+            )
+        instruments.append(instrument)
+    try:
+        items = run_backtest_batch(
+            db,
+            workspace_id,
+            instruments,
+            timeframe=payload.timeframe,
+            from_time=payload.from_time,
+            to_time=payload.to_time,
+            initial_equity=payload.initial_equity,
+            spread=payload.spread,
+            walk_forward=payload.mode == "walk_forward",
+            train_ratio=payload.train_ratio,
+        )
+    except BacktestProvisioningError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
+    return BacktestBatchResponse(
+        total_bars=sum(item.bars for item in items),
+        items=[
+            BacktestBatchItemRead(
+                instrument_id=item.instrument.id,
+                symbol=item.instrument.symbol,
+                bars=item.bars,
+                runs=[BacktestRunRead.model_validate(run) for run in item.runs],
+                error_code=item.error_code,
+                error=item.error,
+            )
+            for item in items
+        ],
+    )
 
 
 @router.get(
