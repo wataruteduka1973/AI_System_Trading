@@ -439,6 +439,19 @@ def test_empty_pages_preserve_partial_coverage(page_context):
         assert job.progress_report["empty_source_window_count"] == 2
 
 
+def stop_events(db, work):
+    """The `market_data_stopped` announcements about this test's instrument (the database is
+    shared by the module's tests): (severity, message, payload) per system event."""
+    return db.execute(
+        text(
+            "SELECT severity, message, payload FROM fx.system_event "
+            "WHERE event_type = 'market_data_stopped' AND target_id = :instrument "
+            "ORDER BY occurred_at"
+        ),
+        {"instrument": work.feed.instrument_id},
+    ).all()
+
+
 def test_retry_limit_preserves_checkpoint_and_redacts_errors(page_context):
     pages, client, _, sessions, work, _ = page_context
     assert run_page(pages, work) == "saved"
@@ -458,6 +471,21 @@ def test_retry_limit_preserves_checkpoint_and_redacts_errors(page_context):
             assert job.status == ("failed" if attempt == 2 else "queued")
             assert job.error_code == "communication_failed"
             assert "DO-NOT-PERSIST" not in str(job.progress_report)
+            # Announced only when the job is given up on, not on each retry.
+            assert len(stop_events(db, work)) == (1 if attempt == 2 else 0)
+    with sessions() as db:
+        ((severity, message, payload),) = stop_events(db, work)
+        assert severity == "warning"  # a backfill, not the live collection
+        assert "過去データの取得が停止しました" in message and "通信に失敗" in message
+        assert payload["kind"] == "backfill" and payload["error_code"] == "communication_failed"
+        assert "DO-NOT-PERSIST" not in str((message, payload))
+        assert (
+            db.scalar(
+                text("SELECT count(*) FROM fx.outbox_event WHERE aggregate_id = :id"),
+                {"id": work.id},
+            )
+            == 1
+        )
 
 
 def test_polling_fixed_window_finishes_and_schedules(page_context):
@@ -506,6 +534,11 @@ def test_polling_permanent_error_blocks_without_changing_enabled(page_context):
             text("SELECT after_data FROM fx.audit_log WHERE resource_id=:id"), {"id": work.id}
         ).all()
         assert "synthetic-sensitive-value" not in str(records)
+        ((severity, message, payload),) = stop_events(db, work)
+        assert severity == "error"  # live collection has stopped
+        assert "ローソク足の自動取得が停止しました" in message
+        assert payload["kind"] == "subscription" and payload["error_code"] == "internal_error"
+        assert "synthetic-sensitive-value" not in str((message, payload))
     assert pages.leases.claim(work, uuid4()) is None
 
 
@@ -735,6 +768,10 @@ def test_three_expirations_stop_automatic_retry(context, kind):
             target = db.get(WorkerSubscription, work.id)
             assert target.enabled and target.blocked_reason == "worker_interrupted"
         assert target.consecutive_failures == 3
+        # Interrupted twice is a retry; the third gives up, and that is announced once.
+        ((_, message, payload),) = stop_events(db, work)
+        assert "取得処理が繰り返し中断" in message
+        assert payload["kind"] == ("backfill" if kind == "backfill" else "subscription")
 
 
 def test_disabled_subscription_is_not_resurrected(context):

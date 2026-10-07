@@ -10,6 +10,7 @@
 | 計画書 | 内容 | 状態 |
 |---|---|---|
 | [paper-trading-live-data.md](paper-trading-live-data.md) | 本番の公開価格でのペーパートレード | Unit 1〜6完了。2つのボット群(承認済み 4h 55/20 ×6、比較用 4h 110/40 ×6)が稼働中で、データを貯める段階。月1回 `scripts/report_paper_performance.py` で想定範囲と比べる |
+| [notification-sources.md](notification-sources.md) | 通知の発行元(市場データの停止、市場データWorkerの停止、通知の打ち切り) | 実装済み(2026-10-07) |
 | [worker-failure-handling.md](worker-failure-handling.md) | トレーディングWorkerの失敗(Botを `failed` に、Worker停止の検知と通知) | 実装済み(2026-10-07) |
 | [notification-wiring.md](notification-wiring.md) | 取引停止の通知(Outbox・再送・Owner/Operatorへ) | 実装済み(2026-10-07)。アプリ内通知のAPIあり、画面は未 |
 | [emergency-stop.md](emergency-stop.md) | 利用者の緊急停止(Botまたはワークスペース全体、解除はOwnerのみ) | 実装済み(2026-10-06)。通知は接続済み |

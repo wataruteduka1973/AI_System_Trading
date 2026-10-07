@@ -32,11 +32,13 @@ from sqlalchemy.orm import Session
 from app.models.audit import OutboxEvent, SystemEvent
 from app.models.notifications import Notification
 from app.notifications.adapters.base import NotificationAdapter
+from app.notifications.application.publish_event import publish_system_event
 
 logger = logging.getLogger(__name__)
 
 _BATCH_SIZE = 50
 MAX_ATTEMPTS = 5
+GIVE_UP_EVENT_TYPE = "notification_delivery_failed"
 _BACKOFF_BASE_SECONDS = 30
 
 RecipientResolver = Callable[[Session, OutboxEvent, SystemEvent], list[tuple[str, str]]]
@@ -63,6 +65,47 @@ def claim_pending_outbox_events(db: Session) -> list[OutboxEvent]:
         .with_for_update(skip_locked=True)
     )
     return list(db.scalars(statement).all())
+
+
+def _announce_give_up(db: Session, event: OutboxEvent, system_event: SystemEvent) -> None:
+    """Tells the workspace that a notification could not be delivered after every retry, as a new
+    event: the original never reached everyone, and without this nobody would know. It is read in
+    the application (`in_app` always works), and the email that failed may fail again.
+
+    Never for a give-up event itself: its failing would announce itself again, forever."""
+    if event.event_type == GIVE_UP_EVENT_TYPE:
+        return
+    failed_channels = sorted(
+        {
+            channel
+            for (channel,) in db.execute(
+                select(Notification.channel).where(
+                    Notification.event_id == system_event.id, Notification.status == "failed"
+                )
+            ).all()
+        }
+    )
+    publish_system_event(
+        db,
+        workspace_id=system_event.workspace_id,
+        severity="error",
+        category="notification",
+        event_type=GIVE_UP_EVENT_TYPE,
+        reason_code="delivery_failed",
+        message=(
+            f"通知を届けられませんでした(「{system_event.message}」、"
+            f"届かなかった経路: {', '.join(failed_channels) or '不明'})"
+        ),
+        payload={
+            "original_event_type": system_event.event_type,
+            "original_event_id": str(system_event.id),
+            "failed_channels": failed_channels,
+            "attempts": event.attempts,
+        },
+        aggregate_type="outbox_event",
+        aggregate_id=event.id,
+        source_type="notification_worker",
+    )
 
 
 def _subject_and_body(system_event: SystemEvent) -> tuple[str, str]:
@@ -145,6 +188,7 @@ def deliver_pending_notifications(
             if event.attempts >= MAX_ATTEMPTS:
                 event.status = "failed"
                 logger.error("notification.deliver: giving up on outbox event %s", event.id)
+                _announce_give_up(db, event, system_event)
             else:
                 delay = _BACKOFF_BASE_SECONDS * 2**event.attempts
                 event.available_at = datetime.now(UTC) + timedelta(seconds=delay)

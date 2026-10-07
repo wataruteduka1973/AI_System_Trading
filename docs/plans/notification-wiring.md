@@ -49,8 +49,8 @@ SMTP アダプタ、配信ループ、Worker)は Horizon 5 グループ D(Unit 8
 
 - **画面は未実装。** アプリ内通知を見る API は `app/api/routes/notifications.py`(下記)。それを使う画面は次の単位。
   それまでは、API を直接呼ぶか、メール(SMTP の設定が要る)で確かめる。
-- 発行元は取引停止と、`worker-failure-handling.md` の Bot の失敗・トレーディングWorkerの停止。データ取り込みの停止、接続の認証失敗などは、まだ知らせない。
+- 発行元の一覧は `notification-sources.md`(取引停止、Botの失敗、Workerの停止、市場データの停止、通知の打ち切り)。接続の認証失敗の定期確認などは、まだ無い。
 - データ遅延の停止が出たり消えたりすると、そのたびに知らせる(まとめる処理は無い)。
-- メールの再送は5回(約15分)で打ち切る。その後の `failed` を人に知らせる仕組みは無い。
+- メールの再送は5回(約15分)で打ち切る。打ち切りは `notification_delivery_failed` として知らせる(`notification-sources.md`)。
 - 既存の通知がある `event_id` に対して `(event, channel, recipient)` で重複を判定する。受信者の役割が途中で変わった場合は、
   その時点の役割で決まる。

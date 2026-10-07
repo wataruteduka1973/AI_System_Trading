@@ -332,6 +332,67 @@ def test_processed_count_is_events_not_notifications() -> None:
     assert adapter.send.call_count == 1  # only one recipient resolved
 
 
+# ---- giving up is announced (docs/plans/notification-sources.md) ----
+
+
+def _give_up_events(db: MagicMock) -> list[SystemEvent]:
+    return [c.args[0] for c in db.add.call_args_list if isinstance(c.args[0], SystemEvent)]
+
+
+def test_giving_up_on_a_notification_tells_the_workspace_what_did_not_arrive() -> None:
+    event = _outbox_event(attempts=deliver.MAX_ATTEMPTS - 1)
+    system_event = _system_event(message="緊急停止が実行されました(Bot単位)")
+    db = _db(event, system_event)
+    db.execute.return_value.all.return_value = [("email",), ("email",)]
+    adapter = MagicMock()
+    adapter.send.side_effect = OSError("smtp down")
+
+    deliver.deliver_pending_notifications(
+        db, adapters={"email": adapter}, recipient_resolver=_recipients(("email", "a@example.com"))
+    )
+
+    assert event.status == "failed"
+    (announcement,) = _give_up_events(db)
+    assert announcement.workspace_id == system_event.workspace_id
+    assert (announcement.severity, announcement.category) == ("error", "notification")
+    assert announcement.event_type == deliver.GIVE_UP_EVENT_TYPE
+    assert "緊急停止が実行されました(Bot単位)" in announcement.message
+    assert "届かなかった経路: email" in announcement.message
+    assert announcement.payload["original_event_id"] == str(system_event.id)
+    assert announcement.payload["failed_channels"] == ["email"]
+    (outbox,) = [c.args[0] for c in db.add.call_args_list if isinstance(c.args[0], OutboxEvent)]
+    assert outbox.event_type == deliver.GIVE_UP_EVENT_TYPE  # it goes through the same outbox
+
+
+def test_a_retry_that_is_not_the_last_does_not_announce_anything() -> None:
+    event = _outbox_event(attempts=1)
+    db = _db(event, _system_event())
+    adapter = MagicMock()
+    adapter.send.side_effect = OSError("smtp down")
+
+    deliver.deliver_pending_notifications(
+        db, adapters={"email": adapter}, recipient_resolver=_recipients(("email", "a@example.com"))
+    )
+
+    assert event.status == "pending"
+    assert _give_up_events(db) == []
+
+
+def test_a_give_up_notice_that_fails_too_is_not_announced_again() -> None:
+    """Otherwise its own failure would announce itself, and so on, forever."""
+    event = _outbox_event(attempts=deliver.MAX_ATTEMPTS - 1, event_type=deliver.GIVE_UP_EVENT_TYPE)
+    db = _db(event, _system_event(event_type=deliver.GIVE_UP_EVENT_TYPE))
+    adapter = MagicMock()
+    adapter.send.side_effect = OSError("smtp down")
+
+    deliver.deliver_pending_notifications(
+        db, adapters={"email": adapter}, recipient_resolver=_recipients(("email", "a@example.com"))
+    )
+
+    assert event.status == "failed"
+    assert _give_up_events(db) == []
+
+
 # ---- recipients ----
 
 
