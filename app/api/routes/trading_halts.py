@@ -30,6 +30,7 @@ from app.models.workspace import AppUser
 from app.schemas.trading_halts import TradingHaltRead
 from app.security.rbac import require_owner_role, require_viewer_role
 from app.trading.application import trading_halt as trading_halt_app
+from app.trading.application.risk_locks import LOCK_REASONS
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/trading-halts", tags=["trading-halts"])
 DatabaseSession = Annotated[Session, Depends(get_db)]
@@ -89,6 +90,14 @@ def release_trading_halt(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="This trading halt's scope is not supported by this endpoint",
         )
+    if halt.reason_code in LOCK_REASONS:
+        # A losing-streak / drawdown lock is released in one step, and that starts its count over.
+        released = trading_halt_app.release_lock(
+            db, halt, released_by=owner.id, now=datetime.now(UTC)
+        )
+        db.commit()
+        db.refresh(released)
+        return released
     scope = trading_halt_app.HaltScope(
         workspace_id=halt.workspace_id, scope_type=halt.scope_type, scope_id=halt.scope_id
     )

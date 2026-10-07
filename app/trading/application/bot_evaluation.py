@@ -67,7 +67,7 @@ from app.models.strategy import (
     TradingBot,
 )
 from app.models.trading import Fill, TradeOrder, TradingAccount, TradingPosition
-from app.trading.application import order_flow
+from app.trading.application import order_flow, risk_locks
 from app.trading.application.backtest_fill import BacktestPosition
 from app.trading.application.backtest_replay import _HISTORY_WINDOW, _protective_exit
 from app.trading.application.live_strategies import resolve_live_strategy
@@ -265,6 +265,13 @@ def _evaluate(db: Session, bot: TradingBot, bot_run: BotRun) -> dict:
     if already_processed is not None:
         return {"action": "already_processed", "signal_id": already_processed.id}
 
+    risk_profile_version = db.get(RiskProfileVersion, bot.risk_profile_version_id)
+    if risk_profile_version is None:
+        raise ValueError("bot's risk_profile_version no longer exists")
+    # Once per new bar, before any signal: a lock limit crossed by the trade that just closed
+    # must show up now, not at the next entry signal (see `risk_locks`).
+    risk_locks.sync_lock_halts(db, bot, account, instrument, risk_profile_version)
+
     strategy_version = db.get(StrategyVersion, bot.strategy_version_id)
     if strategy_version is None:
         raise ValueError("bot's strategy_version no longer exists")
@@ -337,9 +344,6 @@ def _evaluate(db: Session, bot: TradingBot, bot_run: BotRun) -> dict:
             "reason": "bot_paused_no_new_entries",
         }
 
-    risk_profile_version = db.get(RiskProfileVersion, bot.risk_profile_version_id)
-    if risk_profile_version is None:
-        raise ValueError("bot's risk_profile_version no longer exists")
     result = evaluate_signal(
         db, signal, account, instrument, bot, risk_profile_version, exchange_code
     )

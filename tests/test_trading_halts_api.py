@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock
 from uuid import uuid4
 
+import pytest
 from app.db.session import get_db
 from app.main import app
 from app.models.strategy import TradingHalt
@@ -170,3 +171,24 @@ def test_release_requires_owner_role() -> None:
         app.dependency_overrides.clear()
 
     assert response.status_code == 401
+
+
+@pytest.mark.parametrize("reason", ["consecutive_loss_limit", "peak_drawdown_limit"])
+def test_release_of_a_lock_goes_straight_to_released(reason: str) -> None:
+    """Stepping an `entry_halted` lock down to `warning` would be undone by the next evaluation
+    (nothing about its measures has changed); the release is what starts them over."""
+    workspace_id = uuid4()
+    halt = _halt(workspace_id=workspace_id, level="entry_halted", reason_code=reason)
+    session = MagicMock()
+    session.scalar.return_value = halt
+    _override_database(session)
+    try:
+        response = client.post(f"/api/v1/workspaces/{workspace_id}/trading-halts/{halt.id}/release")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "released" and body["level"] == "entry_halted"
+    assert halt.released_by == _TEST_USER.id and halt.released_at is not None
+    session.commit.assert_called_once()
