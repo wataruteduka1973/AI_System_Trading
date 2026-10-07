@@ -20,9 +20,12 @@ from app.models.market_data import InstrumentSpread
 
 logger = logging.getLogger(__name__)
 
-HISTORY_MIN_INTERVAL = timedelta(seconds=30)
-"""At most one history row per instrument per this interval. OANDA's stream ticks several
-times a second; the history only has to be fine enough to price a bar's fill."""
+HISTORY_MIN_INTERVAL = timedelta(minutes=5)
+"""At most one history row per instrument per this interval (decided 2026-10-07; it was 30
+seconds when the table was added). OANDA's stream ticks several times a second, Binance's
+book ticker is read every 30 s; the history only has to be fine enough to price a bar's
+fill, and the finest bars the strategies trade are 1 hour. At 5 minutes a symbol adds about
+290 rows a day (~60 MB a year for six symbols), so nothing needs pruning for years."""
 
 _INSERT_HISTORY = text(
     """
