@@ -19,6 +19,7 @@ from app.market_data.infrastructure.leases import LeaseClaim, LeaseStore
 from app.market_data.infrastructure.models import WorkerBackfill, WorkerSubscription
 from app.market_data.infrastructure.page_access import AccessSnapshot, PageAccess
 from app.market_data.infrastructure.page_errors import PageFailure
+from app.market_data.infrastructure.stop_notice import announce_stopped
 from app.models.market_data import Candle
 
 logger = logging.getLogger(__name__)
@@ -231,6 +232,8 @@ class PageStore:
                 target.last_polled_at = now
                 if not retry:
                     target.blocked_reason = failure.code
+            if not retry:
+                announce_stopped(db, target, error_code=failure.code)
             self.leases._audit(
                 db,
                 claim.work,

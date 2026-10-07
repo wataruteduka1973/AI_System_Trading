@@ -73,6 +73,10 @@ class Settings(BaseSettings):
     # trading worker as stalled. Longer than a worst-case pass: refreshing public prices
     # can wait out several 10-second request timeouts in a row.
     trading_worker_stale_seconds: float = 180.0
+    # How far past its `next_run_at` an enabled market-data subscription may be before the
+    # watchdog reports the market-data worker as stalled. A pass of the worker handles a
+    # page per subscription, so this is far longer than any subscription's own poll interval.
+    market_data_worker_overdue_seconds: float = 600.0
 
     @field_validator("cors_origins", mode="before")
     @classmethod

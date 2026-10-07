@@ -20,6 +20,7 @@ from app.market_data.infrastructure.models import (
     WorkerBackfill,
     WorkerSubscription,
 )
+from app.market_data.infrastructure.stop_notice import announce_stopped
 from app.models.audit import AuditLog
 
 WorkKind = Literal["backfill", "polling"]
@@ -217,6 +218,8 @@ class LeaseStore:
                     target.blocked_reason = "worker_interrupted"
                 result["blocked"] = target.blocked_reason is not None
             result["consecutive_failures"] = failures
+            if failures >= 3:
+                announce_stopped(db, target, error_code="worker_interrupted")
         else:
             result["target_inactive"] = True
         self._audit(db, work, "market_data.lease_recovered", result, before)

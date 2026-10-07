@@ -27,6 +27,7 @@ from datetime import UTC, datetime, timedelta
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.db.session import SessionLocal
+from app.market_data.application.worker_watchdog import check_market_data_worker
 from app.notifications.adapters.base import NotificationAdapter
 from app.notifications.adapters.in_app import InAppNotificationAdapter
 from app.notifications.adapters.smtp import SmtpConfig, SmtpNotificationAdapter
@@ -61,17 +62,33 @@ _WATCHDOG_INTERVAL_SECONDS = 30.0
 
 
 def _run_watchdog() -> None:
-    try:
-        with SessionLocal() as db:
-            alerted = check_trading_worker(
+    """Each check on its own, so one failing does not skip the other."""
+    checks = (
+        (
+            "trading worker",
+            lambda db: check_trading_worker(
                 db,
                 now=datetime.now(UTC),
                 stale_after=timedelta(seconds=settings.trading_worker_stale_seconds),
-            )
-        if alerted:
-            logger.warning("notification.worker: trading worker stalled (%d workspace(s))", alerted)
-    except Exception as exc:
-        logger.warning("notification.worker: watchdog failed (%s)", type(exc).__name__)
+            ),
+        ),
+        (
+            "market-data worker",
+            lambda db: check_market_data_worker(
+                db,
+                now=datetime.now(UTC),
+                overdue_after=timedelta(seconds=settings.market_data_worker_overdue_seconds),
+            ),
+        ),
+    )
+    for name, check in checks:
+        try:
+            with SessionLocal() as db:
+                alerted = check(db)
+            if alerted:
+                logger.warning("notification.worker: %s stalled (%d workspace(s))", name, alerted)
+        except Exception as exc:
+            logger.warning("notification.worker: %s watchdog failed (%s)", name, type(exc).__name__)
 
 
 async def _run(adapters: dict[str, NotificationAdapter], stop: asyncio.Event) -> None:
