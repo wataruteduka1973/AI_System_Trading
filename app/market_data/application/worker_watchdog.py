@@ -28,10 +28,13 @@ from app.notifications.application.publish_event import publish_system_event
 EVENT_TYPE = "market_data_worker_stalled"
 
 
-def check_market_data_worker(db: Session, *, now: datetime, overdue_after: timedelta) -> int:
-    """Raises the alert for each workspace with an overdue subscription that has not been
-    reported yet, and commits. Returns how many workspaces were alerted."""
-    rows = db.execute(
+def find_overdue_subscriptions(
+    db: Session, *, now: datetime, overdue_after: timedelta, workspace_id: UUID | None = None
+) -> list[tuple[UUID, str, str, datetime]]:
+    """`(workspace_id, symbol, timeframe, next_run_at)` of each enabled, unblocked subscription
+    whose `next_run_at` is more than `overdue_after` past, most overdue first. Shared by the alert
+    below and the status API (`monitoring.system_status`)."""
+    statement = (
         select(
             MarketDataSubscription.workspace_id,
             Instrument.symbol,
@@ -45,7 +48,16 @@ def check_market_data_worker(db: Session, *, now: datetime, overdue_after: timed
             MarketDataSubscription.next_run_at < now - overdue_after,
         )
         .order_by(MarketDataSubscription.next_run_at)
-    ).all()
+    )
+    if workspace_id is not None:
+        statement = statement.where(MarketDataSubscription.workspace_id == workspace_id)
+    return [(row[0], row[1], row[2], row[3]) for row in db.execute(statement).all()]
+
+
+def check_market_data_worker(db: Session, *, now: datetime, overdue_after: timedelta) -> int:
+    """Raises the alert for each workspace with an overdue subscription that has not been
+    reported yet, and commits. Returns how many workspaces were alerted."""
+    rows = find_overdue_subscriptions(db, now=now, overdue_after=overdue_after)
     by_workspace: dict[UUID, list[tuple[str, datetime]]] = {}
     for workspace_id, symbol, timeframe, due in rows:
         by_workspace.setdefault(workspace_id, []).append((f"{symbol} {timeframe}", due))

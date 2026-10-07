@@ -28,11 +28,14 @@ from app.notifications.application.publish_event import publish_system_event
 EVENT_TYPE = "trading_worker_stalled"
 
 
-def check_trading_worker(db: Session, *, now: datetime, stale_after: timedelta) -> int:
-    """Raises the alert for each workspace with a stalled active bot that has not been
-    reported yet, and commits. Returns how many workspaces were alerted."""
+def find_stalled_bots(
+    db: Session, *, now: datetime, stale_after: timedelta, workspace_id: UUID | None = None
+) -> list[tuple[UUID, str, datetime]]:
+    """`(workspace_id, bot name, last sign of life)` for each active bot whose heartbeat is older
+    than `stale_after`, oldest first; a bot that never stamped counts from its start. Shared by
+    the alert below and the status API (`monitoring.system_status`)."""
     last_seen = func.coalesce(BotRun.heartbeat_at, BotRun.started_at)
-    rows = db.execute(
+    statement = (
         select(TradingBot.workspace_id, TradingBot.name, last_seen)
         .join(BotRun, BotRun.bot_id == TradingBot.id)
         .where(
@@ -41,7 +44,16 @@ def check_trading_worker(db: Session, *, now: datetime, stale_after: timedelta) 
             last_seen < now - stale_after,
         )
         .order_by(last_seen)
-    ).all()
+    )
+    if workspace_id is not None:
+        statement = statement.where(TradingBot.workspace_id == workspace_id)
+    return [(row[0], row[1], row[2]) for row in db.execute(statement).all()]
+
+
+def check_trading_worker(db: Session, *, now: datetime, stale_after: timedelta) -> int:
+    """Raises the alert for each workspace with a stalled active bot that has not been
+    reported yet, and commits. Returns how many workspaces were alerted."""
+    rows = find_stalled_bots(db, now=now, stale_after=stale_after)
     by_workspace: dict[UUID, list[tuple[str, datetime]]] = {}
     for workspace_id, name, seen in rows:
         by_workspace.setdefault(workspace_id, []).append((name, seen))
