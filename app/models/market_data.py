@@ -72,6 +72,22 @@ class InstrumentSpread(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class InstrumentSpreadHistory(Base):
+    """Sampled history of `InstrumentSpread`'s observations (alembic 20261007_0011): the only
+    way to know a past spread, since no public source serves past quotes. Append-only."""
+
+    __tablename__ = "instrument_spread_history"
+    __table_args__ = {"schema": SCHEMA}
+
+    instrument_id: Mapped[UUID] = mapped_column(
+        ForeignKey(f"{SCHEMA}.instrument.id", ondelete="CASCADE"), primary_key=True
+    )
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    bid: Mapped[Decimal] = mapped_column(Numeric(38, 18))
+    ask: Mapped[Decimal] = mapped_column(Numeric(38, 18))
+    source: Mapped[str] = mapped_column(Text)
+
+
 class MarketDataGap(Base):
     __tablename__ = "market_data_gap"
     __table_args__ = {"schema": SCHEMA}
