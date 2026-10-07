@@ -34,3 +34,29 @@ async def test_a_successful_refresh_leaves_the_session_alone(
 
     refresh.assert_awaited_once()
     db.rollback.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_a_failing_pass_does_not_end_the_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    passes = []
+
+    def failing_pass(db, tracker):
+        passes.append(tracker)
+        if len(passes) == 1:
+            raise RuntimeError("database unavailable")
+        stop.set()
+        return 0
+
+    stop = asyncio.Event()
+    monkeypatch.setattr(worker, "run_active_bots_once", failing_pass)
+    monkeypatch.setattr(worker, "get_binance_public_client", MagicMock)
+    monkeypatch.setattr(worker, "SessionLocal", MagicMock())
+    monkeypatch.setattr(worker, "_refresh_public_prices", AsyncMock())
+    monkeypatch.setattr(worker.settings, "bot_execution_poll_interval_seconds", 0.01)
+
+    await worker._run(stop)
+
+    assert len(passes) == 2  # the second pass ran after the first one raised
+    assert passes[0] is passes[1]  # one tracker for the life of the worker

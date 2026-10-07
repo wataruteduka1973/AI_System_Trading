@@ -405,7 +405,9 @@ def _enter_long(
     # existing-position lookup (flat), then the entry's fill and new position.
     db.scalar.side_effect = ["binance", None, None, None, Fill(price=Decimal("101")), opened]
     bars = [_bar(i, c, c, c, c) for i, c in enumerate(["100"] * 4 + ["101"])]
-    db.scalars.return_value = list(reversed(bars))  # the query returns newest first
+    candles = list(reversed(bars))  # the query returns newest first
+    no_halts = MagicMock(all=MagicMock(return_value=[]))
+    db.scalars.side_effect = [candles, no_halts, no_halts, no_halts]  # then the halt lookups
 
     assert evaluate_bot_on_latest_bar(db, bot, _bot_run(bot_id=bot.id))["action"] == "opened"
     return opened
@@ -466,3 +468,50 @@ def test_a_failure_after_the_signal_rolls_the_whole_cycle_back(
     db = seen[0]
     db.commit.assert_not_called()
     db.rollback.assert_called_once_with()
+
+
+def test_an_entry_blocked_by_an_active_halt_is_an_outcome_not_an_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`place_order` raises on a halted entry; raising here would roll the whole cycle back and
+    retry it on every poll until the halt lifts."""
+    from types import SimpleNamespace
+
+    from app.trading.application import bot_evaluation, order_flow
+
+    decision = SimpleNamespace(
+        id=uuid4(), outcome="allow", reason_code=None,
+        rule_results={"quantity_calculation": {"stop_distance": "5"}},
+    )  # fmt: skip
+    monkeypatch.setattr(
+        bot_evaluation,
+        "evaluate_signal",
+        lambda *args: SimpleNamespace(decision=decision, approved_quantity=Decimal("1")),
+    )
+    monkeypatch.setattr(order_flow, "entry_blocked_by_halt", lambda *a, **k: True)
+    intent = MagicMock()
+    place = MagicMock()
+    monkeypatch.setattr(order_flow, "create_order_intent", intent)
+    monkeypatch.setattr(order_flow, "place_order", place)
+
+    db = MagicMock()
+    bot = _bot()
+    db.get.side_effect = [
+        TradingAccount(
+            id=uuid4(), workspace_id=bot.workspace_id, mode="paper", base_currency="JPY"
+        ),
+        _instrument(id=bot.instrument_id),
+        StrategyVersion(id=bot.strategy_version_id, definition=_DONCHIAN_STOP),
+        RiskProfileVersion(id=bot.risk_profile_version_id),
+    ]
+    db.scalar.side_effect = ["binance", None, None, None]
+    bars = [_bar(i, c, c, c, c) for i, c in enumerate(["100"] * 4 + ["101"])]
+    db.scalars.return_value = list(reversed(bars))
+
+    result = evaluate_bot_on_latest_bar(db, bot, _bot_run(bot_id=bot.id))
+
+    assert result["action"] == "halted"
+    intent.assert_not_called()
+    place.assert_not_called()
+    db.commit.assert_called_once_with()  # the signal and the decision are kept
+    db.rollback.assert_not_called()

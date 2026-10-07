@@ -8,7 +8,7 @@ const stateLabel: Record<TradingBot['desired_state'], string> = {
   stopped: '停止中',
   running: '稼働中',
   paused: '一時停止',
-  failed: '失敗',
+  failed: '失敗(要確認)',
 }
 
 const stateBadgeClass: Record<TradingBot['desired_state'], string> = {
@@ -121,11 +121,14 @@ export default function TradingPanel({
         <ul className="connection-list">
           {bots.map((bot) => {
             const latestSignal = latestRuns[bot.id]?.latest_signal
+            // A bot the worker gave up on has desired_state 'stopped' (the DB allows nothing
+            // else there) and actual_state 'failed': show the failure, not an ordinary stop.
+            const shownState = bot.actual_state === 'failed' ? 'failed' : bot.desired_state
             return (
               <li key={bot.id}>
                 <strong>{bot.name}</strong>
                 <span>{bot.timeframe}</span>
-                <span className={stateBadgeClass[bot.desired_state]}>{stateLabel[bot.desired_state]}</span>
+                <span className={stateBadgeClass[shownState]}>{stateLabel[shownState]}</span>
                 <span>
                   {latestSignal
                     ? `直近シグナル: ${latestSignal.action} (${new Date(latestSignal.created_at).toLocaleTimeString()})`
