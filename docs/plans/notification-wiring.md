@@ -1,6 +1,6 @@
 # 通知の配線(取引停止を知らせる)
 
-状態: 実装済み(2026-10-07)。画面での表示(アプリ内通知の一覧・既読)は次の単位。
+状態: 実装済み(2026-10-07)。アプリ内通知の API(一覧・既読)は 2026-10-07 に追加。画面は次の単位。
 
 対象: ロードマップ Horizon 5 の「Event Log、Outbox、Notification Worker」。土台(Outbox/Notification の ORM、
 SMTP アダプタ、配信ループ、Worker)は Horizon 5 グループ D(Unit 8)で作ってあったが、**発行元が1つも無く、
@@ -28,6 +28,16 @@ SMTP アダプタ、配信ループ、Worker)は Horizon 5 グループ D(Unit 8
 - `app/notifications/application/recipients.py`: 受信者の決め方。`adapters/in_app.py`: アプリ内チャネル(送る処理は無い)。
 - `app/notifications/worker/__main__.py`: SMTP を任意に。`scripts/start_local.py` が通知 Worker も起動する。
 
+## アプリ内通知の API(2026-10-07)
+
+自分宛(`recipient_ref` が自分のユーザーID)の `in_app` 通知だけを扱う。他人の通知は、同じワークスペースの人のものでも 404。
+読めるのはワークスペースのメンバー全員(Viewer 以上)だが、通知が届くのは Owner と Operator だけ。
+
+- `GET /workspaces/{id}/notifications?unacknowledged_only=&limit=`: 新しい順。各件にイベントの重大度・分類・文面・`payload`・発生時刻、
+  `status`(`sent`=未読、`acknowledged`=既読)。`unacknowledged_count` は `limit` に関係なく、そのワークスペースの未読の総数。
+- `POST /workspaces/{id}/notifications/{notification_id}/acknowledge`: 既読にする(いつ・誰が)。再実行しても変わらない(200)。
+- `POST /workspaces/{id}/notifications/acknowledge-all`: 自分の未読をすべて既読にし、件数を返す。
+
 ## 検証
 
 - 単体・結合: `tests/test_deliver_notifications.py`(MagicMock と実 PostgreSQL)、`test_trading_halt.py`、`test_emergency_stop.py`、
@@ -37,8 +47,8 @@ SMTP アダプタ、配信ループ、Worker)は Horizon 5 グループ D(Unit 8
 
 ## 既知の制限
 
-- **画面に表示する部分は未実装。** アプリ内通知は `notification` 行として残るが、一覧・既読の API と画面は次の単位。
-  それまでは、メール(SMTP の設定が要る)か、DB の `fx.notification` で確かめる。
+- **画面は未実装。** アプリ内通知を見る API は `app/api/routes/notifications.py`(下記)。それを使う画面は次の単位。
+  それまでは、API を直接呼ぶか、メール(SMTP の設定が要る)で確かめる。
 - 発行元は取引停止だけ。Bot の異常終了、データ取り込みの停止、接続の認証失敗などは、まだ知らせない。
 - データ遅延の停止が出たり消えたりすると、そのたびに知らせる(まとめる処理は無い)。
 - メールの再送は5回(約15分)で打ち切る。その後の `failed` を人に知らせる仕組みは無い。
