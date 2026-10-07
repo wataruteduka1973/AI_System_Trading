@@ -351,6 +351,18 @@ def _evaluate(db: Session, bot: TradingBot, bot_run: BotRun) -> dict:
             "reason_code": result.decision.reason_code,
         }
 
+    if order_flow.entry_blocked_by_halt(
+        db, workspace_id=bot.workspace_id, account_id=account.id, bot_id=bot.id
+    ):
+        # An active halt (its own relaxing is the Risk Gate's job, above) blocks a new entry:
+        # that is an outcome to record, not an error. Raising from `place_order` here would
+        # roll the whole cycle back and retry it on every poll until the halt lifts.
+        return {
+            "action": "halted",
+            "signal_id": signal.id,
+            "risk_decision_id": result.decision.id,
+        }
+
     assert result.approved_quantity is not None
     stop_distance = Decimal(result.decision.rule_results["quantity_calculation"]["stop_distance"])
 

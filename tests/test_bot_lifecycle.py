@@ -387,3 +387,107 @@ def test_validate_bot_startup_accepts_a_public_price_instrument_on_a_binance_con
     ]
     db.scalar.side_effect = ["binance_public", _candle()]
     lifecycle.validate_bot_startup(db, _bot())  # does not raise
+
+
+# ---- fail_bot (docs/plans/worker-failure-handling.md) ----
+
+
+def _fail(db, bot, **kwargs):
+    return lifecycle.fail_bot(db, bot, error_type="ValueError", consecutive_failures=5, **kwargs)
+
+
+def _failing_db(bot_run, holds_position=False, orders=()):
+    db = MagicMock()
+    db.scalar.side_effect = [bot_run, uuid4() if holds_position else None]
+    db.scalars.return_value.all.return_value = list(orders)
+    return db
+
+
+def test_fail_bot_ends_the_run_as_failed_and_leaves_the_bot_startable() -> None:
+    bot = _bot(desired_state="running", actual_state="running")
+    bot_run = BotRun(id=uuid4(), bot_id=bot.id, status="running")
+    db = _failing_db(bot_run)
+    version = bot.version
+
+    _fail(db, bot)
+
+    assert (bot.desired_state, bot.actual_state) == ("stopped", "failed")
+    assert bot.version == version + 1
+    assert bot_run.status == "failed"
+    assert bot_run.stopped_at is not None
+    assert bot_run.stop_reason == "evaluation failed: ValueError"
+    db.commit.assert_called_once_with()
+
+
+def test_a_failed_bot_can_be_started_again() -> None:
+    """`desired_state` is `stopped`, which is what `start_bot` accepts."""
+    bot = _bot(desired_state="running", actual_state="running")
+    _fail(_failing_db(BotRun(id=uuid4(), bot_id=bot.id, status="running")), bot)
+
+    assert bot.desired_state == "stopped"
+    assert bot.actual_state == "failed"  # distinct from an ordinary stop
+
+
+def test_fail_bot_announces_it_without_the_exception_message() -> None:
+    from app.models.audit import AuditLog, OutboxEvent, SystemEvent
+
+    bot = _bot(name="btcusdt-4h")
+    db = _failing_db(BotRun(id=uuid4(), bot_id=bot.id, status="running"))
+
+    _fail(db, bot)
+
+    added = [c.args[0] for c in db.add.call_args_list]
+    (event,) = [o for o in added if isinstance(o, SystemEvent)]
+    (outbox,) = [o for o in added if isinstance(o, OutboxEvent)]
+    assert (event.severity, event.category, event.event_type) == ("error", "system", "bot_failed")
+    assert "btcusdt-4h" in event.message and "5回続けて失敗" in event.message
+    assert "建玉" not in event.message
+    assert event.payload == {
+        "bot_id": str(bot.id),
+        "bot_name": "btcusdt-4h",
+        "error_type": "ValueError",
+        "consecutive_failures": 5,
+        "holds_position": False,
+    }
+    assert outbox.correlation_id == event.correlation_id
+    assert outbox.aggregate_id == bot.id
+    (audit,) = [o for o in added if isinstance(o, AuditLog)]
+    assert audit.action == "trading_bot.failed"
+
+
+def test_the_notice_warns_when_a_position_is_left_unwatched() -> None:
+    from app.models.audit import SystemEvent
+
+    bot = _bot()
+    db = _failing_db(BotRun(id=uuid4(), bot_id=bot.id, status="running"), holds_position=True)
+
+    _fail(db, bot)
+
+    (event,) = [c.args[0] for c in db.add.call_args_list if isinstance(c.args[0], SystemEvent)]
+    assert event.payload["holds_position"] is True
+    assert "建玉が残っており、損切りの監視も止まっています" in event.message
+
+
+def test_fail_bot_cancels_open_orders_with_the_callers_transaction(monkeypatch) -> None:
+    from app.trading.application import order_flow
+
+    bot = _bot()
+    order = TradeOrder(id=uuid4(), workspace_id=bot.workspace_id, status="submitted")
+    db = _failing_db(BotRun(id=uuid4(), bot_id=bot.id, status="running"), orders=[order])
+    cancel = MagicMock(side_effect=lambda db_, o, *, reason_code, commit: o)
+    monkeypatch.setattr(order_flow, "cancel_order", cancel)
+
+    _fail(db, bot)
+
+    cancel.assert_called_once_with(db, order, reason_code="bot_failed", commit=False)
+    db.commit.assert_called_once_with()  # one commit for the whole unit
+
+
+def test_fail_bot_works_without_a_bot_run() -> None:
+    bot = _bot()
+    db = _failing_db(None)
+
+    assert _fail(db, bot) is None
+
+    assert bot.actual_state == "failed"
+    db.commit.assert_called_once_with()

@@ -259,3 +259,39 @@ it('stops the whole workspace through the workspace endpoint', async () => {
     ),
   ).toBe(true)
 })
+
+it('shows a bot the worker gave up on as failed, and still lets it be started again', () => {
+  render(
+    <TradingPanel
+      visible
+      tradingAccounts={[]}
+      bots={[{ ...runningBot, desired_state: 'stopped', actual_state: 'failed' }]}
+      latestRuns={{}}
+      halts={[]}
+      onCommand={() => undefined}
+      onEmergencyStop={() => undefined}
+      onReleaseHalt={() => undefined}
+    />,
+  )
+
+  expect(screen.getByText('失敗(要確認)')).toBeInTheDocument()
+  expect(screen.queryByText('停止中')).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: '開始' })).toBeInTheDocument()
+})
+
+it('shows an ordinarily stopped bot as stopped', () => {
+  render(
+    <TradingPanel
+      visible
+      tradingAccounts={[]}
+      bots={[{ ...runningBot, desired_state: 'stopped', actual_state: 'stopped' }]}
+      latestRuns={{}}
+      halts={[]}
+      onCommand={() => undefined}
+      onEmergencyStop={() => undefined}
+      onReleaseHalt={() => undefined}
+    />,
+  )
+
+  expect(screen.getByText('停止中')).toBeInTheDocument()
+})

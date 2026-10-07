@@ -29,7 +29,10 @@ from app.core.config import settings
 from app.core.logging import configure_logging
 from app.db.session import SessionLocal
 from app.exchanges.binance_public import BinancePublicClient, get_binance_public_client
-from app.trading.application.bot_execution_loop import run_active_bots_once
+from app.trading.application.bot_execution_loop import (
+    EvaluationFailureTracker,
+    run_active_bots_once,
+)
 from app.trading.application.public_price_refresh import (
     refresh_public_prices_for_active_bots,
     refresh_public_spreads_for_active_bots,
@@ -55,12 +58,19 @@ async def _refresh_public_prices(db: Session, client: BinancePublicClient) -> No
 
 async def _run(stop: asyncio.Event) -> None:
     client = get_binance_public_client()
+    tracker = EvaluationFailureTracker()
     while not stop.is_set():
-        with SessionLocal() as db:
-            await _refresh_public_prices(db, client)
-            evaluated = run_active_bots_once(db)
-        if evaluated:
-            logger.info("trading.worker: evaluated %d active bot(s)", evaluated)
+        try:
+            with SessionLocal() as db:
+                await _refresh_public_prices(db, client)
+                evaluated = run_active_bots_once(db, tracker)
+            if evaluated:
+                logger.info("trading.worker: evaluated %d active bot(s)", evaluated)
+        except Exception as exc:
+            # A database blip on the pass's own queries must not end the worker: the bots are
+            # still active and the next pass tries again. (A stopped worker is what the
+            # notification worker's watchdog reports.)
+            logger.warning("trading.worker: pass failed (%s)", type(exc).__name__)
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(
                 stop.wait(), timeout=settings.bot_execution_poll_interval_seconds

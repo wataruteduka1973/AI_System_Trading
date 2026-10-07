@@ -284,32 +284,16 @@ def place_order(db: Session, command: PlaceOrderCommand, *, commit: bool = True)
                     "stop_fill_price is only for a positive-price market order that closes "
                     "the whole open position",
                 )
-        if not is_closing_or_reducing:
-            account_scope = trading_halt.HaltScope(
-                workspace_id=command.workspace_id, scope_type="account", scope_id=account.id
+        if not is_closing_or_reducing and entry_blocked_by_halt(
+            db,
+            workspace_id=command.workspace_id,
+            account_id=account.id,
+            bot_id=command.bot_id,
+        ):
+            raise OrderFlowError(
+                "trading_halted",
+                "A new or increasing entry is blocked by an active trading_halt",
             )
-            halted = trading_halt.has_active_halt_at_or_above(
-                db, account_scope, min_level="entry_halted"
-            )
-            if not halted:
-                workspace_scope = trading_halt.HaltScope(
-                    workspace_id=command.workspace_id, scope_type="workspace", scope_id=None
-                )
-                halted = trading_halt.has_active_halt_at_or_above(
-                    db, workspace_scope, min_level="entry_halted"
-                )
-            if not halted and command.bot_id is not None:
-                bot_scope = trading_halt.HaltScope(
-                    workspace_id=command.workspace_id, scope_type="bot", scope_id=command.bot_id
-                )
-                halted = trading_halt.has_active_halt_at_or_above(
-                    db, bot_scope, min_level="entry_halted"
-                )
-            if halted:
-                raise OrderFlowError(
-                    "trading_halted",
-                    "A new or increasing entry is blocked by an active trading_halt",
-                )
 
         now = datetime.now(UTC)
         order = TradeOrder(
@@ -372,6 +356,25 @@ def place_order(db: Session, command: PlaceOrderCommand, *, commit: bool = True)
         _finish(db, commit)
         db.refresh(order)
         return order
+
+
+def entry_blocked_by_halt(
+    db: Session, *, workspace_id: UUID, account_id: UUID, bot_id: UUID | None
+) -> bool:
+    """Whether an active `entry_halted`-or-more halt covers this account, the whole
+    workspace, or the bot (if known): such a halt blocks a new or increasing entry, never a
+    closing order. `bot_evaluation` asks first, so a halted bot is told "halted" instead of
+    having `place_order` raise on every poll."""
+    scopes = [
+        trading_halt.HaltScope(workspace_id, "account", account_id),
+        trading_halt.HaltScope(workspace_id, "workspace", None),
+    ]
+    if bot_id is not None:
+        scopes.append(trading_halt.HaltScope(workspace_id, "bot", bot_id))
+    return any(
+        trading_halt.has_active_halt_at_or_above(db, scope, min_level="entry_halted")
+        for scope in scopes
+    )
 
 
 def cancel_order(

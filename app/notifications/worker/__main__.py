@@ -21,6 +21,8 @@ import contextlib
 import logging
 import signal
 import sys
+import time
+from datetime import UTC, datetime, timedelta
 
 from app.core.config import settings
 from app.core.logging import configure_logging
@@ -30,6 +32,7 @@ from app.notifications.adapters.in_app import InAppNotificationAdapter
 from app.notifications.adapters.smtp import SmtpConfig, SmtpNotificationAdapter
 from app.notifications.application.deliver_notifications import deliver_pending_notifications
 from app.notifications.application.recipients import workspace_member_recipients
+from app.trading.application.worker_watchdog import check_trading_worker
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +57,29 @@ def _build_adapters(smtp: SmtpConfig | None) -> dict[str, NotificationAdapter]:
     return adapters
 
 
+_WATCHDOG_INTERVAL_SECONDS = 30.0
+
+
+def _run_watchdog() -> None:
+    try:
+        with SessionLocal() as db:
+            alerted = check_trading_worker(
+                db,
+                now=datetime.now(UTC),
+                stale_after=timedelta(seconds=settings.trading_worker_stale_seconds),
+            )
+        if alerted:
+            logger.warning("notification.worker: trading worker stalled (%d workspace(s))", alerted)
+    except Exception as exc:
+        logger.warning("notification.worker: watchdog failed (%s)", type(exc).__name__)
+
+
 async def _run(adapters: dict[str, NotificationAdapter], stop: asyncio.Event) -> None:
+    next_watchdog = 0.0
     while not stop.is_set():
+        if time.monotonic() >= next_watchdog:
+            _run_watchdog()
+            next_watchdog = time.monotonic() + _WATCHDOG_INTERVAL_SECONDS
         try:
             with SessionLocal() as db:
                 processed = deliver_pending_notifications(

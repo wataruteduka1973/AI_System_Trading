@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     # than any bot's own candle interval -- see bot_evaluation.evaluate_bot_on_latest_bar's
     # idempotency guard.
     bot_execution_poll_interval_seconds: float = 5.0
+    # How long an active bot may go without a heartbeat before the watchdog reports the
+    # trading worker as stalled. Longer than a worst-case pass: refreshing public prices
+    # can wait out several 10-second request timeouts in a row.
+    trading_worker_stale_seconds: float = 180.0
 
     @field_validator("cors_origins", mode="before")
     @classmethod

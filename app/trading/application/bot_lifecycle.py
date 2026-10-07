@@ -58,7 +58,8 @@ from app.models.connections import Exchange, ExchangeConnection
 from app.models.instruments import Instrument
 from app.models.market_data import Candle
 from app.models.strategy import BotRun, RiskProfileVersion, StrategyVersion, TradingBot
-from app.models.trading import TradeOrder, TradingAccount
+from app.models.trading import TradeOrder, TradingAccount, TradingPosition
+from app.notifications.application.publish_event import publish_system_event
 from app.trading.application import order_flow, trading_halt
 from app.trading.application.live_strategies import (
     UnresolvableStrategyError,
@@ -353,4 +354,85 @@ def stop_bot(
     else:
         db.flush()
     db.refresh(bot_run)
+    return bot_run
+
+
+def fail_bot(
+    db: Session, bot: TradingBot, *, error_type: str, consecutive_failures: int
+) -> BotRun | None:
+    """`running`/`paused` -> `failed`: what the worker does with a bot whose evaluation keeps
+    raising (`bot_execution_loop`). Cancels open orders, ends the `BotRun` as `failed`, tells the
+    workspace's Owners and Operators, and commits as one unit.
+
+    `desired_state` becomes `stopped` -- the DB only allows stopped/running/paused there; the
+    failure itself is `actual_state='failed'` -- so once the cause is dealt with the bot is
+    started like any stopped one (`start_bot`), which opens a new `BotRun`.
+
+    **An open position is left as it is, and nothing watches its stop any more**: the stop check
+    belongs to the evaluation that failed. The notice says so. Only the exception *type* is
+    recorded, never its message, which can carry values from the failing call."""
+    bot_run = db.scalar(
+        select(BotRun).where(BotRun.bot_id == bot.id, BotRun.status.in_(("running", "paused")))
+    )
+    cancelled = _cancel_open_orders(db, bot, reason_code="bot_failed", commit=False)
+    holds_position = (
+        db.scalar(
+            select(TradingPosition.id).where(
+                TradingPosition.account_id == bot.account_id,
+                TradingPosition.instrument_id == bot.instrument_id,
+                TradingPosition.status == "open",
+            )
+        )
+        is not None
+    )
+    now = datetime.now(UTC)
+    bot.desired_state = "stopped"
+    bot.actual_state = "failed"
+    bot.version += 1
+    bot.updated_at = now
+    if bot_run is not None:
+        bot_run.status = "failed"
+        bot_run.stopped_at = now
+        bot_run.stop_reason = f"evaluation failed: {error_type}"
+    _audit(
+        db,
+        bot,
+        "trading_bot.failed",
+        {
+            "error_type": error_type,
+            "consecutive_failures": consecutive_failures,
+            "cancelled_order_ids": [str(o.id) for o in cancelled],
+            "holds_position": holds_position,
+        },
+    )
+    message = (
+        f"Bot「{bot.name}」の評価が{consecutive_failures}回続けて失敗したため停止しました"
+        f"(原因の種類: {error_type})"
+    )
+    if holds_position:
+        message += "。建玉が残っており、損切りの監視も止まっています。確認してください"
+    publish_system_event(
+        db,
+        workspace_id=bot.workspace_id,
+        severity="error",
+        category="system",
+        event_type="bot_failed",
+        reason_code="evaluation_failed",
+        message=message,
+        payload={
+            "bot_id": str(bot.id),
+            "bot_name": bot.name,
+            "error_type": error_type,
+            "consecutive_failures": consecutive_failures,
+            "holds_position": holds_position,
+        },
+        aggregate_type="trading_bot",
+        aggregate_id=bot.id,
+        source_type="trading_worker",
+        target_type="bot",
+        target_id=bot.id,
+    )
+    db.commit()
+    if bot_run is not None:
+        db.refresh(bot_run)
     return bot_run
