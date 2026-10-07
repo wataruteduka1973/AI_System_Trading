@@ -483,6 +483,41 @@ def test_place_order_blocks_a_new_entry_while_account_scoped_halt_is_active() ->
     db.rollback.assert_called_once()
 
 
+def test_place_order_blocks_a_new_entry_while_a_workspace_wide_halt_is_active() -> None:
+    """The user's emergency stop of the whole workspace is a `workspace`-scope halt
+    (scope_id NULL); no account- or bot-scoped halt exists here."""
+    db = MagicMock()
+    account = _account()
+    instrument = _instrument()
+    db.scalar.side_effect = [account, "oanda", None]
+    workspace_halt = TradingHalt(
+        id=uuid4(),
+        workspace_id=account.workspace_id,
+        scope_type="workspace",
+        scope_id=None,
+        level="emergency_stopped",
+        reason_code="user_emergency_stop",
+        status="active",
+    )
+    no_halt = MagicMock(all=MagicMock(return_value=[]))
+    db.scalars.side_effect = [no_halt, MagicMock(all=MagicMock(return_value=[workspace_halt]))]
+    db.get.return_value = instrument
+    command = flow.PlaceOrderCommand(
+        workspace_id=account.workspace_id,
+        account_id=account.id,
+        instrument_id=instrument.id,
+        side="buy",
+        order_type="market",
+        quantity=Decimal("1000"),
+        client_order_id="c-workspace-halted",
+    )
+
+    with pytest.raises(flow.OrderFlowError) as exc:
+        flow.place_order(db, command)
+
+    assert exc.value.code == "trading_halted"
+
+
 def test_place_order_allows_closing_an_existing_position_despite_an_active_halt() -> None:
     db = MagicMock()
     account = _account()

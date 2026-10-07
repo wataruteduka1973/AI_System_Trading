@@ -18,8 +18,9 @@ row's `level` rather than adding another.
 
 **Which causes call this module at all** is deliberately narrow per ADR 0004: only
 `risk_gate.evaluate_signal` (data delay, daily/weekly loss, peak drawdown) does, for
-now. The other 8 causes in 05番's "取引停止マトリクス" have no detection code yet and
-are out of scope here.
+now. The user's emergency stop (`emergency_stop.py`, 2026-10-06) is the one other cause
+wired up; the other 7 causes in 05番's "取引停止マトリクス" have no detection code yet
+and are out of scope here.
 """
 
 from dataclasses import dataclass
@@ -59,7 +60,8 @@ class TradingHaltError(Exception):
 class HaltScope:
     workspace_id: UUID
     scope_type: str
-    scope_id: UUID
+    scope_id: UUID | None
+    """`None` for the `workspace`/`system` scope types (`ck_trading_halt_scope`)."""
 
 
 def _find_active_halt(db: Session, scope: HaltScope, reason_code: str) -> TradingHalt | None:
@@ -74,6 +76,10 @@ def _find_active_halt(db: Session, scope: HaltScope, reason_code: str) -> Tradin
     )
 
 
+def find_active_halt(db: Session, scope: HaltScope, reason_code: str) -> TradingHalt | None:
+    return _find_active_halt(db, scope, reason_code)
+
+
 def activate_or_escalate(
     db: Session,
     scope: HaltScope,
@@ -81,6 +87,7 @@ def activate_or_escalate(
     reason_code: str,
     level: str,
     auto_releasable: bool = True,
+    trigger_event_id: UUID | None = None,
 ) -> TradingHalt:
     """Create a new active halt at `level`, or -- if an active halt already exists
     for `(scope, reason_code)` -- escalate it to `level` only if `level` is *more*
@@ -120,6 +127,7 @@ def activate_or_escalate(
             level=level,
             reason_code=reason_code,
             auto_releasable=auto_releasable,
+            trigger_event_id=trigger_event_id,
             status="active",
         )
         db.add(halt)
@@ -223,11 +231,10 @@ def has_active_halt_at_or_above(db: Session, scope: HaltScope, *, min_level: str
     """Is there an active halt for this exact `(workspace_id, scope_type,
     scope_id)` at `min_level` or more severe, regardless of `reason_code`? (05番:
     "複数のtrading_haltが同一スコープに同時に有効な場合、実効的な制限は最も重い
-    レベルを優先する".) Does **not** check a broader scope (e.g. a workspace- or
-    system-level halt covering this bot/account) -- ADR 0004 only wires up
-    bot/account-scoped causes, so broader scopes have no way to become active yet;
-    a caller adding a new cause at `workspace`/`system` scope will need to extend
-    this."""
+    レベルを優先する".) Does **not** check a broader scope on its own: a caller that must honor
+    a workspace-wide halt (the user's emergency stop, `emergency_stop.py`) calls this
+    again with the `workspace` scope, as `order_flow.place_order` does. `system` scope
+    has no cause wired to it yet."""
     rows = db.scalars(
         select(TradingHalt).where(
             TradingHalt.workspace_id == scope.workspace_id,

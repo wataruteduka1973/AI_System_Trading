@@ -268,6 +268,14 @@ button:disabled {
   background: #8f3340;
 }
 
+.emergency-stop-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0;
+}
+
 .account-selection {
   margin-top: 24px;
   padding-top: 20px;

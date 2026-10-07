@@ -91,3 +91,11 @@ trading_halt発動・解除ロジックのMVPスコープを以下の通りと�
   追加する別タスクを起こす
 - `release_pending`を経由する承認ワークフローが必要になった場合(複数人での運用等、
   Horizon 5以降の話)、その時点で改めて設計する
+
+## 2026-10-06追記: 「利用者の緊急停止」を発動元として接続した
+
+「含まない」としていた残り8原因のうち、**利用者の緊急停止**を実装した(計画は
+`docs/plans/emergency-stop.md`)。Bot lifecycleの`emergency-stop`コマンドも同時に実装した
+(`POST /bots/{id}/emergency-stop`と、ワークスペース全体の`POST /emergency-stop`)。
+残りは7原因。`order_flow.place_order`はworkspaceスコープのhaltも確認するようになり、
+`bot_lifecycle.validate_bot_startup`は`emergency_stopped`が有効な間のstart/resumeを拒否する。

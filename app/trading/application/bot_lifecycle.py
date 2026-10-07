@@ -59,7 +59,7 @@ from app.models.instruments import Instrument
 from app.models.market_data import Candle
 from app.models.strategy import BotRun, RiskProfileVersion, StrategyVersion, TradingBot
 from app.models.trading import TradeOrder, TradingAccount
-from app.trading.application import order_flow
+from app.trading.application import order_flow, trading_halt
 from app.trading.application.live_strategies import (
     UnresolvableStrategyError,
     resolve_live_strategy,
@@ -124,6 +124,17 @@ def validate_bot_startup(db: Session, bot: TradingBot) -> None:
             "startup_validation_failed_account", "Trading account is missing or not active"
         )
 
+    for scope_type, scope_id in (("bot", bot.id), ("workspace", None)):
+        scope = trading_halt.HaltScope(
+            workspace_id=bot.workspace_id, scope_type=scope_type, scope_id=scope_id
+        )
+        if trading_halt.has_active_halt_at_or_above(db, scope, min_level="emergency_stopped"):
+            raise BotLifecycleError(
+                "startup_validation_failed_emergency_stop",
+                f"An emergency stop is active for this {scope_type}; "
+                "an Owner must release it before the bot can run again",
+            )
+
     strategy_version = db.get(StrategyVersion, bot.strategy_version_id)
     if strategy_version is None or strategy_version.lifecycle_status not in (
         "paper_approved",
@@ -185,7 +196,9 @@ def validate_bot_startup(db: Session, bot: TradingBot) -> None:
         )
 
 
-def _cancel_open_orders(db: Session, bot: TradingBot, *, reason_code: str) -> list[TradeOrder]:
+def _cancel_open_orders(
+    db: Session, bot: TradingBot, *, reason_code: str, commit: bool = True
+) -> list[TradeOrder]:
     """Cancels every cancellable order for the bot's account. Queried by `account_id`
     rather than joining through OrderIntent->Signal->BotRun->bot_id: a direct/manual
     order (`order_intent_id=None`, e.g. a dote-gating close-only order -- see
@@ -200,7 +213,10 @@ def _cancel_open_orders(db: Session, bot: TradingBot, *, reason_code: str) -> li
             TradeOrder.account_id == bot.account_id, TradeOrder.status.in_(_CANCELLABLE_STATUSES)
         )
     ).all()
-    return [order_flow.cancel_order(db, order, reason_code=reason_code) for order in orders]
+    return [
+        order_flow.cancel_order(db, order, reason_code=reason_code, commit=commit)
+        for order in orders
+    ]
 
 
 def _audit(db: Session, bot: TradingBot, action: str, after_data: dict[str, object]) -> None:
@@ -300,8 +316,11 @@ def resume_bot(db: Session, bot: TradingBot) -> BotRun:
     return bot_run
 
 
-def stop_bot(db: Session, bot: TradingBot, *, reason: str | None = None) -> BotRun:
-    """`running`/`paused` -> `stopped`. Cancels open orders; ends the `BotRun`."""
+def stop_bot(
+    db: Session, bot: TradingBot, *, reason: str | None = None, commit: bool = True
+) -> BotRun:
+    """`running`/`paused` -> `stopped`. Cancels open orders; ends the `BotRun`.
+    `commit=False` leaves the transaction to the caller (`emergency_stop.py`)."""
     if bot.desired_state == "stopped":
         raise BotStateConflictError("Bot is already stopped")
     if bot.desired_state not in ("running", "paused"):
@@ -314,7 +333,7 @@ def stop_bot(db: Session, bot: TradingBot, *, reason: str | None = None) -> BotR
     if bot_run is None:
         raise BotLifecycleError("no_active_bot_run", "No active BotRun found for this bot")
 
-    cancelled = _cancel_open_orders(db, bot, reason_code="bot_stopped")
+    cancelled = _cancel_open_orders(db, bot, reason_code="bot_stopped", commit=commit)
     now = datetime.now(UTC)
     bot.desired_state = "stopped"
     bot.actual_state = "stopped"
@@ -329,6 +348,9 @@ def stop_bot(db: Session, bot: TradingBot, *, reason: str | None = None) -> BotR
         "trading_bot.stopped",
         {"cancelled_order_ids": [str(o.id) for o in cancelled], "reason": bot_run.stop_reason},
     )
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
     db.refresh(bot_run)
     return bot_run

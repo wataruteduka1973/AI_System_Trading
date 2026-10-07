@@ -15,9 +15,10 @@ used to leave `trading_halt` activation/release entirely out of scope. It no lon
 does, for exactly two causes: `evaluate_signal` now calls
 `app.trading.application.trading_halt` to activate/escalate on a data-delay or
 daily/weekly-loss/peak-drawdown hard breach, and to relax one step when the
-corresponding check passes again -- see `_sync_trading_halts` below. The other 8
-causes in 05番's 取引停止マトリクス still have no detection code anywhere and remain
-out of scope (ADR 0004's explicit MVP boundary).
+corresponding check passes again -- see `_sync_trading_halts` below. The user's emergency
+stop is the one other cause wired up (2026-10-06, by `emergency_stop.py`, not this module);
+the other 7 causes in 05番's 取引停止マトリクス still have no detection code anywhere and
+remain out of scope (ADR 0004's MVP boundary).
 
 **Approximation (reported): "全open positionの想定損失合計"** would need each open
 position's stop-loss-implied risk, but this codebase does not place or track real

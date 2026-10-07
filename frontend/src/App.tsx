@@ -191,7 +191,10 @@ function App() {
           tradingAccounts={trading.tradingAccounts}
           bots={trading.bots}
           latestRuns={trading.latestRuns}
+          halts={trading.halts}
           onCommand={(bot, command) => void trading.runBotCommand(bot, command)}
+          onEmergencyStop={(bot, closePositions) => void trading.emergencyStop(bot, closePositions)}
+          onReleaseHalt={(halt) => void trading.releaseEmergencyStop(halt)}
         />
         <BacktestPanel
           visible={route.kind === 'backtests'}

@@ -10,6 +10,7 @@
 | 計画書 | 内容 | 状態 |
 |---|---|---|
 | [paper-trading-live-data.md](paper-trading-live-data.md) | 本番の公開価格でのペーパートレード | Unit 1〜6完了。2つのボット群(承認済み 4h 55/20 ×6、比較用 4h 110/40 ×6)が稼働中で、データを貯める段階。月1回 `scripts/report_paper_performance.py` で想定範囲と比べる |
+| [emergency-stop.md](emergency-stop.md) | 利用者の緊急停止(Botまたはワークスペース全体、解除はOwnerのみ) | 実装済み(2026-10-06)。通知への接続は未 |
 | [paper-trading-server.md](paper-trading-server.md) | ペーパートレードの Worker と DB を AWS(EC2 + RDS)で動かし続ける | 2026-10-05 承認(東京、CloudFormation)。Unit 0(利用者による AWS の準備)待ち。それまでは手元 PC の自動起動でつなぐ |
 
 ## 一部完了・一部先送り
