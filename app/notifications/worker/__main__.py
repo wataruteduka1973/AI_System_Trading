@@ -10,11 +10,10 @@ transaction, not a long-running job that can crash mid-flight and need
 stale-recovery (see `app/notifications/application/deliver_notifications.py`'s
 module docstring).
 
-**No real recipient targeting policy exists yet** -- `_no_recipients` below is
-a placeholder `RecipientResolver` (see that module's docstring): with no
-domain event producer writing to `outbox_event` yet, there is nothing to
-target in the first place. Replace it once one exists; this loop, the SMTP
-adapter, and the ORM are otherwise ready to use as-is.
+Recipients are the workspace's Owners and Operators (`recipients.workspace_member_recipients`).
+The `in_app` channel always works; `email` is added only when SMTP is configured
+(SMTP_HOST/SMTP_SENDER_ADDRESS) -- without it the worker still runs and records in-app
+notifications.
 """
 
 import asyncio
@@ -26,22 +25,18 @@ import sys
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.db.session import SessionLocal
-from app.models.audit import OutboxEvent, SystemEvent
+from app.notifications.adapters.base import NotificationAdapter
+from app.notifications.adapters.in_app import InAppNotificationAdapter
 from app.notifications.adapters.smtp import SmtpConfig, SmtpNotificationAdapter
-from app.notifications.application.deliver_notifications import (
-    RecipientResolver,
-    deliver_pending_notifications,
-)
+from app.notifications.application.deliver_notifications import deliver_pending_notifications
+from app.notifications.application.recipients import workspace_member_recipients
 
 logger = logging.getLogger(__name__)
 
 
-def _require_smtp_configured() -> SmtpConfig:
+def _smtp_config() -> SmtpConfig | None:
     if settings.smtp_host is None or settings.smtp_sender_address is None:
-        raise RuntimeError(
-            "SMTP is not configured (SMTP_HOST/SMTP_SENDER_ADDRESS); set them in .env "
-            "before starting the Notification Worker."
-        )
+        return None
     return SmtpConfig(
         host=settings.smtp_host,
         port=settings.smtp_port,
@@ -52,20 +47,25 @@ def _require_smtp_configured() -> SmtpConfig:
     )
 
 
-def _no_recipients(_event: OutboxEvent, _system_event: SystemEvent) -> list[tuple[str, str]]:
-    return []
+def _build_adapters(smtp: SmtpConfig | None) -> dict[str, NotificationAdapter]:
+    adapters: dict[str, NotificationAdapter] = {"in_app": InAppNotificationAdapter()}
+    if smtp is not None:
+        adapters["email"] = SmtpNotificationAdapter(smtp)
+    return adapters
 
 
-async def _run(config: SmtpConfig, stop: asyncio.Event) -> None:
-    adapter = SmtpNotificationAdapter(config)
-    resolver: RecipientResolver = _no_recipients
+async def _run(adapters: dict[str, NotificationAdapter], stop: asyncio.Event) -> None:
     while not stop.is_set():
-        with SessionLocal() as db:
-            processed = deliver_pending_notifications(
-                db, adapter=adapter, recipient_resolver=resolver
-            )
-        if processed:
-            logger.info("notification.worker: processed %d outbox event(s)", processed)
+        try:
+            with SessionLocal() as db:
+                processed = deliver_pending_notifications(
+                    db, adapters=adapters, recipient_resolver=workspace_member_recipients
+                )
+            if processed:
+                logger.info("notification.worker: processed %d outbox event(s)", processed)
+        except Exception as exc:
+            # A database blip must not end the worker: the pending rows are still there.
+            logger.warning("notification.worker: pass failed (%s)", type(exc).__name__)
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(stop.wait(), timeout=settings.notification_poll_interval_seconds)
 
@@ -82,24 +82,22 @@ def _install_signal_handlers(loop: asyncio.AbstractEventLoop, stop: asyncio.Even
             loop.add_signal_handler(posix_signal, stop.set)
 
 
-async def _main(config: SmtpConfig) -> None:
+async def _main(adapters: dict[str, NotificationAdapter]) -> None:
     stop = asyncio.Event()
     _install_signal_handlers(asyncio.get_running_loop(), stop)
-    logger.info("notification.worker: starting")
+    logger.info("notification.worker: starting (channels: %s)", ", ".join(sorted(adapters)))
     try:
-        await _run(config, stop)
+        await _run(adapters, stop)
     finally:
         logger.info("notification.worker: stopped")
 
 
 def main() -> int:
     configure_logging(settings, log_filename="notification_worker.log")
-    try:
-        config = _require_smtp_configured()
-    except RuntimeError as exc:
-        print(f"[ERROR] {exc}", file=sys.stderr)
-        return 1
-    asyncio.run(_main(config))
+    smtp = _smtp_config()
+    if smtp is None:
+        logger.warning("notification.worker: SMTP is not configured; email notifications are off")
+    asyncio.run(_main(_build_adapters(smtp)))
     return 0
 
 

@@ -78,8 +78,9 @@ class OutboxEvent(Base):
     `aggregate_id` are a polymorphic pointer to whatever the event concerns (a
     `trading_bot.id`, `trading_account.id`, etc.), matching the DB's own lack of a
     foreign key on them (same reasoning as `SystemEvent.source_id`/`target_id`
-    above). No domain event producer writes to this table yet -- see
-    `app/notifications/application/deliver_notifications.py`'s module docstring."""
+    above). Written, with a `SystemEvent` sharing its `correlation_id`, by
+    `app/notifications/application/publish_event.py` (first producer: `trading_halt`) --
+    see docs/plans/notification-wiring.md."""
 
     __tablename__ = "outbox_event"
     __table_args__ = {"schema": SCHEMA}

@@ -22,6 +22,7 @@ MOCK_OIDC_SCRIPT = "scripts/mock_oidc_server.py"
 WORKER_LABELS = {
     "app.market_data.worker": "市場データWorker(ローソク足の自動収集)",
     "app.trading.worker": "トレーディングWorker(ペーパートレードの評価)",
+    "app.notifications.worker": "通知Worker(取引停止などの通知)",
     MOCK_OIDC_SCRIPT: "開発用ログインサーバー(mock OIDC)",
 }
 
@@ -116,6 +117,7 @@ def commands(root: Path) -> list[list[str]]:
         [node, str(vite), "--host", "127.0.0.1", "--port", "5173", "--strictPort"],
         [sys.executable, "-m", "app.market_data.worker"],
         [sys.executable, "-m", "app.trading.worker"],
+        [sys.executable, "-m", "app.notifications.worker"],
     ]
     if uses_mock_oidc(root):
         # Non-critical like the workers: if it stops, login stops but trading does not.

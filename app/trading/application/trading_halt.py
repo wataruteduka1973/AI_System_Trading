@@ -32,6 +32,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.strategy import TradingHalt
+from app.notifications.application.publish_event import publish_system_event
 
 logger = structlog.get_logger(__name__)
 
@@ -48,6 +49,45 @@ _ONE_STEP_DOWN: dict[str, str | None] = {
     "entry_halted": "warning",
     "warning": None,  # one step below warning is "released", not another level
 }
+
+
+_SEVERITY_BY_LEVEL = {
+    "warning": "warning",
+    "entry_halted": "warning",
+    "all_trading_halted": "error",
+    "emergency_stopped": "critical",
+}
+
+
+_LEVEL_LABEL = {
+    "warning": "警告",
+    "entry_halted": "新規建玉の停止",
+    "all_trading_halted": "全取引の停止",
+    "emergency_stopped": "緊急停止",
+}
+
+_REASON_LABEL = {
+    "data_delay": "データ遅延",
+    "daily_loss_dd_limit": "日次・週次の損失または最大ドローダウンの上限",
+    "user_emergency_stop": "利用者の緊急停止",
+}
+"""Words for the notification, which a person reads. A cause not listed shows its code."""
+
+_SCOPE_LABEL = {"bot": "Bot", "account": "口座", "workspace": "ワークスペース全体"}
+
+
+@dataclass(frozen=True)
+class HaltEvent:
+    """What the announcement of a halt says, for a cause that wants its own wording
+    (the user's emergency stop). Without one, `activate_or_escalate` announces the halt
+    generically by its `reason_code`."""
+
+    event_type: str
+    message: str
+    payload: dict[str, object]
+    source_type: str = "risk_gate"
+    source_id: UUID | None = None
+    correlation_id: UUID | None = None
 
 
 class TradingHaltError(Exception):
@@ -87,7 +127,7 @@ def activate_or_escalate(
     reason_code: str,
     level: str,
     auto_releasable: bool = True,
-    trigger_event_id: UUID | None = None,
+    event: HaltEvent | None = None,
 ) -> TradingHalt:
     """Create a new active halt at `level`, or -- if an active halt already exists
     for `(scope, reason_code)` -- escalate it to `level` only if `level` is *more*
@@ -103,7 +143,11 @@ def activate_or_escalate(
     Owner's judgment call on the very next signal, with no record of it having
     happened. This does not suppress the reactivation (the breach is still real
     and conservative-v1's numbers still apply) -- it logs it, so the override is
-    at least visible after the fact."""
+    at least visible after the fact.
+
+    Creating a halt and raising its level are announced (`_announce`: a `SystemEvent`
+    plus an outbox row, in the caller's transaction, so people hear of it); a no-op and
+    `deescalate_one_step` are not."""
     existing = _find_active_halt(db, scope, reason_code)
     if existing is None:
         last_release = most_recently_released_halt(db, scope, reason_code)
@@ -127,19 +171,65 @@ def activate_or_escalate(
             level=level,
             reason_code=reason_code,
             auto_releasable=auto_releasable,
-            trigger_event_id=trigger_event_id,
             status="active",
         )
         db.add(halt)
+        db.flush()
+        halt.trigger_event_id = _announce(db, halt, event, previous_level=None)
         db.flush()
         db.refresh(halt)
         return halt
 
     if _LEVEL_SEVERITY[level] > _LEVEL_SEVERITY[existing.level]:
+        previous_level = existing.level
         existing.level = level
+        _announce(db, existing, event, previous_level=previous_level)
         db.flush()
         db.refresh(existing)
     return existing
+
+
+def _announce(
+    db: Session, halt: TradingHalt, event: HaltEvent | None, *, previous_level: str | None
+) -> UUID:
+    """Writes the `SystemEvent` (+ outbox row) for a halt that was just created
+    (`previous_level is None`) or escalated, and returns the system event's id."""
+    payload: dict[str, object] = {
+        "halt_id": str(halt.id),
+        "scope_type": halt.scope_type,
+        "scope_id": str(halt.scope_id) if halt.scope_id else None,
+        "level": halt.level,
+        "previous_level": previous_level,
+        "reason_code": halt.reason_code,
+    }
+    if event is not None:
+        payload.update(event.payload)
+    reason = _REASON_LABEL.get(halt.reason_code, halt.reason_code)
+    scope = _SCOPE_LABEL.get(halt.scope_type, halt.scope_type)
+    level = _LEVEL_LABEL[halt.level]
+    default_message = (
+        f"{reason}により、{scope}が{level}になりました"
+        if previous_level is None
+        else f"{reason}が悪化し、{scope}が{_LEVEL_LABEL[previous_level]}から{level}になりました"
+    )
+    system_event = publish_system_event(
+        db,
+        workspace_id=halt.workspace_id,
+        severity=_SEVERITY_BY_LEVEL[halt.level],
+        category="risk",
+        event_type=event.event_type if event else f"trading_halt.{halt.reason_code}",
+        reason_code=halt.reason_code,
+        message=event.message if event else default_message,
+        payload=payload,
+        aggregate_type="trading_halt",
+        aggregate_id=halt.id,
+        source_type=event.source_type if event else "risk_gate",
+        source_id=event.source_id if event else None,
+        target_type=halt.scope_type,
+        target_id=halt.scope_id,
+        correlation_id=event.correlation_id if event else None,
+    )
+    return system_event.id
 
 
 def deescalate_one_step(

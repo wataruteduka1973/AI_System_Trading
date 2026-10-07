@@ -1,46 +1,48 @@
 """Outbox polling + notification delivery (Horizon5 Group D / Unit 8,
-docs/plans/horizon5-implementation-plan.md). **Skeleton**: no domain event
-producer writes to `outbox_event` yet -- ADR 0004-style trading_halt
-notifications, connection-credential-change alerts, etc. are all still
-unwired. Wiring an actual domain event source is a separate task (plan §Unit
-8 "想定リスク"); this module gives that future task somewhere to plug in.
+docs/plans/horizon5-implementation-plan.md; wired to its first producers in
+docs/plans/notification-wiring.md).
 
-**Deviation from the plan's illustrative code, with reason**: the plan's own
-example sets `Notification.event_id = event.id` where `event` is the claimed
-`OutboxEvent`, and `Notification.workspace_id = event.aggregate_id`. Both are
-wrong by construction and the plan flags the function itself as "a skeleton,
-do not use as-is": `notification.event_id` is a foreign key to
-`system_event.id`, not `outbox_event.id` -- there is no relationship between
-those two tables in the schema at all (`outbox_event.aggregate_id` is a
-polymorphic pointer to whatever entity the event concerns, e.g. a
-`trading_bot.id`, not a `system_event` row) -- so inserting it verbatim would
-either violate `notification`'s foreign key constraint or silently write the
-wrong workspace. Both tables do carry a `correlation_id`, which is exactly
-what that column exists for (03_ER図とデータ定義.md), so this version resolves
-the matching `SystemEvent` by `correlation_id` instead: that gives a correct
-`workspace_id` (`system_event.workspace_id` is NOT NULL) and a correct
-`event_id` in one step, and keeps `recipient_resolver` focused on the one
-thing the plan actually calls a product decision out of this Unit's scope --
-who to notify -- rather than also asking it to invent a workspace id.
+**Matching a `SystemEvent`**: `notification.event_id` is a foreign key to
+`system_event.id`, not `outbox_event.id` -- the two tables have no relationship in the
+schema (`outbox_event.aggregate_id` is a polymorphic pointer to whatever the event concerns).
+Both carry a `correlation_id`, which is what it exists for (03_ER図とデータ定義.md): the
+producer (`publish_event.publish_system_event`) writes the pair with one shared id, and this
+module resolves the `SystemEvent` from it. That gives a correct `workspace_id` and `event_id`.
+
+**At-least-once, without sending twice to someone who already got it**: an event is
+`published` only once every recipient has a `sent` notification. A failed delivery keeps the
+event `pending` with a later `available_at` (exponential backoff) and counts an attempt;
+after `MAX_ATTEMPTS` the event is `failed`. A retry skips recipients already `sent` and
+re-sends only the failed ones, reusing their `notification` row (so `delivery_attempts` counts
+every try). That is the roadmap's "重複、欠落、再送をOutboxから追跡できる".
+
+**Channels**: `adapters` maps a channel name to its adapter. A recipient on a channel with no
+adapter (email while SMTP is unset) is skipped, not failed -- there is nothing to retry.
 """
 
+import json
+import logging
 import smtplib
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.audit import OutboxEvent, SystemEvent
 from app.models.notifications import Notification
 from app.notifications.adapters.base import NotificationAdapter
 
-_BATCH_SIZE = 50
+logger = logging.getLogger(__name__)
 
-RecipientResolver = Callable[[OutboxEvent, SystemEvent], list[tuple[str, str]]]
-"""`resolver(outbox_event, system_event) -> [(channel, recipient_ref), ...]` --
-who should be notified about this event and over which channel(s). Left as an
-injected callback since the actual workspace/user targeting policy is a
-product decision out of this Unit's scope (plan §Unit 8)."""
+_BATCH_SIZE = 50
+MAX_ATTEMPTS = 5
+_BACKOFF_BASE_SECONDS = 30
+
+RecipientResolver = Callable[[Session, OutboxEvent, SystemEvent], list[tuple[str, str]]]
+"""`resolver(db, outbox_event, system_event) -> [(channel, recipient_ref), ...]` -- who
+should be notified about this event and over which channel(s). See
+`recipients.workspace_member_recipients` for the policy in use."""
 
 
 def claim_pending_outbox_events(db: Session) -> list[OutboxEvent]:
@@ -48,13 +50,14 @@ def claim_pending_outbox_events(db: Session) -> list[OutboxEvent]:
     processes can run concurrently without double-delivering the same event
     (SQLAlchemy 2.0: `Select.with_for_update(skip_locked=True)`, see
     https://docs.sqlalchemy.org/en/20/orm/queryguide/select.html#selecting-for-update).
+    Only rows whose `available_at` has passed: a retry is parked until its backoff is over.
     Deliberately not the market-data worker's lease/heartbeat machinery: that
     exists for long-running fetch jobs that can crash mid-flight and need
     stale-recovery, whereas a notification send is a single short call that
     either finishes or fails within one transaction."""
     statement = (
         select(OutboxEvent)
-        .where(OutboxEvent.status == "pending")
+        .where(OutboxEvent.status == "pending", OutboxEvent.available_at <= func.now())
         .order_by(OutboxEvent.available_at)
         .limit(_BATCH_SIZE)
         .with_for_update(skip_locked=True)
@@ -62,13 +65,22 @@ def claim_pending_outbox_events(db: Session) -> list[OutboxEvent]:
     return list(db.scalars(statement).all())
 
 
+def _subject_and_body(system_event: SystemEvent) -> tuple[str, str]:
+    subject = f"[{system_event.severity.upper()}] {system_event.message}"
+    details = json.dumps(system_event.payload, ensure_ascii=False, indent=2, default=str)
+    return subject, f"{system_event.message}\n\n{details}\n"
+
+
 def deliver_pending_notifications(
-    db: Session, *, adapter: NotificationAdapter, recipient_resolver: RecipientResolver
+    db: Session,
+    *,
+    adapters: Mapping[str, NotificationAdapter],
+    recipient_resolver: RecipientResolver,
 ) -> int:
-    """Claims a batch of pending `OutboxEvent` rows and attempts delivery of
-    each recipient `recipient_resolver` names. Returns the number of outbox
-    events processed (not the number of notifications sent -- an event with
-    zero resolved recipients still counts as processed)."""
+    """Claims a batch of pending `OutboxEvent` rows and delivers each to every recipient
+    `recipient_resolver` names. Returns the number of outbox events processed (not the
+    number of notifications sent -- an event with zero resolved recipients still counts as
+    processed)."""
     processed = 0
     for event in claim_pending_outbox_events(db):
         system_event = db.scalar(
@@ -84,24 +96,36 @@ def deliver_pending_notifications(
             db.flush()
             continue
 
-        for channel, recipient_ref in recipient_resolver(event, system_event):
-            notification = Notification(
-                workspace_id=system_event.workspace_id,
-                event_id=system_event.id,
-                channel=channel,
-                recipient_ref=recipient_ref,
-                status="queued",
-                # `server_default="0"` only applies on INSERT -- a freshly
-                # constructed object has `delivery_attempts=None` in Python
-                # until then, and the `+= 1` below runs before that INSERT.
-                delivery_attempts=0,
-            )
-            db.add(notification)
-            try:
-                adapter.send(
-                    recipient=recipient_ref, subject=event.event_type, body=str(event.payload)
+        subject, body = _subject_and_body(system_event)
+        any_failed = False
+        for channel, recipient_ref in recipient_resolver(db, event, system_event):
+            adapter = adapters.get(channel)
+            if adapter is None:
+                continue
+            notification = db.scalar(
+                select(Notification).where(
+                    Notification.event_id == system_event.id,
+                    Notification.channel == channel,
+                    Notification.recipient_ref == recipient_ref,
                 )
-                notification.status = "sent"
+            )
+            if notification is not None and notification.status in ("sent", "acknowledged"):
+                continue
+            if notification is None:
+                notification = Notification(
+                    workspace_id=system_event.workspace_id,
+                    event_id=system_event.id,
+                    channel=channel,
+                    recipient_ref=recipient_ref,
+                    status="queued",
+                    # `server_default="0"` only applies on INSERT -- a freshly
+                    # constructed object has `delivery_attempts=None` in Python
+                    # until then, and the `+= 1` below runs before that INSERT.
+                    delivery_attempts=0,
+                )
+                db.add(notification)
+            try:
+                adapter.send(recipient=recipient_ref, subject=subject, body=body)
             except (OSError, smtplib.SMTPException):
                 # OSError alone only catches connection-level failures (DNS
                 # unreachable, connection refused). smtplib.SMTPException's
@@ -111,7 +135,22 @@ def deliver_pending_notifications(
                 # otherwise propagate uncaught and crash the whole batch.
                 notification.status = "failed"
                 notification.delivery_attempts += 1
-        event.status = "published"
+                any_failed = True
+            else:
+                notification.status = "sent"
+                notification.sent_at = datetime.now(UTC)
+
+        if any_failed:
+            event.attempts += 1
+            if event.attempts >= MAX_ATTEMPTS:
+                event.status = "failed"
+                logger.error("notification.deliver: giving up on outbox event %s", event.id)
+            else:
+                delay = _BACKOFF_BASE_SECONDS * 2**event.attempts
+                event.available_at = datetime.now(UTC) + timedelta(seconds=delay)
+        else:
+            event.status = "published"
+            event.published_at = datetime.now(UTC)
         db.flush()
         processed += 1
     db.commit()

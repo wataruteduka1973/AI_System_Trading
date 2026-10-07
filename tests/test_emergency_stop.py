@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
-from app.models.audit import AuditLog, SystemEvent
+from app.models.audit import AuditLog, OutboxEvent, SystemEvent
 from app.models.strategy import TradingBot, TradingHalt
 from app.models.trading import TradingPosition
 from app.trading.application import bot_lifecycle, emergency_stop, order_flow
@@ -60,6 +60,14 @@ def test_a_bot_emergency_stop_halts_stops_and_records_who_in_one_commit(stops) -
     (event,) = _added(db, SystemEvent)
     assert (event.severity, event.category, event.source_id) == ("critical", "risk", user)
     assert halt.trigger_event_id == event.id
+    (outbox,) = _added(db, OutboxEvent)  # announced: the notification worker will pick it up
+    assert (outbox.event_type, outbox.correlation_id) == (
+        "user_emergency_stop",
+        event.correlation_id,
+    )
+    assert (
+        event.payload["close_positions"] is False and event.payload["reason"] == "exchange outage"
+    )
     (audit,) = _added(db, AuditLog)
     assert audit.actor_id == user
     assert audit.action == "trading_halt.user_emergency_stop"

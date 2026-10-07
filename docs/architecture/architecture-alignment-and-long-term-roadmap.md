@@ -593,7 +593,9 @@ ADR 0005によりroadmap原文の前提（運営者が本番環境を運用す�
 - `[~]` Event Log、Outbox、Notification Worker、通知設定を実装する（通知は汎用SMTPを
   デフォルトとし、Gmail API等は任意アダプタとして後続タスクに回す）
   （Outbox/Notification ORM・汎用SMTPアダプタ・配信ループ・Workerのスケルトンは実装済み。
-  ドメインイベント発行元(Event Log相当)は未配線で、完了条件は未達のまま）
+  2026-10-07: 最初の発行元として取引停止(自動停止と利用者の緊急停止)を配線し、再送・重複防止、
+  受信者(Owner/Operator)、アプリ内チャネルを足した(`plans/notification-wiring.md`)。
+  アプリ内通知を見る画面と、取引停止以外の発行元は未実装で、完了条件は一部未達のまま）
 - ~~backup/restore、migration rollback方針、障害対応手順、SLOを整備する~~ →
   運営者によるSLO保証ではなく、顧客向けの手順書提供に変更する
 - `[x]` dependency、SBOM、secret scan、脆弱性対応をrelease gateへ組み込む
