@@ -255,6 +255,7 @@ function App() {
           visible={route.kind === 'backtests'}
           backtests={backtests.backtests}
           selectedRunDetail={backtests.selectedRunDetail}
+          batchResult={backtests.batchResult}
           onViewDetail={(run) => void backtests.loadRunDetail(run)}
         />
       </section>
@@ -375,6 +376,11 @@ function App() {
         trainRatio={backtests.trainRatio}
         onTrainRatioChange={backtests.setTrainRatio}
         onCreateBacktest={() => void backtests.createBacktest()}
+        batchMode={backtests.batchMode}
+        onBatchModeChange={backtests.setBatchMode}
+        batchInstrumentIds={backtests.batchInstrumentIds}
+        onToggleBatchInstrument={backtests.toggleBatchInstrument}
+        onCreateBatch={() => void backtests.createBatch()}
       />
 
       {route.kind === 'home' && <button type="button" onClick={refreshHealth}>

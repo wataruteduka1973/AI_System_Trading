@@ -70,3 +70,20 @@ export type BacktestRunDetail = {
   trades: BacktestTrade[]
   equityCurve: EquityCurve
 }
+
+/** Mirrors `app.schemas.backtests.BacktestBatchResponse` (POST .../backtests/batch): each
+ * instrument is its own run (or train/test pair), or an `error_code` and nothing else. */
+export type BacktestBatchItem = {
+  instrument_id: string
+  symbol: string
+  /** The candles in the requested range -- what counted against the batch's budget. */
+  bars: number
+  runs: BacktestRun[]
+  error_code: string | null
+  error: string | null
+}
+
+export type BacktestBatchResponse = {
+  total_bars: number
+  items: BacktestBatchItem[]
+}
