@@ -245,6 +245,8 @@ function App() {
           bots={trading.bots}
           latestRuns={trading.latestRuns}
           halts={trading.halts}
+          overviews={trading.botOverview}
+          accountOverviews={trading.accountOverview}
           onCommand={(bot, command) => void trading.runBotCommand(bot, command)}
           onEmergencyStop={(bot, closePositions) => void trading.emergencyStop(bot, closePositions)}
           onReleaseHalt={(halt) => void trading.releaseHalt(halt)}
@@ -328,6 +330,7 @@ function App() {
         connections={connections.connections}
         workspaceInstruments={workspaceInstruments}
         tradingAccounts={trading.tradingAccounts}
+        accountOverviews={trading.accountOverview}
         tradingMessage={trading.tradingMessage}
         accountConnectionId={trading.accountConnectionId}
         onAccountConnectionIdChange={trading.setAccountConnectionId}

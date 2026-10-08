@@ -703,3 +703,73 @@ def test_emergency_stop_requires_operator_role() -> None:
         app.dependency_overrides.clear()
 
     assert workspace.status_code == 401 and bot.status_code == 401
+
+
+def test_bot_overview_returns_each_bot_with_its_standing_and_each_account() -> None:
+    from app.trading.application import bot_overview as overview
+
+    workspace_id, account_id = uuid4(), uuid4()
+    bot = TradingBot(
+        id=uuid4(),
+        workspace_id=workspace_id,
+        name="btc-4h",
+        timeframe="4h",
+        desired_state="running",
+        actual_state="running",
+        account_id=account_id,
+    )
+    instrument = Instrument(id=uuid4(), symbol="BTCUSDT", quote_asset="USDT")
+    account = TradingAccount(
+        id=account_id,
+        workspace_id=workspace_id,
+        mode="paper",
+        base_currency="USDT",
+        status="active",
+    )
+    position = overview.PositionOverview(
+        side="long",
+        quantity=Decimal("2"),
+        average_entry_price=Decimal("100"),
+        mark_price=Decimal("110"),
+        unrealized_pnl=Decimal("20"),
+        stop_price=None,
+        opened_at=None,
+    )
+    bots = [
+        overview.BotOverview(
+            bot=bot,
+            instrument=instrument,
+            exchange_code="binance",
+            quote_asset="USDT",
+            deposits=Decimal("1000"),
+            cash=Decimal("800"),
+            equity=Decimal("1020"),
+            return_pct=Decimal("2"),
+            realized_pnl=Decimal("0"),
+            fees_paid=Decimal("0.2"),
+            closed_trades=0,
+            position=position,
+        )
+    ]
+    accounts = [
+        overview.AccountOverview(
+            account=account, bot_names=["btc-4h"], balances={"USDT": Decimal("800")}
+        )
+    ]
+    _override_database(MagicMock())
+    original = overview.build_overview
+    overview.build_overview = lambda db, ws: (bots, accounts)
+    try:
+        response = client.get(f"/api/v1/workspaces/{workspace_id}/bot-overview")
+    finally:
+        overview.build_overview = original
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    (item,) = body["bots"]
+    assert (item["name"], item["symbol"], item["exchange_code"]) == ("btc-4h", "BTCUSDT", "binance")
+    assert Decimal(item["equity"]) == 1020 and Decimal(item["return_pct"]) == 2
+    assert item["position"]["side"] == "long" and Decimal(item["position"]["unrealized_pnl"]) == 20
+    (shown,) = body["accounts"]
+    assert shown["bot_names"] == ["btc-4h"] and Decimal(shown["balances"]["USDT"]) == 800

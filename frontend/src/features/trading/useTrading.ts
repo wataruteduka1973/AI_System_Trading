@@ -2,6 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiBaseUrl, apiErrorMessage, apiFetch } from '../../lib/api'
 import { releasePath } from './haltLabels'
 import type {
+  AccountOverview,
+  BotOverview,
+  BotOverviewResponse,
   BotRunSummary,
   EmergencyStopResult,
   TradingAccount,
@@ -23,6 +26,8 @@ export function useTrading(selectedWorkspaceId: string) {
   const [bots, setBots] = useState<TradingBot[]>([])
   const [latestRuns, setLatestRuns] = useState<Record<string, BotRunSummary>>({})
   const [halts, setHalts] = useState<TradingHalt[]>([])
+  const [botOverview, setBotOverview] = useState<BotOverview[]>([])
+  const [accountOverview, setAccountOverview] = useState<AccountOverview[]>([])
   const [tradingMessage, setTradingMessage] = useState('')
 
   const [accountConnectionId, setAccountConnectionId] = useState('')
@@ -61,15 +66,23 @@ export function useTrading(selectedWorkspaceId: string) {
       setBots([])
       setLatestRuns({})
       setHalts([])
+      setBotOverview([])
+      setAccountOverview([])
       return
     }
     try {
-      const [accountsResponse, botsResponse, haltsResponse] = await Promise.all([
+      const [accountsResponse, botsResponse, haltsResponse, overviewResponse] = await Promise.all([
         apiFetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/trading-accounts`),
         apiFetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/bots`),
         apiFetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/trading-halts`),
+        apiFetch(`${apiBaseUrl}/api/v1/workspaces/${workspaceId}/bot-overview`),
       ])
       if (myGeneration !== generation.current) return
+      if (overviewResponse.ok) {
+        const overview = (await overviewResponse.json()) as BotOverviewResponse
+        setBotOverview(overview.bots ?? [])
+        setAccountOverview(overview.accounts ?? [])
+      }
       if (haltsResponse.ok) setHalts((await haltsResponse.json()) as TradingHalt[])
       if (accountsResponse.ok) setTradingAccounts((await accountsResponse.json()) as TradingAccount[])
       if (botsResponse.ok) {
@@ -239,6 +252,8 @@ export function useTrading(selectedWorkspaceId: string) {
     tradingAccounts,
     bots,
     halts,
+    botOverview,
+    accountOverview,
     latestRuns,
     tradingMessage,
     accountConnectionId,

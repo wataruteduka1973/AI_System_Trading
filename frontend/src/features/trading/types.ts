@@ -68,3 +68,49 @@ export type EmergencyStopResult = {
   closing_order_ids: string[]
   close_failures: { position_id: string; code: string }[]
 }
+
+/** Mirrors `app.schemas.trading.BotOverviewResponse` (GET .../bot-overview). Amounts are decimal
+ * strings, in the bot's `quote_asset`. */
+export type PositionOverview = {
+  side: 'long' | 'short' | string
+  quantity: string
+  average_entry_price: string | null
+  mark_price: string | null
+  unrealized_pnl: string
+  stop_price: string | null
+  opened_at: string | null
+}
+
+export type BotOverview = {
+  bot_id: string
+  name: string
+  symbol: string
+  exchange_code: string
+  timeframe: string
+  desired_state: string
+  actual_state: string
+  account_id: string
+  quote_asset: string
+  deposits: string
+  cash: string
+  equity: string
+  return_pct: string | null
+  realized_pnl: string
+  fees_paid: string
+  closed_trades: number
+  position: PositionOverview | null
+}
+
+export type AccountOverview = {
+  id: string
+  base_currency: string
+  mode: string
+  status: string
+  bot_names: string[]
+  balances: Record<string, string>
+}
+
+export type BotOverviewResponse = {
+  bots: BotOverview[]
+  accounts: AccountOverview[]
+}

@@ -39,11 +39,15 @@ from app.models.strategy import BotRun, Signal, TradingBot
 from app.models.trading import LedgerTransaction, TradingAccount
 from app.models.workspace import AppUser
 from app.schemas.trading import (
+    AccountOverviewRead,
+    BotOverviewRead,
+    BotOverviewResponse,
     BotRunRead,
     BotRunSummaryRead,
     EmergencyStopRead,
     EmergencyStopRequest,
     LatestSignalRead,
+    PositionOverviewRead,
     TradingAccountCreate,
     TradingAccountDepositCreate,
     TradingAccountDepositRead,
@@ -52,7 +56,7 @@ from app.schemas.trading import (
     TradingBotRead,
 )
 from app.security.rbac import require_operator_role, require_viewer_role
-from app.trading.application import account_funding, bot_lifecycle, emergency_stop
+from app.trading.application import account_funding, bot_lifecycle, bot_overview, emergency_stop
 from app.trading.application.bot_lifecycle import BotLifecycleError, BotStateConflictError
 from app.trading.application.paper_provisioning import ProvisioningError, create_approved_bot
 
@@ -221,6 +225,65 @@ def list_trading_bots(workspace_id: UUID, db: DatabaseSession, _viewer: Viewer) 
         .order_by(TradingBot.created_at)
     )
     return list(db.scalars(statement).all())
+
+
+@router.get(
+    "/workspaces/{workspace_id}/bot-overview", response_model=BotOverviewResponse, tags=["bots"]
+)
+def get_bot_overview(
+    workspace_id: UUID, db: DatabaseSession, _viewer: Viewer
+) -> BotOverviewResponse:
+    """Each bot with its instrument, its account's balance and equity, the open position and
+    what it has made so far, plus every paper account with the bots on it (what the Bot
+    management screen shows; docs/plans/bot-overview.md)."""
+    bots, accounts = bot_overview.build_overview(db, workspace_id)
+    return BotOverviewResponse(
+        bots=[
+            BotOverviewRead(
+                bot_id=item.bot.id,
+                name=item.bot.name,
+                symbol=item.instrument.symbol,
+                exchange_code=item.exchange_code,
+                timeframe=item.bot.timeframe,
+                desired_state=item.bot.desired_state,
+                actual_state=item.bot.actual_state,
+                account_id=item.bot.account_id,
+                quote_asset=item.quote_asset,
+                deposits=item.deposits,
+                cash=item.cash,
+                equity=item.equity,
+                return_pct=item.return_pct,
+                realized_pnl=item.realized_pnl,
+                fees_paid=item.fees_paid,
+                closed_trades=item.closed_trades,
+                position=(
+                    PositionOverviewRead(
+                        side=item.position.side,
+                        quantity=item.position.quantity,
+                        average_entry_price=item.position.average_entry_price,
+                        mark_price=item.position.mark_price,
+                        unrealized_pnl=item.position.unrealized_pnl,
+                        stop_price=item.position.stop_price,
+                        opened_at=item.position.opened_at,
+                    )
+                    if item.position is not None
+                    else None
+                ),
+            )
+            for item in bots
+        ],
+        accounts=[
+            AccountOverviewRead(
+                id=item.account.id,
+                base_currency=item.account.base_currency,
+                mode=item.account.mode,
+                status=item.account.status,
+                bot_names=item.bot_names,
+                balances=item.balances,
+            )
+            for item in accounts
+        ],
+    )
 
 
 @router.get(
