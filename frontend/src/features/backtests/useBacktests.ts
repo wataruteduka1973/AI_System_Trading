@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useState } from 'react'
 import { apiBaseUrl, apiErrorMessage, apiFetch } from '../../lib/api'
 import type { Timeframe } from '../market-data/types'
-import type { BacktestRun, BacktestRunDetail, BacktestTrade, EquityCurve } from './types'
+import type {
+  BacktestBatchResponse,
+  BacktestRun,
+  BacktestRunDetail,
+  BacktestTrade,
+  EquityCurve,
+} from './types'
+
+/** The server runs at most this many instruments in one batch (`MAX_BATCH_INSTRUMENTS`). */
+export const MAX_BATCH_INSTRUMENTS = 12
 
 /** `selectedWorkspaceId` is shared across features (see useWorkspaces); this hook
  * receives it rather than owning it, matching useConnections/useTrading.
@@ -17,6 +26,9 @@ export function useBacktests(selectedWorkspaceId: string) {
   const [selectedRunDetail, setSelectedRunDetail] = useState<BacktestRunDetail | null>(null)
 
   const [instrumentId, setInstrumentId] = useState('')
+  const [batchMode, setBatchMode] = useState(false)
+  const [batchInstrumentIds, setBatchInstrumentIds] = useState<string[]>([])
+  const [batchResult, setBatchResult] = useState<BacktestBatchResponse | null>(null)
   const [timeframe, setTimeframe] = useState<Timeframe>('1m')
   const [fromTime, setFromTime] = useState('')
   const [toTime, setToTime] = useState('')
@@ -81,6 +93,58 @@ export function useBacktests(selectedWorkspaceId: string) {
     }
   }
 
+  const toggleBatchInstrument = (id: string) =>
+    setBatchInstrumentIds((current) =>
+      current.includes(id)
+        ? current.filter((entry) => entry !== id)
+        : current.length < MAX_BATCH_INSTRUMENTS
+          ? [...current, id]
+          : current,
+    )
+
+  /** One request for several instruments; the server refuses the whole batch when the bars add up
+   * to more than its budget, and says which instruments are how large. */
+  const createBatch = async () => {
+    if (!selectedWorkspaceId || batchInstrumentIds.length === 0 || !fromTime || !toTime || !initialEquity)
+      return
+    setBacktestMessage(`${batchInstrumentIds.length}銘柄のバックテストを実行しています…`)
+    setBatchResult(null)
+    try {
+      const response = await apiFetch(
+        `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/backtests/batch`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            instrument_ids: batchInstrumentIds,
+            timeframe,
+            from_time: new Date(fromTime).toISOString(),
+            to_time: new Date(toTime).toISOString(),
+            initial_equity: initialEquity,
+            spread,
+            mode: walkForward ? 'walk_forward' : 'single',
+            train_ratio: trainRatio,
+          }),
+        },
+      )
+      if (!response.ok) {
+        setBacktestMessage(await apiErrorMessage(response, '複数銘柄のバックテストを実行できませんでした'))
+        return
+      }
+      const result = (await response.json()) as BacktestBatchResponse
+      setBatchResult(result)
+      const failed = result.items.filter((item) => item.error_code !== null).length
+      setBacktestMessage(
+        failed === 0
+          ? `${result.items.length}銘柄のバックテストが完了しました。`
+          : `${result.items.length}銘柄のうち${failed}銘柄は実行できませんでした(下の表に理由を出しています)。`,
+      )
+      await load(selectedWorkspaceId)
+    } catch {
+      setBacktestMessage('バックテストAPIへ接続できません。')
+    }
+  }
+
   const loadRunDetail = async (run: BacktestRun) => {
     if (!selectedWorkspaceId) return
     const base = `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/backtests/${run.id}`
@@ -110,6 +174,12 @@ export function useBacktests(selectedWorkspaceId: string) {
     selectedRunDetail,
     instrumentId,
     setInstrumentId,
+    batchMode,
+    setBatchMode,
+    batchInstrumentIds,
+    toggleBatchInstrument,
+    batchResult,
+    createBatch,
     timeframe,
     setTimeframe,
     fromTime,

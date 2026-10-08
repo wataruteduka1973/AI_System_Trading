@@ -851,3 +851,79 @@ button:hover {
 .account-overview-list li {
   grid-template-columns: minmax(220px, 1fr) repeat(3, auto);
 }
+
+/* Multi-instrument backtest (docs/plans/backtest-batch-screen.md) */
+.batch-mode-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+}
+
+.batch-instruments {
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid #263851;
+  border-radius: 10px;
+}
+
+.batch-instruments legend {
+  padding: 0 0.4rem;
+  font-weight: 600;
+}
+
+.batch-instrument {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+  margin: 0.2rem 1rem 0.2rem 0;
+}
+
+.batch-sort {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.5rem 0;
+}
+
+.batch-table-wrap {
+  overflow-x: auto;
+}
+
+.batch-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.batch-table th,
+.batch-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #1d2d44;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.batch-table thead th {
+  color: #8aa0b8;
+  font-size: 0.8rem;
+}
+
+.batch-table th:first-child,
+.batch-table tbody th {
+  text-align: left;
+}
+
+.batch-table tbody th .connection-badge {
+  margin-left: 0.5rem;
+}
+
+.batch-row-failed td {
+  color: #ffb2bb;
+  text-align: left;
+  white-space: normal;
+}
+
+.batch-error-code {
+  color: #8aa0b8;
+}

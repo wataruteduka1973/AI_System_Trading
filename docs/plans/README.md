@@ -10,6 +10,7 @@
 | 計画書 | 内容 | 状態 |
 |---|---|---|
 | [paper-trading-live-data.md](paper-trading-live-data.md) | 本番の公開価格でのペーパートレード | Unit 1〜6完了。2つのボット群(承認済み 4h 55/20 ×6、比較用 4h 110/40 ×6)が稼働中で、データを貯める段階。月1回 `scripts/report_paper_performance.py` で想定範囲と比べる |
+| [backtest-batch-screen.md](backtest-batch-screen.md) | 複数銘柄のバックテスト(画面: 選択・比較表・失敗の理由) | 実装済み(2026-10-08) |
 | [bot-overview.md](bot-overview.md) | Bot管理の見やすさ(Botと口座の状況: 銘柄・純資産・損益・建玉) | 実装済み(2026-10-08) |
 | [status-screens.md](status-screens.md) | システム状態・取引停止センター・通知の画面(フロントエンド) | 実装済み(2026-10-07) |
 | [ledger-reconciliation.md](ledger-reconciliation.md) | 注文・約定・台帳・建玉の照合と、不整合での口座の緊急停止 | 実装済み(2026-10-07) |

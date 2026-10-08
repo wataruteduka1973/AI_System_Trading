@@ -1,7 +1,14 @@
 import type { WorkspaceInstrument } from '../instruments/types'
 import type { Timeframe } from '../market-data/types'
 import EquityCurveChart from './EquityCurveChart'
-import type { BacktestMetrics, BacktestRun, BacktestRunDetail } from './types'
+import BatchResults from './BatchResults'
+import { formatDate, formatNumber, formatPercent, formatSigned, returnRate } from './format'
+import type {
+  BacktestBatchResponse,
+  BacktestMetrics,
+  BacktestRun,
+  BacktestRunDetail,
+} from './types'
 
 const statusLabel: Record<string, string> = {
   queued: 'キュー待ち',
@@ -20,35 +27,6 @@ const statusBadgeClass: Record<string, string> = {
 const timeframeOptions: Timeframe[] = ['1m', '5m', '15m', '30m', '1h', '4h', '1d']
 
 const walkForwardRoleLabel: Record<string, string> = { train: '訓練期間', test: '検証期間' }
-
-function formatPercent(value: string): string {
-  const parsed = Number(value)
-  return Number.isFinite(parsed) ? `${(parsed * 100).toFixed(1)}%` : value
-}
-
-/** The API sends Decimals as exact strings ("0E+26", 18 decimals); show at most 2. */
-function formatNumber(value: string): string {
-  const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed.toLocaleString('ja-JP', { maximumFractionDigits: 2 }) : value
-}
-
-function formatSigned(value: string): string {
-  const parsed = Number(value)
-  if (!Number.isFinite(parsed)) return value
-  return `${parsed > 0 ? '+' : ''}${formatNumber(value)}`
-}
-
-function formatDate(value: string): string {
-  return new Date(value).toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo' })
-}
-
-/** Net P&L as a share of the starting equity, or null when either is unknown or zero. */
-function returnRate(netPnl: string, initialEquity: string | null | undefined): string | null {
-  const pnl = Number(netPnl)
-  const start = Number(initialEquity)
-  if (!initialEquity || !Number.isFinite(pnl) || !Number.isFinite(start) || start === 0) return null
-  return formatPercent(String(pnl / start))
-}
 
 function MetricsGrid({
   metrics,
@@ -86,11 +64,13 @@ export default function BacktestPanel({
   visible,
   backtests,
   selectedRunDetail,
+  batchResult = null,
   onViewDetail,
 }: {
   visible: boolean
   backtests: BacktestRun[]
   selectedRunDetail: BacktestRunDetail | null
+  batchResult?: BacktestBatchResponse | null
   onViewDetail: (run: BacktestRun) => void
 }) {
   if (!visible) return null
@@ -102,6 +82,7 @@ export default function BacktestPanel({
     curve?.initial_equity ?? (selectedRun?.parameters.initial_equity as string | undefined)
   return (
     <>
+      <BatchResults result={batchResult} onViewDetail={onViewDetail} />
       {backtests.length > 0 && (
         <ul className="connection-list">
           {backtests.map((run) => {
@@ -118,7 +99,7 @@ export default function BacktestPanel({
                   <>
                     <span>取引数: {metrics.trade_count}</span>
                     <span>勝率: {formatPercent(metrics.win_rate)}</span>
-                    <span>純損益: {metrics.net_pnl}</span>
+                    <span>純損益: {formatNumber(metrics.net_pnl)}</span>
                     <span>最大DD: {formatPercent(metrics.max_drawdown_pct)}</span>
                   </>
                 ) : (
@@ -201,6 +182,12 @@ export function BacktestForm({
   trainRatio,
   onTrainRatioChange,
   onCreateBacktest,
+  batchMode = false,
+  onBatchModeChange = () => undefined,
+  batchInstrumentIds = [],
+  onToggleBatchInstrument = () => undefined,
+  maxBatchInstruments = 12,
+  onCreateBatch = () => undefined,
 }: {
   visible: boolean
   workspaceInstruments: WorkspaceInstrument[]
@@ -223,8 +210,31 @@ export function BacktestForm({
   trainRatio: string
   onTrainRatioChange: (value: string) => void
   onCreateBacktest: () => void
+  /** Several instruments in one request (off by default). */
+  batchMode?: boolean
+  onBatchModeChange?: (value: boolean) => void
+  batchInstrumentIds?: string[]
+  onToggleBatchInstrument?: (id: string) => void
+  maxBatchInstruments?: number
+  onCreateBatch?: () => void
 }) {
   if (!visible) return null
+  const chosenInstruments = (instruments: WorkspaceInstrument[], research: boolean) =>
+    instruments.map((instrument) => {
+      const checked = batchInstrumentIds.includes(instrument.id)
+      return (
+        <label key={instrument.id} className="batch-instrument">
+          <input
+            type="checkbox"
+            checked={checked}
+            disabled={!checked && batchInstrumentIds.length >= maxBatchInstruments}
+            onChange={() => onToggleBatchInstrument(instrument.id)}
+          />
+          {instrument.symbol}
+          {research && ' (検証用)'}
+        </label>
+      )
+    })
   return (
     <section className="workspace-panel connection-registration">
       <div>
@@ -235,7 +245,49 @@ export function BacktestForm({
           リスク判定ロジックを再生します。このリクエストの応答が返るまで同期的に実行されます。
         </p>
       </div>
+      <div className="batch-mode-toggle" role="group" aria-label="対象の銘柄数">
+        <button
+          type="button"
+          className={batchMode ? 'secondary-button' : ''}
+          aria-pressed={!batchMode}
+          onClick={() => onBatchModeChange(false)}
+        >
+          1銘柄
+        </button>
+        <button
+          type="button"
+          className={batchMode ? '' : 'secondary-button'}
+          aria-pressed={batchMode}
+          onClick={() => onBatchModeChange(true)}
+        >
+          複数銘柄をまとめて比較
+        </button>
+      </div>
+      {batchMode && (
+        <fieldset className="batch-instruments">
+          <legend>
+            銘柄を選ぶ({batchInstrumentIds.length} / {maxBatchInstruments})
+          </legend>
+          {workspaceInstruments.length > 0 && (
+            <div>
+              <p className="panel-description">取引用(自分の接続)</p>
+              {chosenInstruments(workspaceInstruments, false)}
+            </div>
+          )}
+          {researchInstruments.length > 0 && (
+            <div>
+              <p className="panel-description">検証用(公開履歴データ・接続不要)</p>
+              {chosenInstruments(researchInstruments, true)}
+            </div>
+          )}
+          <p className="panel-description">
+            銘柄ごとに独立して実行します(資金は共有しません)。足の合計が30万本を超えるとまとめて断られるので、
+            その場合は期間を短くするか、時間足を大きくするか、銘柄を減らしてください。
+          </p>
+        </fieldset>
+      )}
       <div className="registration-grid">
+        {!batchMode && (
         <label>
           銘柄
           <select value={instrumentId} onChange={(event) => onInstrumentIdChange(event.target.value)}>
@@ -260,6 +312,7 @@ export function BacktestForm({
             )}
           </select>
         </label>
+        )}
         <label>
           時間足
           <select value={timeframe} onChange={(event) => onTimeframeChange(event.target.value as Timeframe)}>
@@ -300,13 +353,23 @@ export function BacktestForm({
             <input value={trainRatio} onChange={(event) => onTrainRatioChange(event.target.value)} />
           </label>
         )}
-        <button
-          type="button"
-          onClick={onCreateBacktest}
-          disabled={!instrumentId || !fromTime || !toTime || !initialEquity}
-        >
-          実行
-        </button>
+        {batchMode ? (
+          <button
+            type="button"
+            onClick={onCreateBatch}
+            disabled={batchInstrumentIds.length === 0 || !fromTime || !toTime || !initialEquity}
+          >
+            {batchInstrumentIds.length}銘柄を実行
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={onCreateBacktest}
+            disabled={!instrumentId || !fromTime || !toTime || !initialEquity}
+          >
+            実行
+          </button>
+        )}
       </div>
       <p className="workspace-message">{backtestMessage}</p>
     </section>

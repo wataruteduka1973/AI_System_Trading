@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, renderHook, screen } from '@testing-li
 import { afterEach, expect, it, vi } from 'vitest'
 import type { WorkspaceInstrument } from '../instruments/types'
 import BacktestPanel, { BacktestForm } from './BacktestPanel'
-import type { BacktestRun, BacktestRunDetail, BacktestTrade, EquityCurve } from './types'
+import type { BacktestMetrics, BacktestRun, BacktestRunDetail, BacktestTrade, EquityCurve } from './types'
 import { useBacktests } from './useBacktests'
 
 vi.mock('./EquityCurveChart', () => ({
@@ -356,4 +356,15 @@ it('still shows the trades when the curve cannot be fetched', async () => {
 
   expect(result.current.selectedRunDetail?.trades).toHaveLength(1)
   expect(result.current.selectedRunDetail?.equityCurve).toEqual({ initial_equity: null, points: [] })
+})
+
+it('shows the net P&L of a run in the list rounded, not as the exact decimal string', () => {
+  const long = run({
+    summary_metrics: {
+      metrics: { ...(run().summary_metrics.metrics as BacktestMetrics), net_pnl: '112452.5412724390215028812109' },
+    },
+  })
+  render(<BacktestPanel visible backtests={[long]} selectedRunDetail={null} onViewDetail={noop} />)
+
+  expect(screen.getByText('純損益: 112,452.54')).toBeInTheDocument()
 })
