@@ -9,6 +9,9 @@ import NotFoundPage from './pages/NotFoundPage'
 import TradingPage from './pages/TradingPage'
 import BacktestPage from './pages/BacktestPage'
 import StatusPage from './pages/StatusPage'
+import EventLogPage from './pages/EventLogPage'
+import { useEventLog } from './features/event-log/useEventLog'
+import EventLogPanel from './features/event-log/EventLogPanel'
 import { useSystemStatus } from './features/system-status/useSystemStatus'
 import SystemStatusPanel from './features/system-status/SystemStatusPanel'
 import { useNotifications } from './features/notifications/useNotifications'
@@ -104,6 +107,7 @@ function App() {
   const trading = useTrading(selectedWorkspaceId)
   const backtests = useBacktests(selectedWorkspaceId)
   const systemStatus = useSystemStatus(selectedWorkspaceId)
+  const eventLog = useEventLog(route.kind === 'events' ? selectedWorkspaceId : '')
   const notifications = useNotifications(selectedWorkspaceId)
   const isOwner = workspaces.find((workspace) => workspace.id === selectedWorkspaceId)?.role === 'owner'
   const botNames = Object.fromEntries(trading.bots.map((bot) => [bot.id, bot.name]))
@@ -187,6 +191,10 @@ function App() {
           element={<TradingPage>{null}</TradingPage>}
         />
         <Route
+          path="/workspaces/:workspaceId/events"
+          element={<EventLogPage>{null}</EventLogPage>}
+        />
+        <Route
           path="/workspaces/:workspaceId/status"
           element={<StatusPage>{null}</StatusPage>}
         />
@@ -196,6 +204,22 @@ function App() {
         />
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
+
+      {route.kind === 'events' && selectedWorkspaceId && (
+        <EventLogPanel
+          filters={eventLog.filters}
+          onFiltersChange={eventLog.setFilters}
+          events={eventLog.events}
+          facets={eventLog.facets}
+          bots={trading.bots.map((bot) => ({ id: bot.id, name: bot.name }))}
+          hasMore={eventLog.hasMore}
+          loading={eventLog.loading}
+          error={eventLog.error}
+          searchedAt={eventLog.searchedAt}
+          onLoadMore={eventLog.loadMore}
+          onReload={eventLog.reload}
+        />
+      )}
 
       {route.kind === 'status' && selectedWorkspaceId && (
         <>
