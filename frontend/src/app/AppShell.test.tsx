@@ -21,6 +21,9 @@ describe('AppShell', () => {
     expect(screen.getByRole('link', { name: 'Binance市場' })).toHaveAttribute(
       'href', '/workspaces/workspace-1/markets/binance',
     )
+    expect(screen.getByRole('link', { name: 'イベントログ' })).toHaveAttribute(
+      'href', '/workspaces/workspace-1/events',
+    )
     expect(screen.getByRole('link', { name: 'Bot管理' })).toHaveAttribute(
       'href', '/workspaces/workspace-1/trading',
     )
