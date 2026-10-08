@@ -73,19 +73,25 @@ npm run dev
 ### Windowsでまとめて起動・再起動
 
 初回セットアップ後は、プロジェクト直下の **`start-local.bat` をダブルクリック**してください。
-バックエンド・フロントエンド・市場データWorkerの3プロセスを1つのウィンドウで起動し、
-準備ができたらブラウザーを開きます。
+バックエンド・フロントエンドと、3つのWorker(市場データ・トレーディング・通知)を1つのウィンドウで起動し、
+準備ができたらブラウザーを開きます。`.env`の`OIDC_ISSUER`が開発用ログインサーバー(`http://127.0.0.1:9000`)の
+場合は、それも一緒に起動します(実際のIdPを設定しているときは起動しません)。
 
 - 起動ウィンドウで **R**: API/画面だけを再起動（Enter不要）。市場データWorkerには触れないので、
   進行中の取得を止めずにバックエンド/フロントエンドのコード変更を反映できます。
 - **A**: Worker含む全プロセスを停止して再起動。
 - **Q** または **Ctrl+C**: この起動操作で開始したプロセスを停止して終了。
 - ウィンドウの×や強制終了ではなく、Qで終了してください。
-- `start-local.bat --check`: 環境・ポートだけ確認し、起動しません（DB接続は確認しません）。
+- `start-local.bat --check`: 環境・ポート・DBのマイグレーションの状態を確認し、起動しません。
 - `start-local.bat --no-browser`: ブラウザーを自動で開かず起動します。
+- `start-local.bat --no-trading-worker`: トレーディングWorkerを起動しません。ログオン時の自動起動
+  (`scripts/windows/register_trading_worker_task.ps1`)で動かしているPCで使います。二重に動いても
+  評価は足ごとに冪等なので害はありませんが、処理とログが倍になります。
 
 PostgreSQLはあらかじめ起動してください。依存関係のインストール、DBマイグレーション、
-`.env`や資格情報の書き換えは自動では行いません。実行可能なプロジェクト内のPython 3.13環境を
+`.env`や資格情報の書き換えは自動では行いません。ただし起動時にDBのマイグレーションが最新かを
+読み取りで確認し、古い・未適用・確認できない場合は`[WARN]`を表示します(適用は
+`alembic upgrade head`で手動で行います。未適用のままだと画面やWorkerが失敗することがあります)。実行可能なプロジェクト内のPython 3.13環境を
 `.venv` → `.venv313` の順で選択します。壊れた仮想環境はREADMEの手順で再作成してください。
 
 8000/5173番ポートが使用中なら起動を中止します。以前の手動起動サーバーは、そのターミナルで
@@ -97,8 +103,8 @@ API/画面は継続します。`A`キーでWorkerを再起動できます。
 
 市場データの自動取得は独立したWorkerプロセスが行います（`docs/plans/durable-market-data-worker.md`）。
 DBが必須のAlembicリビジョン（`20260831_0005`）に達していない場合、Workerだけが起動直後に
-終了し、API・画面は通常どおり使えます（自動取得だけが止まります）。取得中/retry予定/blocked状態の
-画面表示、Worker単独の再起動操作は今後の工程です。
+終了し、API・画面は通常どおり使えます（自動取得だけが止まります）。Workerの状態は、画面の
+「システム状態」ページでも確認できます。
 
 ### 初期API
 
@@ -210,12 +216,12 @@ Worker本体の単体試験（signal処理、リビジョン確認、公平な�
 
 `app/notifications/worker/`（`python -m app.notifications.worker`で起動）は、`outbox_event`
 テーブルをポーリングし汎用SMTPで通知を配信する単純なポーリングループです。市場データWorkerの
-lease機構は使いません（通知送信は1回で完結する短い処理のため）。起動には`.env`の
-`SMTP_HOST`/`SMTP_SENDER_ADDRESS`が必須で、未設定の場合はエラーメッセージを表示して
-即座に終了します（`.env.example`参照）。現時点では`outbox_event`へ書き込むドメインイベント
-発行元（trading_halt発動時の通知など）が実装されていないため、起動してもキューは常に空です
-（基盤のみ実装済み、詳細は`docs/plans/horizon5-implementation-plan.md` Unit 8を参照）。
-`scripts/start_local.py`には含めていないため、試す場合は別ターミナルで手動起動してください。
+lease機構は使いません（通知送信は1回で完結する短い処理のため）。アプリ内通知(`in_app`)は常に動き、メールは`.env`の
+`SMTP_HOST`/`SMTP_SENDER_ADDRESS`を設定したときだけ追加されます（未設定でも起動し、メールは送りません。
+`.env.example`参照）。取引停止・Workerの停止・Botの失敗・台帳の不整合などが`outbox_event`に書き込まれ、
+このWorkerが配信します(`docs/plans/notification-wiring.md`、`notification-sources.md`)。あわせて、
+トレーディングWorker・市場データWorkerの停止の監視(30秒ごと)と、注文・台帳の照合(5分ごと)も
+このWorkerが行います。`scripts/start_local.py`に含めています。
 
 ### Bot execution Worker（Horizon 3、実行ループ）
 
