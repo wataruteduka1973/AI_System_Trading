@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { backtestPath, connectionPath, marketPath, resolveAppRoute, tradingPath } from './routes'
+import {
+  backtestPath,
+  connectionPath,
+  marketPath,
+  resolveAppRoute,
+  statusPath,
+  tradingPath,
+} from './routes'
 
 describe('application routes', () => {
   it('resolves the home page', () => {
@@ -16,6 +23,10 @@ describe('application routes', () => {
     expect(resolveAppRoute('/workspaces/workspace-1/backtests')).toEqual({
       kind: 'backtests', workspaceId: 'workspace-1', exchange: null,
     })
+    expect(resolveAppRoute('/workspaces/workspace-1/status')).toEqual({
+      kind: 'status', workspaceId: 'workspace-1', exchange: null,
+    })
+    expect(statusPath('workspace-1')).toBe('/workspaces/workspace-1/status')
     expect(resolveAppRoute('/workspaces/workspace-1/markets/binance')).toEqual({
       kind: 'market', workspaceId: 'workspace-1', exchange: 'binance',
     })

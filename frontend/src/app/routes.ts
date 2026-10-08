@@ -7,10 +7,11 @@ export type AppRoute =
   | { kind: 'market'; workspaceId: string; exchange: ExchangeCode }
   | { kind: 'trading'; workspaceId: string; exchange: null }
   | { kind: 'backtests'; workspaceId: string; exchange: null }
+  | { kind: 'status'; workspaceId: string; exchange: null }
   | { kind: 'not-found'; workspaceId: null; exchange: null }
 
 const workspaceRoute =
-  /^\/workspaces\/([^/]+)\/(connections|trading|backtests|markets\/(oanda|binance|binance_public))\/?$/
+  /^\/workspaces\/([^/]+)\/(connections|trading|backtests|status|markets\/(oanda|binance|binance_public))\/?$/
 
 export function resolveAppRoute(pathname: string): AppRoute {
   if (pathname === '/' || pathname === '') {
@@ -30,6 +31,9 @@ export function resolveAppRoute(pathname: string): AppRoute {
   if (match[2] === 'backtests') {
     return { kind: 'backtests', workspaceId, exchange: null }
   }
+  if (match[2] === 'status') {
+    return { kind: 'status', workspaceId, exchange: null }
+  }
   return { kind: 'market', workspaceId, exchange: match[3] as ExchangeCode }
 }
 
@@ -44,3 +48,6 @@ export const tradingPath = (workspaceId: string) =>
 
 export const backtestPath = (workspaceId: string) =>
   `/workspaces/${encodeURIComponent(workspaceId)}/backtests`
+
+export const statusPath = (workspaceId: string) =>
+  `/workspaces/${encodeURIComponent(workspaceId)}/status`
