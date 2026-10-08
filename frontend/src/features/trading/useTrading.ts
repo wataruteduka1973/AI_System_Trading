@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiBaseUrl, apiErrorMessage, apiFetch } from '../../lib/api'
+import { releasePath } from './haltLabels'
 import type {
   BotRunSummary,
   EmergencyStopResult,
@@ -211,21 +212,26 @@ export function useTrading(selectedWorkspaceId: string) {
     }
   }
 
-  const releaseEmergencyStop = async (halt: TradingHalt) => {
+  /** Owner-only on the server. An `emergency_stopped` halt has its own endpoint; the others go
+   * through `/release` (a lock halt is released at once, the rest step down one level). */
+  const releaseHalt = async (halt: TradingHalt) => {
     if (!selectedWorkspaceId) return
+    const emergency = releasePath(halt) === 'emergency-release'
     try {
       const response = await apiFetch(
-        `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/trading-halts/${halt.id}/emergency-release`,
+        `${apiBaseUrl}/api/v1/workspaces/${selectedWorkspaceId}/trading-halts/${halt.id}/${releasePath(halt)}`,
         { method: 'POST' },
       )
       setTradingMessage(
         response.ok
-          ? '緊急停止を解除しました。Botは停止したままなので、必要なら開始してください。'
-          : await apiErrorMessage(response, '緊急停止を解除できませんでした(Ownerのみ可能です)'),
+          ? emergency
+            ? '緊急停止を解除しました。Botは停止したままなので、必要なら開始してください。'
+            : '停止を解除しました(段階的に緩和する停止は、1段下がります)。'
+          : await apiErrorMessage(response, '停止を解除できませんでした(Ownerのみ可能です)'),
       )
       await load(selectedWorkspaceId)
     } catch {
-      setTradingMessage('緊急停止解除APIへ接続できません。')
+      setTradingMessage('停止解除APIへ接続できません。')
     }
   }
 
@@ -257,6 +263,6 @@ export function useTrading(selectedWorkspaceId: string) {
     createBot,
     runBotCommand,
     emergencyStop,
-    releaseEmergencyStop,
+    releaseHalt,
   }
 }

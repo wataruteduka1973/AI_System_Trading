@@ -1,22 +1,46 @@
 import type { ReactNode } from 'react'
-import { NavLink } from 'react-router'
+import { Link, NavLink, useLocation } from 'react-router'
 import type { AuthenticatedUser } from '../features/auth/types'
-import { backtestPath, connectionPath, marketPath, tradingPath } from './routes'
+import { backtestPath, connectionPath, marketPath, statusPath, tradingPath } from './routes'
+
+/** What the whole-app banner and the navigation badge say about the workspace's health. */
+export type StatusAlert = {
+  /** The status API's own problem list (Japanese, ready to show). */
+  problems: string[]
+  unacknowledgedNotifications: number
+}
 
 type AppShellProps = {
   workspaceId: string
   children: ReactNode
   user?: AuthenticatedUser | null
   onLogout?: () => void
+  alert?: StatusAlert | null
 }
 
-export default function AppShell({ workspaceId, children, user, onLogout }: AppShellProps) {
+export default function AppShell({ workspaceId, children, user, onLogout, alert }: AppShellProps) {
+  const location = useLocation()
+  const onStatusPage = workspaceId !== '' && location.pathname === statusPath(workspaceId)
+  const unread = alert?.unacknowledgedNotifications ?? 0
+  const problems = alert?.problems ?? []
+  const showBanner = workspaceId !== '' && !onStatusPage && (problems.length > 0 || unread > 0)
   return (
     <div className="application-shell">
       <nav className="main-navigation" aria-label="メインナビゲーション">
         <NavLink to="/" end>開発状態</NavLink>
         {workspaceId ? (
           <>
+            <NavLink to={statusPath(workspaceId)}>
+              システム状態
+              {unread > 0 && (
+                <span className="nav-badge" aria-label={`未確認の通知 ${unread}件`}>
+                  {unread}
+                </span>
+              )}
+              {unread === 0 && problems.length > 0 && (
+                <span className="nav-badge" aria-label="要確認の項目があります">!</span>
+              )}
+            </NavLink>
             <NavLink to={connectionPath(workspaceId)}>接続管理</NavLink>
             <NavLink to={marketPath(workspaceId, 'oanda')}>OANDA市場</NavLink>
             <NavLink to={marketPath(workspaceId, 'binance')}>Binance市場</NavLink>
@@ -38,6 +62,17 @@ export default function AppShell({ workspaceId, children, user, onLogout }: AppS
           </span>
         )}
       </nav>
+      {showBanner && (
+        <div className="status-banner" role="alert">
+          <strong>要確認</strong>
+          <span>
+            {problems.length > 0
+              ? `${problems[0]}${problems.length > 1 ? `(ほか${problems.length - 1}件)` : ''}`
+              : `未確認の通知が${unread}件あります`}
+          </span>
+          <Link to={statusPath(workspaceId)}>システム状態を見る</Link>
+        </div>
+      )}
       {children}
     </div>
   )

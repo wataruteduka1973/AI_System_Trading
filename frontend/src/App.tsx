@@ -8,6 +8,12 @@ import HomePage from './pages/HomePage'
 import NotFoundPage from './pages/NotFoundPage'
 import TradingPage from './pages/TradingPage'
 import BacktestPage from './pages/BacktestPage'
+import StatusPage from './pages/StatusPage'
+import { useSystemStatus } from './features/system-status/useSystemStatus'
+import SystemStatusPanel from './features/system-status/SystemStatusPanel'
+import { useNotifications } from './features/notifications/useNotifications'
+import NotificationsPanel from './features/notifications/NotificationsPanel'
+import HaltCenter from './features/trading/HaltCenter'
 import { useHealth } from './features/health/useHealth'
 import HealthPanel from './features/health/HealthPanel'
 import { loginErrorMessage } from './features/auth/loginError'
@@ -97,6 +103,16 @@ function App() {
 
   const trading = useTrading(selectedWorkspaceId)
   const backtests = useBacktests(selectedWorkspaceId)
+  const systemStatus = useSystemStatus(selectedWorkspaceId)
+  const notifications = useNotifications(selectedWorkspaceId)
+  const isOwner = workspaces.find((workspace) => workspace.id === selectedWorkspaceId)?.role === 'owner'
+  const botNames = Object.fromEntries(trading.bots.map((bot) => [bot.id, bot.name]))
+  const accountNames = Object.fromEntries(
+    trading.tradingAccounts.map((account) => [
+      account.id,
+      `${account.base_currency}口座 (${account.id.slice(0, 8)})`,
+    ]),
+  )
 
   if (auth.status === 'loading') {
     return (
@@ -127,7 +143,19 @@ function App() {
   }
 
   return (
-    <AppShell workspaceId={selectedWorkspaceId} user={auth.user} onLogout={() => void auth.logout()}>
+    <AppShell
+      workspaceId={selectedWorkspaceId}
+      user={auth.user}
+      onLogout={() => void auth.logout()}
+      alert={
+        selectedWorkspaceId
+          ? {
+              problems: systemStatus.status?.problems ?? [],
+              unacknowledgedNotifications: notifications.unacknowledged_count,
+            }
+          : null
+      }
+    >
     <main className="dashboard-shell">
       <Routes>
         <Route
@@ -159,11 +187,36 @@ function App() {
           element={<TradingPage>{null}</TradingPage>}
         />
         <Route
+          path="/workspaces/:workspaceId/status"
+          element={<StatusPage>{null}</StatusPage>}
+        />
+        <Route
           path="/workspaces/:workspaceId/backtests"
           element={<BacktestPage>{null}</BacktestPage>}
         />
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
+
+      {route.kind === 'status' && selectedWorkspaceId && (
+        <>
+          <SystemStatusPanel status={systemStatus.status} error={systemStatus.error} />
+          <HaltCenter
+            halts={trading.halts}
+            isOwner={isOwner}
+            botNames={botNames}
+            accountNames={accountNames}
+            message={trading.tradingMessage}
+            onRelease={(halt) => void trading.releaseHalt(halt)}
+          />
+          <NotificationsPanel
+            items={notifications.items}
+            unacknowledgedCount={notifications.unacknowledged_count}
+            message={notifications.message}
+            onAcknowledge={(id) => void notifications.acknowledge(id)}
+            onAcknowledgeAll={() => void notifications.acknowledgeAll()}
+          />
+        </>
+      )}
 
       {route.kind !== 'not-found' && (
       <section className="workspace-panel">
@@ -194,7 +247,7 @@ function App() {
           halts={trading.halts}
           onCommand={(bot, command) => void trading.runBotCommand(bot, command)}
           onEmergencyStop={(bot, closePositions) => void trading.emergencyStop(bot, closePositions)}
-          onReleaseHalt={(halt) => void trading.releaseEmergencyStop(halt)}
+          onReleaseHalt={(halt) => void trading.releaseHalt(halt)}
         />
         <BacktestPanel
           visible={route.kind === 'backtests'}

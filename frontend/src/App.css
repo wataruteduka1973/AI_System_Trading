@@ -551,7 +551,11 @@ button:hover {
     align-items: stretch;
   }
 
-  .main-navigation a,
+  .main-navigation a {
+    flex: 1 1 calc(50% - 0.65rem);
+    text-align: center;
+  }
+
   .navigation-hint {
     flex: 1 1 100%;
   }
@@ -601,4 +605,153 @@ button:hover {
 
 .equity-curve-chart {
   margin: 12px 0;
+}
+
+/* System status, halts and notifications (docs/plans/status-screens.md) */
+.status-banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.6rem max(1rem, calc((100vw - 1120px) / 2));
+  border-bottom: 1px solid rgba(255, 155, 152, 0.55);
+  color: #ffb2bb;
+  background: rgba(64, 20, 26, 0.85);
+}
+
+.status-banner a {
+  margin-left: auto;
+  color: #eaf2ff;
+}
+
+.nav-badge {
+  display: inline-block;
+  min-width: 1.2rem;
+  margin-left: 0.4rem;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  color: #fff;
+  background: #c0392b;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.2rem;
+  text-align: center;
+}
+
+.status-verdict {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: baseline;
+  margin: 1rem 0;
+  padding: 0.9rem 1.1rem;
+  border: 1px solid rgba(125, 240, 198, 0.45);
+  border-radius: 10px;
+  color: #7df0c6;
+  background: rgba(18, 75, 61, 0.45);
+}
+
+.status-verdict strong {
+  font-size: 1.15rem;
+}
+
+.status-verdict-attention {
+  border-color: rgba(255, 155, 152, 0.55);
+  color: #ffb2bb;
+  background: rgba(64, 20, 26, 0.6);
+}
+
+.status-verdict ul {
+  flex-basis: 100%;
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.status-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  margin-bottom: 1rem;
+}
+
+.status-detail-card {
+  padding: 12px 14px;
+  border: 1px solid #263851;
+  border-radius: 10px;
+  background: #07111f;
+}
+
+.status-detail-card h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.status-detail-card p {
+  margin: 0.35rem 0 0;
+}
+
+.status-connections li {
+  grid-template-columns: minmax(160px, 1fr) repeat(4, auto);
+}
+
+.plain-list {
+  margin: 0.35rem 0 0;
+  padding-left: 1.1rem;
+}
+
+.halt-list,
+.notification-list {
+  display: grid;
+  gap: 10px;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.halt-item,
+.notification-item {
+  padding: 12px 14px;
+  border: 1px solid #263851;
+  border-radius: 10px;
+  background: #07111f;
+}
+
+.halt-item p,
+.notification-item p {
+  margin: 0.4rem 0;
+}
+
+.halt-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.halt-meta {
+  color: #9fb0c6;
+  font-size: 0.85rem;
+}
+
+.notification-toolbar {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0.75rem 0;
+}
+
+.notification-unread {
+  border-color: rgba(99, 179, 255, 0.7);
+  background: rgba(20, 45, 78, 0.7);
+}
+
+.status-banner span {
+  flex: 1 1 24rem;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
 }
