@@ -2,21 +2,16 @@ import { useState } from 'react'
 import type { ConnectionSummary } from '../connections/types'
 import type { WorkspaceInstrument } from '../instruments/types'
 import { findStaleBots } from './botStaleness'
-import type { BotRunSummary, TradingAccount, TradingBot, TradingHalt } from './types'
-
-const stateLabel: Record<TradingBot['desired_state'], string> = {
-  stopped: '停止中',
-  running: '稼働中',
-  paused: '一時停止',
-  failed: '失敗(要確認)',
-}
-
-const stateBadgeClass: Record<TradingBot['desired_state'], string> = {
-  stopped: 'connection-badge',
-  running: 'connection-badge bot-state-running',
-  paused: 'connection-badge bot-state-paused',
-  failed: 'connection-badge bot-state-failed',
-}
+import BotCard from './BotCard'
+import { accountLabel, formatAmount, formatPercent, formatSigned, pnlClass } from './format'
+import type {
+  AccountOverview,
+  BotOverview,
+  BotRunSummary,
+  TradingAccount,
+  TradingBot,
+  TradingHalt,
+} from './types'
 
 /** The server always creates this one (paper_provisioning.APPROVED_*); shown, not chosen. */
 const approvedStrategyLabel = '4h・Donchian 55/20'
@@ -29,6 +24,8 @@ export default function TradingPanel({
   bots,
   latestRuns,
   halts,
+  overviews = [],
+  accountOverviews = [],
   onCommand,
   onEmergencyStop,
   onReleaseHalt,
@@ -38,6 +35,9 @@ export default function TradingPanel({
   bots: TradingBot[]
   latestRuns: Record<string, BotRunSummary>
   halts: TradingHalt[]
+  /** From `bot-overview`; absent until it has loaded. */
+  overviews?: BotOverview[]
+  accountOverviews?: AccountOverview[]
   onCommand: (bot: TradingBot, command: 'start' | 'pause' | 'resume' | 'stop') => void
   /** `bot === null` stops the whole workspace. */
   onEmergencyStop: (bot: TradingBot | null, closePositions: boolean) => void
@@ -106,68 +106,82 @@ export default function TradingPanel({
           </ul>
         </div>
       )}
-      {tradingAccounts.length > 0 && (
-        <ul className="connection-list">
-          {tradingAccounts.map((account) => (
-            <li key={account.id}>
-              <strong>{account.base_currency}口座</strong>
-              <span>{account.mode}</span>
-              <span className="connection-badge">{account.status}</span>
-            </li>
+      {overviews.length > 0 && <TotalsByAsset overviews={overviews} />}
+      {bots.length > 0 && (
+        <ul className="bot-list">
+          {bots.map((bot) => (
+            <BotCard
+              key={bot.id}
+              bot={bot}
+              overview={overviews.find((item) => item.bot_id === bot.id)}
+              latestRun={latestRuns[bot.id]}
+              onCommand={onCommand}
+              onConfirmStop={confirmStop}
+            />
           ))}
         </ul>
       )}
-      {bots.length > 0 && (
-        <ul className="connection-list">
-          {bots.map((bot) => {
-            const latestSignal = latestRuns[bot.id]?.latest_signal
-            // A bot the worker gave up on has desired_state 'stopped' (the DB allows nothing
-            // else there) and actual_state 'failed': show the failure, not an ordinary stop.
-            const shownState = bot.actual_state === 'failed' ? 'failed' : bot.desired_state
-            return (
-              <li key={bot.id}>
-                <strong>{bot.name}</strong>
-                <span>{bot.timeframe}</span>
-                <span className={stateBadgeClass[shownState]}>{stateLabel[shownState]}</span>
-                <span>
-                  {latestSignal
-                    ? `直近シグナル: ${latestSignal.action} (${new Date(latestSignal.created_at).toLocaleTimeString()})`
-                    : '評価履歴なし'}
-                </span>
-                {bot.desired_state === 'stopped' && (
-                  <button type="button" onClick={() => onCommand(bot, 'start')}>
-                    開始
-                  </button>
-                )}
-                <button type="button" className="danger-button" onClick={() => confirmStop(bot)}>
-                  緊急停止
-                </button>
-                {bot.desired_state === 'running' && (
-                  <>
-                    <button type="button" onClick={() => onCommand(bot, 'pause')}>
-                      一時停止
-                    </button>
-                    <button type="button" className="danger-button" onClick={() => onCommand(bot, 'stop')}>
-                      停止
-                    </button>
-                  </>
-                )}
-                {bot.desired_state === 'paused' && (
-                  <>
-                    <button type="button" onClick={() => onCommand(bot, 'resume')}>
-                      再開
-                    </button>
-                    <button type="button" className="danger-button" onClick={() => onCommand(bot, 'stop')}>
-                      停止
-                    </button>
-                  </>
-                )}
-              </li>
-            )
-          })}
-        </ul>
+      {tradingAccounts.length > 0 && (
+        <>
+          <h3>取引口座</h3>
+          <ul className="connection-list account-overview-list">
+            {tradingAccounts.map((account) => {
+              const overview = accountOverviews.find((item) => item.id === account.id)
+              return (
+                <li key={account.id}>
+                  <strong>{accountLabel({ ...account, bot_names: overview?.bot_names })}</strong>
+                  <span>{account.mode}</span>
+                  <span className="connection-badge">{account.status}</span>
+                  <span>
+                    {overview && Object.keys(overview.balances).length > 0
+                      ? Object.entries(overview.balances)
+                          .map(([asset, amount]) => `${formatAmount(amount)} ${asset}`)
+                          .join(' / ')
+                      : overview
+                        ? '残高なし'
+                        : ''}
+                  </span>
+                </li>
+              )
+            })}
+          </ul>
+        </>
       )}
     </>
+  )
+}
+
+/** Totals per quote asset: JPY and USDT are not added together, so each gets its own line. */
+function TotalsByAsset({ overviews }: { overviews: BotOverview[] }) {
+  const totals = new Map<string, { equity: number; deposits: number; realized: number }>()
+  for (const item of overviews) {
+    const entry = totals.get(item.quote_asset) ?? { equity: 0, deposits: 0, realized: 0 }
+    entry.equity += Number(item.equity)
+    entry.deposits += Number(item.deposits)
+    entry.realized += Number(item.realized_pnl)
+    totals.set(item.quote_asset, entry)
+  }
+  const running = overviews.filter((item) => item.desired_state === 'running').length
+  const holding = overviews.filter((item) => item.position !== null).length
+  return (
+    <div className="totals-strip" aria-label="全体の状況">
+      <span>
+        稼働中 {running} / {overviews.length}台、建玉あり {holding}台
+      </span>
+      {[...totals.entries()].map(([asset, total]) => {
+        const gain = total.equity - total.deposits
+        const percent = total.deposits > 0 ? String((gain / total.deposits) * 100) : null
+        return (
+          <span key={asset}>
+            {asset}: 純資産 {formatAmount(String(total.equity))}(入金比{' '}
+            <span className={pnlClass(String(gain))}>
+              {formatSigned(String(gain))} / {formatPercent(percent)}
+            </span>
+            )
+          </span>
+        )
+      })}
+    </div>
   )
 }
 
@@ -176,6 +190,7 @@ export function TradingForms({
   connections,
   workspaceInstruments,
   tradingAccounts,
+  accountOverviews = [],
   tradingMessage,
   accountConnectionId,
   onAccountConnectionIdChange,
@@ -201,6 +216,7 @@ export function TradingForms({
   connections: ConnectionSummary[]
   workspaceInstruments: WorkspaceInstrument[]
   tradingAccounts: TradingAccount[]
+  accountOverviews?: AccountOverview[]
   tradingMessage: string
   accountConnectionId: string
   onAccountConnectionIdChange: (value: string) => void
@@ -259,7 +275,10 @@ export function TradingForms({
                 <option value="">選択してください</option>
                 {tradingAccounts.map((account) => (
                   <option key={account.id} value={account.id}>
-                    {account.base_currency}口座 ({account.id.slice(0, 8)})
+                    {accountLabel({
+                      ...account,
+                      bot_names: accountOverviews.find((item) => item.id === account.id)?.bot_names,
+                    })}
                   </option>
                 ))}
               </select>
@@ -300,7 +319,10 @@ export function TradingForms({
               <option value="">選択してください</option>
               {tradingAccounts.map((account) => (
                 <option key={account.id} value={account.id}>
-                  {account.base_currency}口座 ({account.id.slice(0, 8)})
+                  {accountLabel({
+                      ...account,
+                      bot_names: accountOverviews.find((item) => item.id === account.id)?.bot_names,
+                    })}
                 </option>
               ))}
             </select>

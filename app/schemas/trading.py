@@ -131,3 +131,54 @@ class EmergencyStopRead(BaseModel):
     bot_stop_failures: list[dict[str, str]]
     closing_order_ids: list[UUID]
     close_failures: list[dict[str, str]]
+
+
+class PositionOverviewRead(BaseModel):
+    side: str
+    quantity: Decimal
+    average_entry_price: Decimal | None
+    mark_price: Decimal | None
+    """The latest final candle's close; `None` when there is no candle."""
+    unrealized_pnl: Decimal
+    stop_price: Decimal | None
+    opened_at: datetime | None
+
+
+class BotOverviewRead(BaseModel):
+    """One bot with its account's standing (docs/plans/bot-overview.md). Amounts are in
+    `quote_asset`."""
+
+    bot_id: UUID
+    name: str
+    symbol: str
+    exchange_code: str
+    timeframe: str
+    desired_state: str
+    actual_state: str
+    account_id: UUID
+    quote_asset: str
+    deposits: Decimal
+    cash: Decimal
+    equity: Decimal
+    return_pct: Decimal | None
+    """`(equity - deposits) / deposits` in percent; `None` when nothing was deposited."""
+    realized_pnl: Decimal
+    fees_paid: Decimal
+    closed_trades: int
+    position: PositionOverviewRead | None
+
+
+class AccountOverviewRead(BaseModel):
+    id: UUID
+    base_currency: str
+    mode: str
+    status: str
+    bot_names: list[str]
+    """The bots trading on this account; empty for an account nothing uses."""
+    balances: dict[str, Decimal]
+    """Cash balance per asset."""
+
+
+class BotOverviewResponse(BaseModel):
+    bots: list[BotOverviewRead]
+    accounts: list[AccountOverviewRead]
