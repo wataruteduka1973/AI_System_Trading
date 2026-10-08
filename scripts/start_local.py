@@ -19,9 +19,10 @@ CONSOLE_TITLE = "AI System Trading - Local"
 MOCK_OIDC_ISSUER = "http://127.0.0.1:9000"
 MOCK_OIDC_PORT = 9000
 MOCK_OIDC_SCRIPT = "scripts/mock_oidc_server.py"
+TRADING_WORKER_MODULE = "app.trading.worker"
 WORKER_LABELS = {
     "app.market_data.worker": "市場データWorker(ローソク足の自動収集)",
-    "app.trading.worker": "トレーディングWorker(ペーパートレードの評価)",
+    TRADING_WORKER_MODULE: "トレーディングWorker(ペーパートレードの評価)",
     "app.notifications.worker": "通知Worker(取引停止などの通知)",
     MOCK_OIDC_SCRIPT: "開発用ログインサーバー(mock OIDC)",
 }
@@ -123,6 +124,55 @@ def commands(root: Path) -> list[list[str]]:
         # Non-critical like the workers: if it stops, login stops but trading does not.
         launch.append([sys.executable, MOCK_OIDC_SCRIPT])
     return launch
+
+
+def without_trading_worker(launch_commands: list[list[str]]) -> list[list[str]]:
+    """For a PC where the trading worker already runs by itself (the logon task of
+    scripts/windows/register_trading_worker_task.ps1). A second one is harmless -- an evaluation is
+    idempotent per bar -- but it only doubles the work and the log."""
+    return [command for command in launch_commands if command[-1] != TRADING_WORKER_MODULE]
+
+
+def read_revisions(root: Path) -> tuple[str | None, str | None]:
+    """`(current revision of the database, newest revision of the code)`; read-only."""
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+    from app.core.config import settings
+    from sqlalchemy import create_engine, text
+
+    config = Config(str(root / "alembic.ini"))
+    config.set_main_option("script_location", str(root / "alembic"))
+    head = ScriptDirectory.from_config(config).get_current_head()
+    engine = create_engine(settings.database_url, connect_args={"connect_timeout": 3})
+    try:
+        with engine.connect() as connection:
+            current = connection.scalar(text("SELECT version_num FROM alembic_version"))
+    finally:
+        engine.dispose()
+    return current, head
+
+
+def database_revision_warning(root: Path) -> str | None:
+    """Is the database at the newest Alembic revision? A missing migration is how the workers and
+    the screens break quietly (the spread history table, for one), and the launcher never migrates
+    by itself, so it says so. `None` when it is current. A database that cannot be reached is
+    reported too -- the check does not know, rather than assuming all is well."""
+    try:
+        current, head = read_revisions(root)
+    except Exception as exc:
+        return (
+            f"DBのマイグレーションの状態を確認できませんでした({type(exc).__name__})。"
+            "PostgreSQLが起動していて、.envのDATABASE_URLが正しいか確認してください。"
+        )
+    if current == head:
+        return None
+    return (
+        f"DBのマイグレーションが最新ではありません(現在 {current or '未適用'}、最新 {head})。"
+        "このランチャーは適用しません。README の手順で `alembic upgrade head` を実行してください。"
+        "未適用のままだと、画面やWorkerが失敗することがあります。"
+    )
 
 
 def stop_processes(processes: list[subprocess.Popen], timeout: int = 10) -> None:
@@ -278,13 +328,24 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="Check setup/ports without starting")
     parser.add_argument("--no-browser", action="store_true", help="Do not open a browser")
+    parser.add_argument(
+        "--no-trading-worker",
+        action="store_true",
+        help="Do not start the trading worker (it already runs as the logon task)",
+    )
     args = parser.parse_args()
     try:
         launch_commands = commands(ROOT)
+        if args.no_trading_worker:
+            launch_commands = without_trading_worker(launch_commands)
         check_ports(ports_for(launch_commands))
+        warning = database_revision_warning(ROOT)
         if args.check:
-            print("Local setup and ports OK. No servers started; database not checked.")
+            print("Local setup and ports OK. No servers started.")
+            print(f"[WARN] {warning}" if warning else "Database migrations are up to date.")
             return 0
+        if warning:
+            print(f"[WARN] {warning}", flush=True)
         if sys.platform != "win32":
             raise RuntimeError("This interactive launcher requires Windows.")
         print("Starting local servers. PostgreSQL must already be running.", flush=True)

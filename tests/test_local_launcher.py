@@ -23,6 +23,13 @@ def recorded_alerts(monkeypatch) -> list[list[str]]:
     return alerts
 
 
+@pytest.fixture(autouse=True)
+def no_database(monkeypatch) -> None:
+    """The migration check reads the real database; tests that do not mean to look at it get a
+    clean answer instead."""
+    monkeypatch.setattr(launcher, "read_revisions", lambda root: ("head", "head"))
+
+
 def test_interactive_keys_reject_non_windows(monkeypatch) -> None:
     with monkeypatch.context() as context:
         context.setattr(launcher.sys, "platform", "linux")
@@ -388,3 +395,96 @@ def test_the_launcher_and_the_mock_agree_on_the_mock_issuer() -> None:
     )
     assert f'ISSUER = "{launcher.MOCK_OIDC_ISSUER}"' in mock
     assert f"port={launcher.MOCK_OIDC_PORT}" in mock
+
+
+def test_the_trading_worker_can_be_left_out_for_a_pc_that_runs_it_by_itself() -> None:
+    commands = [
+        ["py", "-m", "uvicorn"],
+        ["node", "vite"],
+        ["py", "-m", "app.market_data.worker"],
+        ["py", "-m", "app.trading.worker"],
+        ["py", "-m", "app.notifications.worker"],
+    ]
+
+    kept = launcher.without_trading_worker(commands)
+
+    assert [command[-1] for command in kept] == [
+        "uvicorn",
+        "vite",
+        "app.market_data.worker",
+        "app.notifications.worker",
+    ]
+
+
+def test_the_launcher_starts_the_trading_worker_unless_told_not_to(tmp_path) -> None:
+    (tmp_path / ".env").write_text("OIDC_ISSUER=https://idp.example", encoding="utf-8")
+    vite = tmp_path / "frontend/node_modules/vite/bin/vite.js"
+    vite.parent.mkdir(parents=True)
+    vite.write_text("", encoding="utf-8")
+
+    launched = [command[-1] for command in launcher.commands(tmp_path)]
+
+    assert launched[2:] == [
+        "app.market_data.worker",
+        "app.trading.worker",
+        "app.notifications.worker",
+    ]
+
+
+def test_check_only_reports_the_migration_state_without_starting_anything(
+    monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["start_local.py", "--check", "--no-trading-worker"])
+    monkeypatch.setattr(launcher, "commands", lambda _: [["x"], ["y"], ["p", "app.trading.worker"]])
+    seen = []
+    monkeypatch.setattr(launcher, "check_ports", lambda ports=None: seen.append(ports))
+    monkeypatch.setattr(launcher, "read_revisions", lambda root: ("old", "new"))
+    run = MagicMock()
+    monkeypatch.setattr(launcher, "run_once", run)
+
+    assert launcher.main() == 0
+
+    run.assert_not_called()
+    assert "[WARN] DBのマイグレーションが最新ではありません(現在 old、最新 new)" in (
+        capsys.readouterr().out
+    )
+
+
+def test_a_database_at_the_newest_revision_gives_no_warning(monkeypatch) -> None:
+    monkeypatch.setattr(launcher, "read_revisions", lambda root: ("20261007_0011", "20261007_0011"))
+
+    assert launcher.database_revision_warning(launcher.ROOT) is None
+
+
+def test_an_old_or_unmigrated_database_is_named_but_never_migrated(monkeypatch) -> None:
+    monkeypatch.setattr(launcher, "read_revisions", lambda root: ("20261002_0010", "20261007_0011"))
+    old = launcher.database_revision_warning(launcher.ROOT)
+    monkeypatch.setattr(launcher, "read_revisions", lambda root: (None, "20261007_0011"))
+    empty = launcher.database_revision_warning(launcher.ROOT)
+
+    assert old is not None and "20261002_0010" in old and "20261007_0011" in old
+    assert "alembic upgrade head" in old
+    assert empty is not None and "未適用" in empty
+
+
+def test_an_unreachable_database_is_reported_not_assumed_fine(monkeypatch) -> None:
+    def down(root):
+        raise OSError("down")
+
+    monkeypatch.setattr(launcher, "read_revisions", down)
+
+    warning = launcher.database_revision_warning(launcher.ROOT)
+
+    assert warning is not None and "確認できませんでした" in warning
+    assert "OSError" in warning
+
+
+def test_the_real_revision_reader_finds_the_newest_revision_of_the_code() -> None:
+    """Without a database: only the head of the Alembic scripts, which must exist."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    config = Config(str(launcher.ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(launcher.ROOT / "alembic"))
+
+    assert ScriptDirectory.from_config(config).get_current_head()

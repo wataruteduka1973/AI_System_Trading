@@ -33,3 +33,19 @@ Actual project launch is NOT VERIFIED: both project virtual-environment executab
 on --version in the agent environment. The bat reports the failure and starts neither server.
 Tests use the working portable Python runtime. No exchange request or existing server stop was
 performed. Frontend/UI and database schemas are unchanged; browser UI verification is N/A.
+
+## 2026-10-08の更新
+
+- 起動する子プロセスは、API・画面・市場データWorker・トレーディングWorker・通知Worker(・開発用ログインサーバー)。
+  README の記述(3プロセス、通知Workerは含めない)が古かったので直した。
+- 起動時に、DBの Alembic リビジョンがコードの最新かを**読み取りだけ**で確認し、古い・未適用・確認できないときは `[WARN]` を出す
+  (`--check` でも出す)。適用はしない(方針は変えない)。未適用のマイグレーションで画面やWorkerが静かに壊れるのを避けるため。
+  DBに接続できないときも、「正常」とは言わず、確認できなかったと言う。
+- `--no-trading-worker`: トレーディングWorkerを起動しない。ログオン時の自動起動で動かしている PC 用。
+  二重起動は、評価が `(bot_run, candle)` ごとに冪等なので害は無いが、処理とログが倍になる。
+- `scripts/windows/run_trading_worker.cmd` は PATH の `python` を使っていた。プロジェクトの依存が入っていない Python だと、
+  起動に失敗して30秒ごとに再起動し続ける。bat と同じく `.venv` → `.venv313` を使うようにし、無ければログに書いて終了する。
+
+検証: `tests/test_local_launcher.py`(34件。リビジョンの比較・読めないときの警告・`--no-trading-worker`・`--check`)。
+実際の `--check` はローカル DB で「マイグレーションは最新」と答えた。実際の起動(全プロセス)と、自動起動のタスクの実行は未検証。
+
