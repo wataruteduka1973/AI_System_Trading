@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Route, Routes, useLocation, useNavigate } from 'react-router'
 import AppShell from './app/AppShell'
 import { connectionPath, resolveAppRoute } from './app/routes'
@@ -39,6 +39,8 @@ import ConnectionsPanel, { ConnectionRegistrationForms } from './features/connec
 import { useMarketData } from './features/market-data/useMarketData'
 import { useMarketStream } from './features/market-data/useMarketStream'
 import MarketDataPanel from './features/market-data/MarketDataPanel'
+import { buildChartOverlay } from './features/market-data/chartOverlay'
+import { useChartTrades } from './features/market-data/useChartTrades'
 import { useTrading } from './features/trading/useTrading'
 import TradingPanel, { TradingForms } from './features/trading/TradingPanel'
 import { useBacktests } from './features/backtests/useBacktests'
@@ -114,6 +116,15 @@ function App() {
   )
 
   const trading = useTrading(selectedWorkspaceId)
+  const [showTrades, setShowTrades] = useState(true)
+  const chartTrades = useChartTrades(selectedWorkspaceId, activeInstrumentId, route.kind === 'market')
+  const tradeOverlay = useMemo(
+    () =>
+      chartTrades.fills.length > 0 || chartTrades.positions.length > 0
+        ? buildChartOverlay(chartTrades.fills, chartTrades.positions, marketData.candles)
+        : null,
+    [chartTrades.fills, chartTrades.positions, marketData.candles],
+  )
   const backtests = useBacktests(selectedWorkspaceId)
   const systemStatus = useSystemStatus(selectedWorkspaceId)
   const eventLog = useEventLog(route.kind === 'events' ? selectedWorkspaceId : '')
@@ -409,6 +420,10 @@ function App() {
         gapCount={marketStream.gapCount}
         lastGapReason={marketStream.lastGapReason}
         liveCandle={marketStream.liveCandle}
+        tradeOverlay={tradeOverlay}
+        tradeCount={chartTrades.fills.length}
+        showTrades={showTrades}
+        onShowTradesChange={setShowTrades}
       />
 
       <ConnectionRegistrationForms

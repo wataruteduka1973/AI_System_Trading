@@ -1213,3 +1213,26 @@ button:hover {
   color: #8aa0b8;
   font-size: 0.8rem;
 }
+
+/* Chart overlay of the workspace's own trades (docs/plans/chart-overlay.md) */
+.chart-trades-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.2rem;
+  align-items: center;
+  margin: 0.6rem 0 1rem;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid #263851;
+  border-radius: 10px;
+  background: #07111f;
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+}
+
+.chart-trade {
+  color: #f5b84b;
+  font-weight: 600;
+}

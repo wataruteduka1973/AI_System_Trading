@@ -3,6 +3,7 @@ import type { ChartCandle } from '../../components/marketData'
 import type { WorkspaceInstrument } from '../instruments/types'
 import { statusLabel, type StreamConnectionStatus } from './marketStream'
 import { backfillStatusLabel, marketErrorLabel } from './labels'
+import type { ChartOverlay } from './chartOverlay'
 import type { BackfillJob, CandleCoverage, MarketDataSubscription, Timeframe } from './types'
 
 export default function MarketDataPanel({
@@ -34,6 +35,10 @@ export default function MarketDataPanel({
   gapCount,
   lastGapReason,
   liveCandle,
+  tradeOverlay = null,
+  tradeCount = 0,
+  showTrades = true,
+  onShowTradesChange = () => undefined,
 }: {
   visible: boolean
   visibleInstruments: WorkspaceInstrument[]
@@ -64,6 +69,12 @@ export default function MarketDataPanel({
   gapCount: number
   lastGapReason: string | null
   liveCandle: ChartCandle | null
+  /** The workspace's own trades on this instrument, drawn over the candles. */
+  tradeOverlay?: ChartOverlay | null
+  /** How many fills the workspace has on this instrument (0 hides the toggle). */
+  tradeCount?: number
+  showTrades?: boolean
+  onShowTradesChange?: (show: boolean) => void
 }) {
   if (!visible) return null
 
@@ -199,7 +210,28 @@ export default function MarketDataPanel({
           onLoadOlder={onLoadOlder}
           onDisplayedRangeChange={onDisplayedRangeChange}
           liveCandle={liveCandle}
+          overlay={showTrades ? tradeOverlay : null}
         />
+      )}
+      {tradeCount > 0 && (
+        <div className="chart-trades-legend">
+          <label className="batch-instrument">
+            <input
+              type="checkbox"
+              checked={showTrades}
+              onChange={(event) => onShowTradesChange(event.target.checked)}
+            />
+            このワークスペースの取引を重ねて表示
+          </label>
+          <span>約定 {tradeCount.toLocaleString()}件</span>
+          <span className="legend-item"><span className="outcome-swatch" style={{ background: '#4fd1a5' }} />買い</span>
+          <span className="legend-item"><span className="outcome-swatch" style={{ background: '#ff7b78' }} />売り</span>
+          <span className="legend-item"><span className="outcome-swatch" style={{ background: '#f5b84b' }} />損切り・緊急決済</span>
+          <span className="panel-description">
+            点線は、決済済みの建玉の建値から決済までです(緑は利益、赤は損失)。保有中の建玉は、建値と損切りの水平線で出ます。
+            {tradeOverlay && tradeOverlay.offscreen > 0 && ` 読み込み済みの足より前の約定が${tradeOverlay.offscreen}件あります(チャートを左へ動かすと出ます)。`}
+          </span>
+        </div>
       )}
       {connectionStatus !== 'idle' && (
         <div className={`stream-status stream-${connectionStatus}`}>
