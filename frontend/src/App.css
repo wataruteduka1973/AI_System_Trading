@@ -1066,3 +1066,25 @@ button:hover {
 .gap-job p {
   margin: 0.2rem 0 0;
 }
+
+/* Trade history (docs/plans/trade-history.md) */
+.history-table th,
+.history-table td {
+  font-size: 0.9rem;
+}
+
+.history-table td:nth-child(2),
+.history-table td:nth-child(3),
+.history-table td:nth-child(4) {
+  text-align: left;
+}
+
+.history-detail-row td {
+  white-space: normal;
+  text-align: left;
+  background: #0b1a2e;
+}
+
+.history-detail-row .event-detail-list {
+  margin: 0;
+}
