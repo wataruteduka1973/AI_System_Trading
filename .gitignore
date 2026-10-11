@@ -38,3 +38,6 @@ frontend/dist-*/
 frontend/.env.local
 .npm-cache/
 .secrets/
+
+# Sphinx build output
+docs/_build/
