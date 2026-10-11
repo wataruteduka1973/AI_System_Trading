@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 360" width="900" height="360" role="img" aria-labelledby="t d">
+  <title id="t">1回の取引で、どれだけ買うかの決め方</title>
+  <desc id="d">資金の0.5%を、損切りまでの幅で割って数量を決める。ただし1注文は使える現金の10%まで。</desc>
+  <rect width="900" height="360" fill="#ffffff"/>
+  <text x="450" y="30" text-anchor="middle" font-family="sans-serif" font-size="20" font-weight="bold" fill="#1b2a41">買う量の決め方(例: 1つのBotの資金 166,667 USDT)</text>
+
+  <rect x="40" y="60" width="230" height="110" rx="10" fill="#eef4ff" stroke="#1f6feb"/>
+  <text x="155" y="90" text-anchor="middle" font-family="sans-serif" font-size="15" font-weight="bold" fill="#144a9e">資金</text>
+  <text x="155" y="122" text-anchor="middle" font-family="sans-serif" font-size="22" fill="#144a9e">166,667 USDT</text>
+  <text x="155" y="150" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#4a5b72">Botごとに独立した口座</text>
+
+  <text x="290" y="125" font-family="sans-serif" font-size="28" fill="#4a5b72">×</text>
+
+  <rect x="320" y="60" width="200" height="110" rx="10" fill="#fff4e0" stroke="#e08a00"/>
+  <text x="420" y="90" text-anchor="middle" font-family="sans-serif" font-size="15" font-weight="bold" fill="#8a5200">失ってよい割合</text>
+  <text x="420" y="122" text-anchor="middle" font-family="sans-serif" font-size="22" fill="#8a5200">0.5%</text>
+  <text x="420" y="150" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#4a5b72">= 約 833 USDT</text>
+
+  <text x="540" y="125" font-family="sans-serif" font-size="28" fill="#4a5b72">÷</text>
+
+  <rect x="570" y="60" width="290" height="110" rx="10" fill="#ffecef" stroke="#d1344a"/>
+  <text x="715" y="90" text-anchor="middle" font-family="sans-serif" font-size="15" font-weight="bold" fill="#a3202f">損切りまでの幅(1単位あたり)</text>
+  <text x="715" y="122" text-anchor="middle" font-family="sans-serif" font-size="20" fill="#a3202f">ATR×2 + 手数料・すべり</text>
+  <text x="715" y="150" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#4a5b72">値動きが荒いほど幅が広く、買う量は減る</text>
+
+  <text x="450" y="205" text-anchor="middle" font-family="sans-serif" font-size="26" fill="#4a5b72">▼</text>
+
+  <rect x="40" y="220" width="820" height="70" rx="10" fill="#e6f7ef" stroke="#12a36b"/>
+  <text x="450" y="248" text-anchor="middle" font-family="sans-serif" font-size="16" font-weight="bold" fill="#0b6b47">買う量 = 上の計算結果 と、次の「上限」のうち、いちばん小さいもの</text>
+  <text x="450" y="274" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#0b6b47">上限: ① 1注文は使える現金の10%まで　② 持ち高の合計は資金の25%まで(BTC)　③ 全建玉の想定損失は資金の1.5%まで</text>
+
+  <text x="450" y="325" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#4a5b72">実際には ① の「現金の10%」が先に効くことが多く、損切りまで下がっても、損失は資金の0.2%前後に収まります。</text>
+</svg>
