@@ -5,6 +5,7 @@ from app.api.routes import (
     backtests,
     client_logs,
     connections,
+    decision_history,
     events,
     instruments,
     market_data,
@@ -25,6 +26,7 @@ api_router.include_router(instruments.router)
 api_router.include_router(market_data.router)
 api_router.include_router(market_data_gaps.router)
 api_router.include_router(trading.router)
+api_router.include_router(decision_history.router)
 api_router.include_router(trade_history.router)
 api_router.include_router(backtests.router)
 api_router.include_router(trading_halts.router)

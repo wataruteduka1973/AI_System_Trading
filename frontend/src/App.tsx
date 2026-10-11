@@ -12,6 +12,9 @@ import StatusPage from './pages/StatusPage'
 import EventLogPage from './pages/EventLogPage'
 import DataGapsPage from './pages/DataGapsPage'
 import TradeHistoryPage from './pages/TradeHistoryPage'
+import DecisionsPage from './pages/DecisionsPage'
+import { useDecisionHistory } from './features/decisions/useDecisionHistory'
+import DecisionHistoryPanel from './features/decisions/DecisionHistoryPanel'
 import { useTradeHistory } from './features/trade-history/useTradeHistory'
 import TradeHistoryPanel from './features/trade-history/TradeHistoryPanel'
 import { useDataGaps } from './features/data-gaps/useDataGaps'
@@ -116,6 +119,10 @@ function App() {
   const eventLog = useEventLog(route.kind === 'events' ? selectedWorkspaceId : '')
   const dataGaps = useDataGaps(route.kind === 'gaps' ? selectedWorkspaceId : '')
   const tradeHistory = useTradeHistory(route.kind === 'history' ? selectedWorkspaceId : '')
+  const decisionHistory = useDecisionHistory(
+    route.kind === 'decisions' ? selectedWorkspaceId : '',
+    trading.bots.map((bot) => bot.id),
+  )
   const notifications = useNotifications(selectedWorkspaceId)
   const role = workspaces.find((workspace) => workspace.id === selectedWorkspaceId)?.role
   const isOwner = role === 'owner'
@@ -201,6 +208,10 @@ function App() {
           element={<TradingPage>{null}</TradingPage>}
         />
         <Route
+          path="/workspaces/:workspaceId/decisions"
+          element={<DecisionsPage>{null}</DecisionsPage>}
+        />
+        <Route
           path="/workspaces/:workspaceId/trade-history"
           element={<TradeHistoryPage>{null}</TradeHistoryPage>}
         />
@@ -222,6 +233,24 @@ function App() {
         />
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
+
+      {route.kind === 'decisions' && selectedWorkspaceId && (
+        <DecisionHistoryPanel
+          bots={trading.bots.map((bot) => ({ id: bot.id, name: bot.name }))}
+          botId={decisionHistory.botId}
+          filters={decisionHistory.filters}
+          onFiltersChange={decisionHistory.setFilters}
+          items={decisionHistory.items}
+          summary={decisionHistory.summary}
+          halts={decisionHistory.halts}
+          hasMore={decisionHistory.hasMore}
+          loading={decisionHistory.loading}
+          error={decisionHistory.error}
+          loadedAt={decisionHistory.loadedAt}
+          onLoadMore={decisionHistory.loadMore}
+          onReload={decisionHistory.reload}
+        />
+      )}
 
       {route.kind === 'history' && selectedWorkspaceId && (
         <TradeHistoryPanel

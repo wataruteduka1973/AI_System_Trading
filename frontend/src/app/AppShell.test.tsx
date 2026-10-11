@@ -30,6 +30,9 @@ describe('AppShell', () => {
     expect(screen.getByRole('link', { name: '取引履歴' })).toHaveAttribute(
       'href', '/workspaces/workspace-1/trade-history',
     )
+    expect(screen.getByRole('link', { name: '判断の履歴' })).toHaveAttribute(
+      'href', '/workspaces/workspace-1/decisions',
+    )
     expect(screen.getByRole('link', { name: 'Bot管理' })).toHaveAttribute(
       'href', '/workspaces/workspace-1/trading',
     )
