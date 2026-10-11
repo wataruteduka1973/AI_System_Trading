@@ -191,6 +191,7 @@ def _realized_by_fill(db: Session, fill_ids: list[UUID]) -> dict[UUID, Decimal]:
             .where(LedgerEntry.fill_id.in_(fill_ids), LedgerEntry.entry_type == "realized_pnl")
             .group_by(LedgerEntry.fill_id)
         ).all()
+        if fill_id is not None
     }
 
 
