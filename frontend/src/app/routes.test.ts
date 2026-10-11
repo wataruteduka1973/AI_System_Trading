@@ -3,6 +3,7 @@ import {
   backtestPath,
   connectionPath,
   eventsPath,
+  gapsPath,
   marketPath,
   resolveAppRoute,
   statusPath,
@@ -32,6 +33,10 @@ describe('application routes', () => {
       kind: 'events', workspaceId: 'workspace-1', exchange: null,
     })
     expect(eventsPath('workspace-1')).toBe('/workspaces/workspace-1/events')
+    expect(resolveAppRoute('/workspaces/workspace-1/data-gaps')).toEqual({
+      kind: 'gaps', workspaceId: 'workspace-1', exchange: null,
+    })
+    expect(gapsPath('workspace-1')).toBe('/workspaces/workspace-1/data-gaps')
     expect(resolveAppRoute('/workspaces/workspace-1/markets/binance')).toEqual({
       kind: 'market', workspaceId: 'workspace-1', exchange: 'binance',
     })

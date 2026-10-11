@@ -10,6 +10,9 @@ import TradingPage from './pages/TradingPage'
 import BacktestPage from './pages/BacktestPage'
 import StatusPage from './pages/StatusPage'
 import EventLogPage from './pages/EventLogPage'
+import DataGapsPage from './pages/DataGapsPage'
+import { useDataGaps } from './features/data-gaps/useDataGaps'
+import DataGapsPanel from './features/data-gaps/DataGapsPanel'
 import { useEventLog } from './features/event-log/useEventLog'
 import EventLogPanel from './features/event-log/EventLogPanel'
 import { useSystemStatus } from './features/system-status/useSystemStatus'
@@ -108,8 +111,11 @@ function App() {
   const backtests = useBacktests(selectedWorkspaceId)
   const systemStatus = useSystemStatus(selectedWorkspaceId)
   const eventLog = useEventLog(route.kind === 'events' ? selectedWorkspaceId : '')
+  const dataGaps = useDataGaps(route.kind === 'gaps' ? selectedWorkspaceId : '')
   const notifications = useNotifications(selectedWorkspaceId)
-  const isOwner = workspaces.find((workspace) => workspace.id === selectedWorkspaceId)?.role === 'owner'
+  const role = workspaces.find((workspace) => workspace.id === selectedWorkspaceId)?.role
+  const isOwner = role === 'owner'
+  const canOperate = role === 'owner' || role === 'operator'
   const botNames = Object.fromEntries(trading.bots.map((bot) => [bot.id, bot.name]))
   const accountNames = Object.fromEntries(
     trading.tradingAccounts.map((account) => [
@@ -191,6 +197,10 @@ function App() {
           element={<TradingPage>{null}</TradingPage>}
         />
         <Route
+          path="/workspaces/:workspaceId/data-gaps"
+          element={<DataGapsPage>{null}</DataGapsPage>}
+        />
+        <Route
           path="/workspaces/:workspaceId/events"
           element={<EventLogPage>{null}</EventLogPage>}
         />
@@ -204,6 +214,25 @@ function App() {
         />
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
+
+      {route.kind === 'gaps' && selectedWorkspaceId && (
+        <DataGapsPanel
+          summary={dataGaps.summary}
+          gaps={dataGaps.gaps}
+          total={dataGaps.total}
+          hasMore={dataGaps.hasMore}
+          filters={dataGaps.filters}
+          onFiltersChange={dataGaps.setFilters}
+          canFill={canOperate}
+          filling={dataGaps.filling}
+          message={dataGaps.message}
+          error={dataGaps.error}
+          loading={dataGaps.loading}
+          onFill={(gap) => void dataGaps.fill(gap)}
+          onLoadMore={dataGaps.loadMore}
+          onReload={dataGaps.reload}
+        />
+      )}
 
       {route.kind === 'events' && selectedWorkspaceId && (
         <EventLogPanel

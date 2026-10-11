@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.exchanges.types import timeframe_delta
 from app.market_data.application.public_research import is_research_instrument
 from app.market_data.infrastructure.access import (
     ACCESS_ERROR_CODES,
@@ -22,7 +23,7 @@ from app.market_data.infrastructure.backfill_locks import (
 )
 from app.market_data.infrastructure.candle_store import build_candle_coverage
 from app.models.audit import AuditLog
-from app.models.market_data import BackfillJob, MarketDataSubscription
+from app.models.market_data import BackfillJob, MarketDataGap, MarketDataSubscription
 from app.models.workspace import Workspace
 
 SUPPORTED_TIMEFRAMES = ("1m", "5m", "15m", "30m", "1h", "4h", "1d")
@@ -184,6 +185,83 @@ def enqueue_backfill(
                 "instrument_id": str(payload.instrument_id),
                 "timeframe": payload.timeframe,
                 "days": payload.days,
+            },
+        )
+        db.commit()
+        db.refresh(job)
+        return job
+
+
+def enqueue_gap_backfill(
+    db: Session,
+    workspace_id: UUID,
+    gap_id: UUID,
+    validate_configuration: ConfigurationValidator,
+) -> BackfillJob:
+    """Fills one open gap: queues a manual backfill job for its stretch, padded by one candle on
+    each side so the stored candles that bracket the hole are inside the window. When the job
+    finishes, the worker re-checks the window (`persist_internal_gaps`) and marks the gap
+    `resolved` if the stretch is now complete -- the re-validation the screen reports.
+
+    Only an open gap of an instrument this workspace collects: a public research instrument has no
+    connection to fetch with (its history is re-imported by script), and a gap that is already
+    resolved or ignored needs nothing."""
+    with _rollback_on_failure(db):
+        require_workspace(db, workspace_id)
+        gap = db.get(MarketDataGap, gap_id)
+        if gap is None:
+            raise MarketDataApplicationError("gap_not_found", "Gap not found")
+        if is_research_instrument(db, gap.instrument_id):
+            raise MarketDataApplicationError(
+                "research_instrument",
+                "公開履歴の欠損は、この画面からは補完できません(公開履歴の取り込みで再取得します)。",
+            )
+        require_instrument_access(db, workspace_id, gap.instrument_id)
+        if gap.status != "open":
+            raise MarketDataApplicationError(
+                "gap_not_open", "この欠損は対応が必要な状態ではありません。"
+            )
+        delta = timeframe_delta(gap.timeframe)
+        requested_from, requested_to = gap.from_time - delta, gap.to_time + delta
+        if requested_to - requested_from > timedelta(days=365):
+            raise MarketDataApplicationError("invalid_input", "補完の範囲が1年を超えています。")
+        try:
+            ensure_no_overlapping_backfill(
+                db,
+                workspace_id=workspace_id,
+                instrument_id=gap.instrument_id,
+                timeframe=gap.timeframe,
+                requested_from=requested_from,
+                requested_to=requested_to,
+            )
+        except DuplicateBackfillError as exc:
+            raise MarketDataApplicationError("overlapping_backfill", str(exc)) from exc
+        _check_access(validate_configuration, db, workspace_id, gap.instrument_id)
+        job = BackfillJob(
+            gap_id=gap.id,
+            workspace_id=workspace_id,
+            instrument_id=gap.instrument_id,
+            timeframe=gap.timeframe,
+            from_time=requested_from,
+            to_time=requested_to,
+            requested_by=None,
+            trigger_type="manual",
+            status="queued",
+        )
+        db.add(job)
+        db.flush()
+        _audit(
+            db,
+            workspace_id,
+            "candle.gap_backfill_queued",
+            "backfill_job",
+            job.id,
+            {
+                "gap_id": str(gap.id),
+                "instrument_id": str(gap.instrument_id),
+                "timeframe": gap.timeframe,
+                "from_time": requested_from.isoformat(),
+                "to_time": requested_to.isoformat(),
             },
         )
         db.commit()

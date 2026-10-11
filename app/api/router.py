@@ -8,6 +8,7 @@ from app.api.routes import (
     events,
     instruments,
     market_data,
+    market_data_gaps,
     notifications,
     system_status,
     trading,
@@ -21,6 +22,7 @@ api_router.include_router(workspaces.router)
 api_router.include_router(connections.router)
 api_router.include_router(instruments.router)
 api_router.include_router(market_data.router)
+api_router.include_router(market_data_gaps.router)
 api_router.include_router(trading.router)
 api_router.include_router(backtests.router)
 api_router.include_router(trading_halts.router)
