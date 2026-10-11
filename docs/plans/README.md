@@ -10,6 +10,7 @@
 | 計画書 | 内容 | 状態 |
 |---|---|---|
 | [paper-trading-live-data.md](paper-trading-live-data.md) | 本番の公開価格でのペーパートレード | Unit 1〜6完了。2つのボット群(承認済み 4h 55/20 ×6、比較用 4h 110/40 ×6)が稼働中で、データを貯める段階。月1回 `scripts/report_paper_performance.py` で想定範囲と比べる |
+| [chart-overlay.md](chart-overlay.md) | チャートへの取引の重ね表示(約定のマーカー・建玉の線・損切り、取引の見える化の第3弾) | 実装済み(2026-10-12) |
 | [decision-history.md](decision-history.md) | 判断の履歴(Botごとのシグナル・リスク判定・取引停止の時系列と、取引しなかった理由、取引の見える化の第2弾) | 実装済み(2026-10-12) |
 | [trade-history.md](trade-history.md) | 取引履歴(約定と建玉: Bot・きっかけ・確定損益・合計、取引の見える化の第1弾) | 実装済み(2026-10-11) |
 | [data-gaps.md](data-gaps.md) | 欠損データ画面(欠損の一覧・集計・影響するBot・補完と再検証、FR-UI-10) | 実装済み(2026-10-09) |

@@ -3,13 +3,19 @@ import {
   ColorType,
   CrosshairMode,
   createChart,
+  createSeriesMarkers,
   type IChartApi,
+  type IPriceLine,
   type ISeriesApi,
+  type ISeriesMarkersPluginApi,
+  LineSeries,
+  LineStyle,
   type LogicalRange,
   type Time,
   type UTCTimestamp,
 } from 'lightweight-charts'
 import { useEffect, useRef, useState } from 'react'
+import type { ChartOverlay } from '../features/market-data/chartOverlay'
 import { formatPrice, shouldRequestOlder, type ChartCandle } from './marketData'
 
 type ChartInstrument = {
@@ -31,6 +37,8 @@ type Props = {
   onLoadOlder: () => void
   onDisplayedRangeChange: (range: DisplayedRange) => void
   liveCandle?: ChartCandle | null
+  /** The workspace's own trades on this instrument, drawn over the candles. */
+  overlay?: ChartOverlay | null
 }
 
 const candleTimestamp = (candle: ChartCandle) =>
@@ -46,6 +54,7 @@ export default function CandleChart({
   onLoadOlder,
   onDisplayedRangeChange,
   liveCandle = null,
+  overlay = null,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [hovered, setHovered] = useState<ChartCandle | null>(null)
@@ -60,6 +69,11 @@ export default function CandleChart({
   const previousVisibleFromRef = useRef<number | null>(null)
   const rangeLoadingReadyRef = useRef(false)
   const hasUserInteractedRef = useRef(false)
+  const overlayRef = useRef<{
+    markers: ISeriesMarkersPluginApi<Time> | null
+    lineSeries: ISeriesApi<'Line'>[]
+    priceLines: IPriceLine[]
+  }>({ markers: null, lineSeries: [], priceLines: [] })
   const hasCandles = candles.length > 0 && !loadingInitial
 
   useEffect(() => {
@@ -159,12 +173,66 @@ export default function CandleChart({
     return () => {
       chartRef.current = null
       seriesRef.current = null
+      overlayRef.current = { markers: null, lineSeries: [], priceLines: [] }
       container.removeEventListener('pointerdown', markUserInteraction)
       container.removeEventListener('wheel', markUserInteraction)
       container.removeEventListener('touchstart', markUserInteraction)
       chart.remove()
     }
   }, [hasCandles, instrument])
+
+  useEffect(() => {
+    const chart = chartRef.current
+    const series = seriesRef.current
+    if (!chart || !series) return
+    const state = overlayRef.current
+    state.lineSeries.forEach((line) => chart.removeSeries(line))
+    state.lineSeries = []
+    state.priceLines.forEach((line) => series.removePriceLine(line))
+    state.priceLines = []
+    if (!overlay) {
+      state.markers?.setMarkers([])
+      return
+    }
+    if (!state.markers) state.markers = createSeriesMarkers(series, [])
+    state.markers.setMarkers(
+      overlay.markers.map((marker) => ({
+        id: marker.id,
+        time: marker.time as UTCTimestamp,
+        position: marker.position,
+        shape: marker.shape,
+        color: marker.color,
+        text: marker.text,
+      })),
+    )
+    for (const segment of overlay.segments) {
+      const line = chart.addSeries(LineSeries, {
+        color: segment.color,
+        lineWidth: 2,
+        lineStyle: LineStyle.Dotted,
+        lastValueVisible: false,
+        priceLineVisible: false,
+        crosshairMarkerVisible: false,
+      })
+      line.setData([
+        { time: segment.from.time as UTCTimestamp, value: segment.from.price },
+        { time: segment.to.time as UTCTimestamp, value: segment.to.price },
+      ])
+      state.lineSeries.push(line)
+    }
+    for (const line of overlay.lines) {
+      state.priceLines.push(
+        series.createPriceLine({
+          price: line.price,
+          color: line.color,
+          lineWidth: 1,
+          lineStyle: line.style === 'dashed' ? LineStyle.Dashed : LineStyle.Dotted,
+          axisLabelVisible: true,
+          title: line.title,
+        }),
+      )
+    }
+  }, [overlay, hasCandles, instrument])
 
   useEffect(() => {
     candlesRef.current = candles
@@ -227,6 +295,7 @@ export default function CandleChart({
   if (error && candles.length === 0) return <p className="chart-state chart-error">{error}</p>
   if (candles.length === 0) return <p className="chart-empty">表示できる確定足がまだありません。</p>
   const detail = hovered ?? candles[candles.length - 1]
+  const tradesHere = overlay?.detailsByTime.get(Math.floor(new Date(detail.open_time).getTime() / 1000)) ?? []
   return (
     <div className="candle-chart" role="img" aria-label={`${instrument.symbol}のローソク足`}>
       <div className="chart-tooltip" aria-live="polite">
@@ -237,6 +306,12 @@ export default function CandleChart({
         <span>終値 {formatPrice(detail.close, instrument.price_scale)}</span>
         <span>出来高 {detail.volume ?? '未提供'}</span>
         <span>取得元 {detail.source}</span><span>品質 {detail.quality_status}</span>
+        {tradesHere.map((trade) => (
+          <span key={trade.fillId} className="chart-trade">
+            約定 {trade.side === 'buy' ? '買い' : '売り'} {trade.quantity.replace(/0+$/, '').replace(/\.$/, '')} @ {formatPrice(trade.price, instrument.price_scale)}
+            {Number(trade.realizedPnl) !== 0 && ` (確定損益 ${trade.realizedPnl.replace(/(\.\d{2})\d*$/, '$1')})`}
+          </span>
+        ))}
       </div>
       {loadingOlder && <p className="chart-loading-older">古いローソク足を読み込んでいます。</p>}
       {error && <p className="chart-inline-error">{error}</p>}
