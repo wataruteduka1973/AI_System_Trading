@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   backtestPath,
   connectionPath,
+  decisionsPath,
   eventsPath,
   gapsPath,
   historyPath,
@@ -42,6 +43,10 @@ describe('application routes', () => {
       kind: 'history', workspaceId: 'workspace-1', exchange: null,
     })
     expect(historyPath('workspace-1')).toBe('/workspaces/workspace-1/trade-history')
+    expect(resolveAppRoute('/workspaces/workspace-1/decisions')).toEqual({
+      kind: 'decisions', workspaceId: 'workspace-1', exchange: null,
+    })
+    expect(decisionsPath('workspace-1')).toBe('/workspaces/workspace-1/decisions')
     expect(resolveAppRoute('/workspaces/workspace-1/markets/binance')).toEqual({
       kind: 'market', workspaceId: 'workspace-1', exchange: 'binance',
     })

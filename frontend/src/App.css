@@ -1088,3 +1088,128 @@ button:hover {
 .history-detail-row .event-detail-list {
   margin: 0;
 }
+
+/* Decision history (docs/plans/decision-history.md) */
+.outcome-hold { background: #38506f; }
+.outcome-ordered { background: #4fd1a5; }
+.outcome-closed { background: #63b3ff; }
+.outcome-denied { background: #ff7b78; }
+.outcome-halted { background: #f5b84b; }
+.outcome-paused { background: #b794f4; }
+
+.outcome-hold-border { border-left: 4px solid #38506f; }
+.outcome-ordered-border { border-left: 4px solid #4fd1a5; }
+.outcome-closed-border { border-left: 4px solid #63b3ff; }
+.outcome-denied-border { border-left: 4px solid #ff7b78; }
+.outcome-halted-border { border-left: 4px solid #f5b84b; }
+.outcome-paused-border { border-left: 4px solid #b794f4; }
+
+.outcome-ordered-badge { color: #0b2a21; background: #4fd1a5; }
+.outcome-closed-badge { color: #08233d; background: #63b3ff; }
+.outcome-denied-badge { color: #3d0d0d; background: #ff7b78; }
+.outcome-halted-badge { color: #3a2a05; background: #f5b84b; }
+.outcome-paused-badge { color: #26104a; background: #b794f4; }
+
+.decision-summary {
+  margin: 1rem 0;
+}
+
+.outcome-bar {
+  display: flex;
+  height: 18px;
+  overflow: hidden;
+  border-radius: 9px;
+  background: #0b1a2e;
+}
+
+.outcome-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 1.2rem;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.outcome-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 0.35rem;
+  border-radius: 3px;
+  vertical-align: -1px;
+}
+
+.decision-timeline {
+  margin: 1rem 0;
+  overflow-x: auto;
+}
+
+.timeline-row {
+  display: flex;
+  gap: 2px;
+  min-width: max-content;
+}
+
+.timeline-cell {
+  flex: 1 1 8px;
+  min-width: 6px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.timeline-cell:hover,
+.timeline-selected {
+  outline: 2px solid #eaf2ff;
+  outline-offset: 1px;
+}
+
+.timeline-halt {
+  flex: 1 1 8px;
+  min-width: 6px;
+  height: 8px;
+  margin-top: 3px;
+  border-radius: 2px;
+  background: transparent;
+}
+
+.timeline-halt-on {
+  background: #f5b84b;
+}
+
+.timeline-axis {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 0.4rem;
+  font-size: 0.8rem;
+  color: #9fb0c6;
+}
+
+.decision-list {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 1rem;
+  padding: 0;
+  list-style: none;
+}
+
+.decision-card {
+  padding: 10px 14px;
+  border: 1px solid #263851;
+  border-radius: 10px;
+  background: #07111f;
+}
+
+.decision-selected {
+  background: rgba(20, 45, 78, 0.7);
+}
+
+.check-detail {
+  color: #8aa0b8;
+  font-size: 0.8rem;
+}
