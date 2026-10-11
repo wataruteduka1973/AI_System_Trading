@@ -11,6 +11,9 @@ import BacktestPage from './pages/BacktestPage'
 import StatusPage from './pages/StatusPage'
 import EventLogPage from './pages/EventLogPage'
 import DataGapsPage from './pages/DataGapsPage'
+import TradeHistoryPage from './pages/TradeHistoryPage'
+import { useTradeHistory } from './features/trade-history/useTradeHistory'
+import TradeHistoryPanel from './features/trade-history/TradeHistoryPanel'
 import { useDataGaps } from './features/data-gaps/useDataGaps'
 import DataGapsPanel from './features/data-gaps/DataGapsPanel'
 import { useEventLog } from './features/event-log/useEventLog'
@@ -112,6 +115,7 @@ function App() {
   const systemStatus = useSystemStatus(selectedWorkspaceId)
   const eventLog = useEventLog(route.kind === 'events' ? selectedWorkspaceId : '')
   const dataGaps = useDataGaps(route.kind === 'gaps' ? selectedWorkspaceId : '')
+  const tradeHistory = useTradeHistory(route.kind === 'history' ? selectedWorkspaceId : '')
   const notifications = useNotifications(selectedWorkspaceId)
   const role = workspaces.find((workspace) => workspace.id === selectedWorkspaceId)?.role
   const isOwner = role === 'owner'
@@ -197,6 +201,10 @@ function App() {
           element={<TradingPage>{null}</TradingPage>}
         />
         <Route
+          path="/workspaces/:workspaceId/trade-history"
+          element={<TradeHistoryPage>{null}</TradeHistoryPage>}
+        />
+        <Route
           path="/workspaces/:workspaceId/data-gaps"
           element={<DataGapsPage>{null}</DataGapsPage>}
         />
@@ -214,6 +222,26 @@ function App() {
         />
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
+
+      {route.kind === 'history' && selectedWorkspaceId && (
+        <TradeHistoryPanel
+          tab={tradeHistory.tab}
+          onTabChange={tradeHistory.setTab}
+          filters={tradeHistory.filters}
+          onFiltersChange={tradeHistory.setFilters}
+          bots={trading.bots.map((bot) => ({ id: bot.id, name: bot.name }))}
+          fills={tradeHistory.fills}
+          totals={tradeHistory.totals}
+          positions={tradeHistory.positions}
+          positionTotal={tradeHistory.positionTotal}
+          hasMore={tradeHistory.hasMore}
+          loading={tradeHistory.loading}
+          error={tradeHistory.error}
+          loadedAt={tradeHistory.loadedAt}
+          onLoadMore={tradeHistory.loadMore}
+          onReload={tradeHistory.reload}
+        />
+      )}
 
       {route.kind === 'gaps' && selectedWorkspaceId && (
         <DataGapsPanel

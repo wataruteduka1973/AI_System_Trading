@@ -182,3 +182,65 @@ class AccountOverviewRead(BaseModel):
 class BotOverviewResponse(BaseModel):
     bots: list[BotOverviewRead]
     accounts: list[AccountOverviewRead]
+
+
+class FillRowRead(BaseModel):
+    """One execution with the order behind it (docs/plans/trade-history.md). Amounts are in the
+    quote asset of the instrument."""
+
+    fill_id: UUID
+    order_id: UUID
+    executed_at: datetime
+    symbol: str
+    quote_asset: str
+    side: str
+    order_type: str
+    order_status: str
+    client_order_id: str
+    quantity: Decimal
+    price: Decimal
+    notional: Decimal
+    fee_amount: Decimal
+    realized_pnl: Decimal
+    """What closing (part of) a position made on this fill, before fees; 0 for an opening one."""
+    reason: str
+    """`signal`, `stop_loss`, `reversal_close`, `emergency_close` or `manual`."""
+    bot_id: UUID | None
+    bot_name: str | None
+
+
+class FillTotalsRead(BaseModel):
+    quote_asset: str
+    fills: int
+    fees: Decimal
+    realized_pnl: Decimal
+
+
+class FillPageRead(BaseModel):
+    items: list[FillRowRead]
+    totals: list[FillTotalsRead]
+    """Over everything the filters match (not only this page), per quote asset."""
+    next_before: datetime | None
+    next_before_id: UUID | None
+
+
+class PositionHistoryRead(BaseModel):
+    id: UUID
+    symbol: str
+    quote_asset: str
+    bot_id: UUID | None
+    bot_name: str | None
+    side: str
+    status: str
+    quantity: Decimal
+    """0 once closed; the fills hold the sizes."""
+    average_entry_price: Decimal | None
+    realized_pnl: Decimal
+    stop_price: Decimal | None
+    opened_at: datetime | None
+    closed_at: datetime | None
+
+
+class PositionPageRead(BaseModel):
+    total: int
+    items: list[PositionHistoryRead]

@@ -11,6 +11,7 @@ from app.api.routes import (
     market_data_gaps,
     notifications,
     system_status,
+    trade_history,
     trading,
     trading_halts,
     workspaces,
@@ -24,6 +25,7 @@ api_router.include_router(instruments.router)
 api_router.include_router(market_data.router)
 api_router.include_router(market_data_gaps.router)
 api_router.include_router(trading.router)
+api_router.include_router(trade_history.router)
 api_router.include_router(backtests.router)
 api_router.include_router(trading_halts.router)
 api_router.include_router(notifications.router)
