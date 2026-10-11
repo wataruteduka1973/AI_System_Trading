@@ -9,10 +9,11 @@ export type AppRoute =
   | { kind: 'backtests'; workspaceId: string; exchange: null }
   | { kind: 'status'; workspaceId: string; exchange: null }
   | { kind: 'events'; workspaceId: string; exchange: null }
+  | { kind: 'gaps'; workspaceId: string; exchange: null }
   | { kind: 'not-found'; workspaceId: null; exchange: null }
 
 const workspaceRoute =
-  /^\/workspaces\/([^/]+)\/(connections|trading|backtests|status|events|markets\/(oanda|binance|binance_public))\/?$/
+  /^\/workspaces\/([^/]+)\/(connections|trading|backtests|status|events|data-gaps|markets\/(oanda|binance|binance_public))\/?$/
 
 export function resolveAppRoute(pathname: string): AppRoute {
   if (pathname === '/' || pathname === '') {
@@ -38,6 +39,9 @@ export function resolveAppRoute(pathname: string): AppRoute {
   if (match[2] === 'events') {
     return { kind: 'events', workspaceId, exchange: null }
   }
+  if (match[2] === 'data-gaps') {
+    return { kind: 'gaps', workspaceId, exchange: null }
+  }
   return { kind: 'market', workspaceId, exchange: match[3] as ExchangeCode }
 }
 
@@ -58,3 +62,6 @@ export const statusPath = (workspaceId: string) =>
 
 export const eventsPath = (workspaceId: string) =>
   `/workspaces/${encodeURIComponent(workspaceId)}/events`
+
+export const gapsPath = (workspaceId: string) =>
+  `/workspaces/${encodeURIComponent(workspaceId)}/data-gaps`

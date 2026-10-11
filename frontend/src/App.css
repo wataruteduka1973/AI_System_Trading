@@ -1032,3 +1032,37 @@ button:hover {
   background: #0b1a2e;
   font-size: 0.8rem;
 }
+
+/* Missing candles (docs/plans/data-gaps.md) */
+.gap-list {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 1rem;
+  padding: 0;
+  list-style: none;
+}
+
+.gap-card {
+  padding: 12px 14px;
+  border: 1px solid #263851;
+  border-radius: 10px;
+  background: #07111f;
+}
+
+.gap-card p {
+  margin: 0.35rem 0;
+}
+
+.gap-range {
+  font-variant-numeric: tabular-nums;
+}
+
+.gap-job {
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.8rem;
+  border-left: 3px solid #38506f;
+}
+
+.gap-job p {
+  margin: 0.2rem 0 0;
+}

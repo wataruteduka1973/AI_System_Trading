@@ -98,6 +98,20 @@ def instrument_is_readable(db: Session, workspace_id: UUID, instrument_id: UUID)
     return db.scalar(statement) is not None
 
 
+def readable_instrument_ids(workspace_id: UUID) -> Select:
+    """The active instruments the workspace may read stored market data for: the set
+    `instrument_is_readable` answers for one, as a subquery for listings (the missing-candle
+    report). Not correlated with the caller's own FROM, which may hold `Exchange` too."""
+    return (
+        _restrict_to_selected_account(
+            select(Instrument.id).join(Exchange, Instrument.exchange_id == Exchange.id),
+            workspace_id,
+        )
+        .where(Instrument.status == "active")
+        .correlate(None)
+    )
+
+
 def ensure_sandbox_endpoint(exchange_code: str, connection: ExchangeConnection) -> None:
     """Only OANDA Practice and Binance Spot Testnet endpoints are ever used."""
     if exchange_code == "binance" and connection.environment == "testnet":

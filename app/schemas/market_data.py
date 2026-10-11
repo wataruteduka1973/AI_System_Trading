@@ -101,3 +101,44 @@ class MarketDataSubscriptionRead(OrmModel):
     next_run_at: datetime
     consecutive_failures: int
     blocked_reason: str | None
+
+
+class MarketDataGapRead(BaseModel):
+    """One stretch of missing candles (docs/plans/data-gaps.md)."""
+
+    id: UUID
+    instrument_id: UUID
+    symbol: str
+    exchange_code: str
+    timeframe: str
+    from_time: datetime
+    to_time: datetime
+    expected_count: int | None
+    missing_count: int | None
+    reason_code: str
+    status: str
+    """`open` needs attention; `ignored` is a hole the source itself has; `resolved` was filled."""
+    detected_at: datetime
+    resolved_at: datetime | None
+    can_backfill: bool
+    """Whether the screen may offer to fill it now."""
+    latest_job: BackfillJobRead | None
+    """The most recent backfill job made for this gap, with its progress and re-validation."""
+    affected_bots: list[str]
+    """Bots running or paused on the instrument."""
+
+
+class MarketDataGapPageRead(BaseModel):
+    total: int
+    items: list[MarketDataGapRead]
+
+
+class MarketDataGapSummaryRead(BaseModel):
+    instrument_id: UUID
+    symbol: str
+    exchange_code: str
+    timeframe: str
+    open_count: int
+    open_missing: int
+    ignored_count: int
+    resolved_count: int

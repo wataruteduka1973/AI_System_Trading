@@ -5,6 +5,7 @@ import {
   backtestPath,
   connectionPath,
   eventsPath,
+  gapsPath,
   marketPath,
   statusPath,
   tradingPath,
@@ -49,6 +50,7 @@ export default function AppShell({ workspaceId, children, user, onLogout, alert 
               )}
             </NavLink>
             <NavLink to={eventsPath(workspaceId)}>イベントログ</NavLink>
+            <NavLink to={gapsPath(workspaceId)}>欠損データ</NavLink>
             <NavLink to={connectionPath(workspaceId)}>接続管理</NavLink>
             <NavLink to={marketPath(workspaceId, 'oanda')}>OANDA市場</NavLink>
             <NavLink to={marketPath(workspaceId, 'binance')}>Binance市場</NavLink>
