@@ -26,7 +26,7 @@
 | [worker-failure-handling.md](worker-failure-handling.md) | トレーディングWorkerの失敗(Botを `failed` に、Worker停止の検知と通知) | 実装済み(2026-10-07) |
 | [notification-wiring.md](notification-wiring.md) | 取引停止の通知(Outbox・再送・Owner/Operatorへ) | 実装済み(2026-10-07)。アプリ内通知のAPIあり、画面は未 |
 | [emergency-stop.md](emergency-stop.md) | 利用者の緊急停止(Botまたはワークスペース全体、解除はOwnerのみ) | 実装済み(2026-10-06)。通知は接続済み |
-| [paper-trading-server.md](paper-trading-server.md) | ペーパートレードの Worker と DB を AWS(EC2 + RDS)で動かし続ける | 2026-10-05 承認(東京、CloudFormation)。Unit 0(利用者による AWS の準備)待ち。それまでは手元 PC の自動起動でつなぐ |
+| [paper-trading-server.md](paper-trading-server.md) | ペーパートレードの Worker と DB を AWS(EC2 + RDS)で動かし続ける | 2026-10-05 承認(東京、CloudFormation)、2026-10-12 に他構成との費用比較・損益分岐点を加えて再確認(§9)。Unit 0(利用者による AWS の準備)待ち。それまでは手元 PC の自動起動でつなぐ |
 
 ## 一部完了・一部先送り
 
