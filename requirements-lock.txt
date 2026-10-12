@@ -54,7 +54,7 @@ dateparser==1.4.3
     # via python-binance
 defusedxml==0.7.1
     # via py-serializable
-fastapi==0.142.2
+fastapi==0.142.4
     # via ai-system-trading (pyproject.toml)
 filelock==4.0.11
     # via cachecontrol
