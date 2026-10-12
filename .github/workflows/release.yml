@@ -21,7 +21,7 @@ jobs:
       - name: Build package
         run: python -m build
       - name: Generate SBOM
-        uses: anchore/sbom-action@v0.24.2
+        uses: anchore/sbom-action@v0.24.3
         with:
           path: .
           format: spdx-json
