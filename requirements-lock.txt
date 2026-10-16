@@ -96,7 +96,7 @@ mdurl==0.1.2
     # via markdown-it-py
 msgpack==1.2.3
     # via cachecontrol
-multidict==6.9.1
+multidict==7.0.0
     # via
     #   aiohttp
     #   yarl
