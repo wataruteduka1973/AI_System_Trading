@@ -198,7 +198,7 @@ respx==0.23.1
     # via ai-system-trading (pyproject.toml)
 rich==15.0.0
     # via pip-audit
-ruff==0.16.9
+ruff==0.16.10
     # via ai-system-trading (pyproject.toml)
 six==1.17.0
     # via
