@@ -106,7 +106,7 @@ mypy-extensions==1.1.0
     # via mypy
 oandapyv20==0.7.2
     # via ai-system-trading (pyproject.toml)
-opentelemetry-api==1.45.0
+opentelemetry-api==1.45.1
     # via fastapi
 packageurl-python==0.17.6
     # via cyclonedx-python-lib
