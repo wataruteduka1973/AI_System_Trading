@@ -136,7 +136,7 @@ propcache==0.5.4
     # via
     #   aiohttp
     #   yarl
-psycopg==3.3.6
+psycopg==3.3.8
     # via ai-system-trading (pyproject.toml)
 psycopg-binary==3.3.6 ; implementation_name != 'pypy'
     # via psycopg
