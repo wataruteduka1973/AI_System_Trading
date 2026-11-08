@@ -59,8 +59,11 @@ def test_single_keys_are_read_from_a_real_terminal_and_the_terminal_is_restored(
     terminal = os.fdopen(slave, "r")
     try:
         monkeypatch.setattr(launcher.sys, "stdin", terminal)
-        before = termios.tcgetattr(slave)
+        line_mode = termios.ICANON | termios.ECHO
+        before = termios.tcgetattr(slave)[3] & line_mode
+        assert before == line_mode
         with launcher.single_key_input():
+            assert termios.tcgetattr(slave)[3] & termios.ICANON == 0
             assert launcher.read_key() == ""
             os.write(master, b"A")  # no Enter: cbreak mode hands the key over at once
             keys = []
@@ -69,7 +72,9 @@ def test_single_keys_are_read_from_a_real_terminal_and_the_terminal_is_restored(
                 keys.append(launcher.read_key())
                 keys = [key for key in keys if key]
             assert keys == ["a"]
-        assert termios.tcgetattr(slave) == before
+        # Only the line-editing bits: a terminal may normalise other fields when they are
+        # written back (macOS does), which says nothing about whether it was restored.
+        assert termios.tcgetattr(slave)[3] & line_mode == before
     finally:
         terminal.close()
         os.close(master)
