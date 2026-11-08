@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 from pathlib import Path
 from uuid import uuid4
 
@@ -9,6 +10,8 @@ from fastapi import HTTPException, status
 from app.core.config import settings
 
 SECRET_REF_PREFIX = "local-encrypted://"
+_PRIVATE_DIRECTORY = 0o700
+_PRIVATE_FILE = 0o600
 
 
 class LocalEncryptedSecretStore:
@@ -22,12 +25,19 @@ class LocalEncryptedSecretStore:
             raise ValueError("SECRET_ENCRYPTION_KEY must be a valid Fernet key") from exc
 
     def put(self, values: dict[str, str]) -> str:
-        self.root.mkdir(parents=True, exist_ok=True)
+        self.root.mkdir(mode=_PRIVATE_DIRECTORY, parents=True, exist_ok=True)
+        if sys.platform != "win32":
+            # Also closes a folder an earlier version created with the default permissions.
+            os.chmod(self.root, _PRIVATE_DIRECTORY)
         secret_id = uuid4().hex
         target = self.root / f"{secret_id}.bin"
         temporary = self.root / f".{secret_id}.tmp"
         encrypted = self.cipher.encrypt(json.dumps(values, sort_keys=True).encode("utf-8"))
-        temporary.write_bytes(encrypted)
+        # Owner-only on POSIX (the umask would leave 0644, readable by every user on a shared
+        # server); Windows ignores the mode and protects the folder with its ACLs.
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, _PRIVATE_FILE)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(encrypted)
         os.replace(temporary, target)
         return f"{SECRET_REF_PREFIX}{secret_id}"
 

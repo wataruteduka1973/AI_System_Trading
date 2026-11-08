@@ -1,6 +1,10 @@
-"""One-console Windows launcher. No database changes or dependency installation."""
+"""One-console launcher for Windows, macOS and Linux.
+
+No database changes or dependency installation.
+"""
 
 import argparse
+import contextlib
 import os
 import shutil
 import signal
@@ -11,7 +15,9 @@ import time
 import urllib.error
 import urllib.request
 import webbrowser
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 PORTS = (8000, 5173)
@@ -65,6 +71,9 @@ def set_console_title(title: str) -> None:
         import ctypes
 
         ctypes.windll.kernel32.SetConsoleTitleW(title)
+    elif sys.stdout.isatty():
+        sys.stdout.write(f"\033]0;{title}\007")
+        sys.stdout.flush()
 
 
 def alert_worker_stopped(labels: list[str]) -> None:
@@ -75,7 +84,11 @@ def alert_worker_stopped(labels: list[str]) -> None:
     names = "、".join(labels)
     print(f"\n[WARN] {names} が停止しました。[A]キーで再起動できます。", flush=True)
     set_console_title(f"[!] Worker停止: {names} - {CONSOLE_TITLE}")
-    if sys.platform == "win32":
+    if sys.platform != "win32":
+        # No dialog off Windows; the terminal bell and the retitled tab stand in for it.
+        sys.stdout.write("\a")
+        sys.stdout.flush()
+    else:
         import ctypes
         import threading
 
@@ -93,6 +106,10 @@ def check_ports(ports: tuple[int, ...] | None = None) -> None:
         with socket.socket() as listener:
             if sys.platform == "win32":
                 listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            else:
+                # A port someone listens on is still refused; one that only lingers in TIME_WAIT
+                # after a restart is not reported as busy.
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 listener.bind(("127.0.0.1", port))
             except OSError as exc:
@@ -101,13 +118,27 @@ def check_ports(ports: tuple[int, ...] | None = None) -> None:
                 ) from exc
 
 
+def conventional_node_locations() -> list[Path]:
+    """Where Node.js is installed when it is not on PATH (a launcher started from a GUI does not
+    always see the shell's PATH)."""
+    if sys.platform == "win32":
+        return [Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "nodejs/node.exe"]
+    if sys.platform == "darwin":
+        return [Path("/opt/homebrew/bin/node"), Path("/usr/local/bin/node")]
+    return [Path("/usr/local/bin/node"), Path("/usr/bin/node")]
+
+
+def find_node() -> str | None:
+    node = shutil.which("node")
+    if node is not None:
+        return node
+    return next((str(path) for path in conventional_node_locations() if path.is_file()), None)
+
+
 def commands(root: Path) -> list[list[str]]:
     if not (root / ".env").is_file():
         raise RuntimeError(".env is missing. Complete the setup in README.md first.")
-    node = shutil.which("node")
-    if node is None:
-        conventional = Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "nodejs/node.exe"
-        node = str(conventional) if conventional.is_file() else None
+    node = find_node()
     if node is None:
         raise RuntimeError("Node.js was not found. Install Node.js 22 and reopen this launcher.")
     vite = root / "frontend/node_modules/vite/bin/vite.js"
@@ -128,8 +159,9 @@ def commands(root: Path) -> list[list[str]]:
 
 def without_trading_worker(launch_commands: list[list[str]]) -> list[list[str]]:
     """For a PC where the trading worker already runs by itself (the logon task of
-    scripts/windows/register_trading_worker_task.ps1). A second one is harmless -- an evaluation is
-    idempotent per bar -- but it only doubles the work and the log."""
+    scripts/windows/register_trading_worker_task.ps1, or scripts/unix/run_trading_worker.sh).
+    A second one is harmless -- an evaluation is idempotent per bar -- but it only doubles the
+    work and the log."""
     return [command for command in launch_commands if command[-1] != TRADING_WORKER_MODULE]
 
 
@@ -193,11 +225,18 @@ def stop_processes(processes: list[subprocess.Popen], timeout: int = 10) -> None
                 process.wait(timeout=5)
 
 
+def own_process_group() -> dict[str, Any]:
+    """Keeps the children out of the launcher's console signals, so Ctrl+C reaches only the
+    launcher, which then stops them one by one (see `stop_processes`)."""
+    if sys.platform == "win32":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
+
+
 def start_group(
     processes: list[subprocess.Popen],
     commands_: list[list[str]],
     directories: tuple[Path, ...],
-    creation_flags: int,
 ) -> None:
     """Append newly started processes to `processes` as they launch, one at a time, so a
     failure partway through still leaves the caller able to stop whatever did start."""
@@ -207,7 +246,7 @@ def start_group(
                 command,
                 cwd=directory,
                 stdin=subprocess.DEVNULL,
-                creationflags=creation_flags,
+                **own_process_group(),
             )
         )
 
@@ -226,11 +265,40 @@ def ready() -> bool:
 
 
 def read_key() -> str:
-    if sys.platform != "win32":
-        raise RuntimeError("This interactive launcher requires Windows.")
-    import msvcrt
+    """The pressed key, lower-cased, or "" when none is waiting (never blocks). Without a terminal
+    (started by a service manager, say) there are no keys: the launcher runs until signalled."""
+    if sys.platform == "win32":
+        import msvcrt
 
-    return msvcrt.getwch().lower() if msvcrt.kbhit() else ""
+        return msvcrt.getwch().lower() if msvcrt.kbhit() else ""
+    import select
+
+    if not sys.stdin.isatty():
+        return ""
+    descriptor = sys.stdin.fileno()
+    ready_to_read, _, _ = select.select([descriptor], [], [], 0)
+    # Straight from the descriptor: a buffered reader would swallow typed-ahead keys that
+    # `select` then no longer sees.
+    return os.read(descriptor, 1).decode("utf-8", "ignore").lower() if ready_to_read else ""
+
+
+@contextlib.contextmanager
+def single_key_input() -> Iterator[None]:
+    """Reads single keys without Enter off Windows (Windows' `msvcrt` already does). Ctrl+C still
+    interrupts, and the terminal is put back however the launcher ends."""
+    if sys.platform == "win32" or not sys.stdin.isatty():
+        yield
+        return
+    import termios
+    import tty
+
+    descriptor = sys.stdin.fileno()
+    saved = termios.tcgetattr(descriptor)
+    tty.setcbreak(descriptor)
+    try:
+        yield
+    finally:
+        termios.tcsetattr(descriptor, termios.TCSADRAIN, saved)
 
 
 def run_once(
@@ -244,11 +312,18 @@ def run_once(
     on [R]; the remaining commands (the Worker) only restart with the rest on [A] and get a
     longer stop grace period (`worker_stop_timeout`) since a page in flight can take longer."""
     check_ports(ports_for(launch_commands))
+    with single_key_input():
+        return _run_once(root, launch_commands, open_browser, critical_count, worker_stop_timeout)
+
+
+def _run_once(
+    root: Path,
+    launch_commands: list[list[str]],
+    open_browser: bool,
+    critical_count: int,
+    worker_stop_timeout: int,
+) -> bool:
     directories = (root, root / "frontend") + (root,) * (len(launch_commands) - 2)
-    if sys.platform == "win32":
-        creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
-    else:
-        creation_flags = 0
     critical_processes: list[subprocess.Popen] = []
     worker_processes: list[subprocess.Popen] = []
     try:
@@ -256,13 +331,11 @@ def run_once(
             critical_processes,
             launch_commands[:critical_count],
             directories[:critical_count],
-            creation_flags,
         )
         start_group(
             worker_processes,
             launch_commands[critical_count:],
             directories[critical_count:],
-            creation_flags,
         )
         print(
             "\n[R] API/画面のみ再起動   [A] すべて再起動(Worker含む)   "
@@ -300,7 +373,6 @@ def run_once(
                     critical_processes,
                     launch_commands[:critical_count],
                     directories[:critical_count],
-                    creation_flags,
                 )
                 is_ready, deadline = False, time.monotonic() + 60
                 print("\nAPI/画面を再起動しました。", flush=True)
@@ -346,8 +418,6 @@ def main() -> int:
             return 0
         if warning:
             print(f"[WARN] {warning}", flush=True)
-        if sys.platform != "win32":
-            raise RuntimeError("This interactive launcher requires Windows.")
         print("Starting local servers. PostgreSQL must already be running.", flush=True)
         while run_once(ROOT, launch_commands, not args.no_browser):
             print("Restarting...", flush=True)

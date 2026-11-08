@@ -1,7 +1,9 @@
 import importlib.util
+import os
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -12,6 +14,7 @@ spec = importlib.util.spec_from_file_location(
 )
 launcher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(launcher)
+_real_alert_worker_stopped = launcher.alert_worker_stopped
 
 
 @pytest.fixture(autouse=True)
@@ -30,11 +33,102 @@ def no_database(monkeypatch) -> None:
     monkeypatch.setattr(launcher, "read_revisions", lambda root: ("head", "head"))
 
 
-def test_interactive_keys_reject_non_windows(monkeypatch) -> None:
+class _FakeStdin:
+    def __init__(self, typed: str, *, tty: bool = True) -> None:
+        self._typed = typed
+        self._tty = tty
+
+    def isatty(self) -> bool:
+        return self._tty
+
+    def read(self, count: int) -> str:
+        return self._typed[:count]
+
+    def fileno(self) -> int:
+        return 0
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX pseudo-terminal")
+def test_single_keys_are_read_from_a_real_terminal_and_the_terminal_is_restored(
+    monkeypatch,
+) -> None:
+    import pty
+    import termios
+
+    master, slave = pty.openpty()
+    terminal = os.fdopen(slave, "r")
+    try:
+        monkeypatch.setattr(launcher.sys, "stdin", terminal)
+        before = termios.tcgetattr(slave)
+        with launcher.single_key_input():
+            assert launcher.read_key() == ""
+            os.write(master, b"A")  # no Enter: cbreak mode hands the key over at once
+            keys = []
+            deadline = time.monotonic() + 5
+            while not keys and time.monotonic() < deadline:
+                keys.append(launcher.read_key())
+                keys = [key for key in keys if key]
+            assert keys == ["a"]
+        assert termios.tcgetattr(slave) == before
+    finally:
+        terminal.close()
+        os.close(master)
+
+
+def test_no_key_waiting_off_windows_reads_nothing_and_does_not_block(monkeypatch) -> None:
+    monkeypatch.setattr(launcher.sys, "platform", "darwin")
+    monkeypatch.setattr(launcher.sys, "stdin", _FakeStdin("x"))
+    monkeypatch.setattr("select.select", lambda r, w, x, timeout: ([], [], []))
+    assert launcher.read_key() == ""
+
+
+def test_without_a_terminal_there_are_no_keys(monkeypatch) -> None:
+    """Started by a service manager: the launcher runs until it is signalled."""
+    monkeypatch.setattr(launcher.sys, "platform", "linux")
+    monkeypatch.setattr(launcher.sys, "stdin", _FakeStdin("q", tty=False))
+    assert launcher.read_key() == ""
+    with launcher.single_key_input():
+        pass
+
+
+def test_children_get_their_own_process_group_on_every_os(monkeypatch) -> None:
     with monkeypatch.context() as context:
         context.setattr(launcher.sys, "platform", "linux")
-        with pytest.raises(RuntimeError, match="requires Windows"):
-            launcher.read_key()
+        assert launcher.own_process_group() == {"start_new_session": True}
+    with monkeypatch.context() as context:
+        context.setattr(launcher.sys, "platform", "win32")
+        monkeypatch.setattr(launcher.subprocess, "CREATE_NEW_PROCESS_GROUP", 512, raising=False)
+        assert launcher.own_process_group() == {"creationflags": 512}
+
+
+@pytest.mark.parametrize(
+    "platform,expected",
+    [
+        ("darwin", ["/opt/homebrew/bin/node", "/usr/local/bin/node"]),
+        ("linux", ["/usr/local/bin/node", "/usr/bin/node"]),
+    ],
+)
+def test_node_is_looked_for_where_each_os_installs_it(monkeypatch, platform, expected) -> None:
+    monkeypatch.setattr(launcher.sys, "platform", platform)
+    assert [path.as_posix() for path in launcher.conventional_node_locations()] == expected
+
+
+def test_node_not_on_path_is_found_in_a_conventional_location(tmp_path, monkeypatch) -> None:
+    node = tmp_path / "node"
+    node.touch()
+    monkeypatch.setattr(launcher.shutil, "which", lambda _: None)
+    monkeypatch.setattr(launcher, "conventional_node_locations", lambda: [tmp_path / "x", node])
+    assert launcher.find_node() == str(node)
+    monkeypatch.setattr(launcher, "conventional_node_locations", lambda: [tmp_path / "x"])
+    assert launcher.find_node() is None
+
+
+def test_a_stopped_worker_rings_the_bell_instead_of_a_dialog_off_windows(
+    monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr(launcher.sys, "platform", "linux")
+    _real_alert_worker_stopped(["trading"])
+    assert "" in capsys.readouterr().out
 
 
 def test_non_windows_stop_uses_sigterm(monkeypatch) -> None:
