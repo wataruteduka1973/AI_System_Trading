@@ -14,6 +14,22 @@ AIモデルとテクニカル分析指標を利用し、複数の取引所にま
 - PostgreSQL 16以上
 - Git
 
+Windows・macOS・Linux で動きます(CI で 3 つの OS のテストを実行しています。`docs/plans/cross-platform.md`)。
+このREADMEのコマンドは PowerShell で書いています。macOS / Linux(bash・zsh)では、次のように読み替えてください。
+
+| Windows(PowerShell) | macOS / Linux |
+|---|---|
+| `python -m venv .venv313` | `python3.13 -m venv .venv` |
+| `.\.venv313\Scripts\Activate.ps1` | `source .venv/bin/activate` |
+| `.\.venv313\Scripts\python.exe -c "..."` | `python -c "..."`(仮想環境を有効にした状態) |
+| `Copy-Item .env.example .env` | `cp .env.example .env` |
+| `Set-Location frontend` | `cd frontend` |
+| `start-local.bat` | `./start-local.sh` |
+
+前提のインストール例(macOS / Homebrew): `brew install python@3.13 node@22 postgresql@16`。
+Linux は、ディストリビューションのパッケージか公式の配布で、Python 3.13・Node.js 22・PostgreSQL 16以上を用意してください。
+macOS / Linux では、起動スクリプトが `.venv` → `.venv313` の順で、`bin/python` を探します。
+
 ```powershell
 python -m venv .venv313
 .\.venv313\Scripts\Activate.ps1
@@ -72,9 +88,9 @@ npm run dev
 - API health: `http://localhost:8000/api/v1/health`
 - DB health: `http://localhost:8000/api/v1/health/db`
 
-### Windowsでまとめて起動・再起動
+### まとめて起動・再起動(Windows / macOS / Linux)
 
-初回セットアップ後は、プロジェクト直下の **`start-local.bat` をダブルクリック**してください。
+初回セットアップ後は、Windowsではプロジェクト直下の **`start-local.bat` をダブルクリック**、macOS / Linuxでは端末で **`./start-local.sh`** を実行してください(以下、`start-local.bat`と書く箇所は、macOS / Linuxでは`./start-local.sh`です。端末の起動操作のキーも同じです)。
 バックエンド・フロントエンドと、3つのWorker(市場データ・トレーディング・通知)を1つのウィンドウで起動し、
 準備ができたらブラウザーを開きます。`.env`の`OIDC_ISSUER`が開発用ログインサーバー(`http://127.0.0.1:9000`)の
 場合は、それも一緒に起動します(実際のIdPを設定しているときは起動しません)。
@@ -84,10 +100,12 @@ npm run dev
 - **A**: Worker含む全プロセスを停止して再起動。
 - **Q** または **Ctrl+C**: この起動操作で開始したプロセスを停止して終了。
 - ウィンドウの×や強制終了ではなく、Qで終了してください。
+- macOS / Linuxでは、端末が無い環境(サービスとして起動など)ではキー操作は無効で、SIGTERM/Ctrl+Cで停止します。Worker停止の警告はダイアログではなく、端末のベルとタイトルで知らせます。
 - `start-local.bat --check`: 環境・ポート・DBのマイグレーションの状態を確認し、起動しません。
 - `start-local.bat --no-browser`: ブラウザーを自動で開かず起動します。
 - `start-local.bat --no-trading-worker`: トレーディングWorkerを起動しません。ログオン時の自動起動
-  (`scripts/windows/register_trading_worker_task.ps1`)で動かしているPCで使います。二重に動いても
+  (Windows: `scripts/windows/register_trading_worker_task.ps1`、macOS / Linux: `scripts/unix/run_trading_worker.sh`を
+  systemd・launchd・tmuxなどから起動)で動かしているPCで使います。二重に動いても
   評価は足ごとに冪等なので害はありませんが、処理とログが倍になります。
 
 PostgreSQLはあらかじめ起動してください。依存関係のインストール、DBマイグレーション、
@@ -168,7 +186,8 @@ python -m pytest
 Ruffは検証済みの0.16.8に固定し、ローカルとCIで整形結果がずれないようにしています。
 型検査は `pyproject.toml` で `app`・`scripts` を対象にしています。
 型定義のないBinance/OANDA SDK以外のエラーは無効化しません。
-Windows用分岐も確認する場合は `python -m mypy --platform win32` を実行します。
+Windows用分岐も確認する場合は `python -m mypy --platform win32` を実行します
+(macOS / Linuxの分岐は、既定の実行で検査されます)。
 テストやmigration自身の厳格な型付けは対象外ですが、整形・lint・実行テストは継続します。
 
 ### 依存関係の更新
@@ -311,12 +330,13 @@ tests/                       # 自動テスト
 
 ## CI/CD
 
-Pull Requestと`main`へのPushで、`.github/workflows/ci.yml`が次の4ジョブを実行します。
+Pull Requestと`main`へのPushで、`.github/workflows/ci.yml`が次の5ジョブを実行します。
 
 - **backend**: 依存関係の既知脆弱性スキャン（`pip-audit`）、Ruff lint/format、mypy（既定 + Windows用分岐）、pytest（DB不要分）
 - **worker-storage**: 使い捨てPostgreSQL上でmigration往復試験とWorker/Outbox関連の統合試験
 - **secret-scan**: gitleaksによるsecretの混入検出
 - **frontend**: ESLint、Vitest、本番ビルド
+- **cross-platform**: macOSとWindowsで、pytest(DB不要分)とフロントエンドのVitest・本番ビルド(上の4ジョブはLinux)
 
 DependabotがGitHub ActionsとPython依存関係の更新を週次で確認します。
 

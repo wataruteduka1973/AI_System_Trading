@@ -96,3 +96,36 @@ jobs:
         run: npm run test
       - name: Build
         run: npm run build
+
+  # The backend and frontend jobs above run on Linux. The app is also run on a Mac and on Windows
+  # (docs/plans/cross-platform.md), where the launcher, process handling and file permissions differ.
+  cross-platform:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install project
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]" -c requirements-lock.txt
+      - name: Test
+        run: python -m pytest
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+      - name: Test frontend
+        run: npm run test
+        working-directory: frontend
+      - name: Build frontend
+        run: npm run build
+        working-directory: frontend

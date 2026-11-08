@@ -18,7 +18,7 @@ flowchart LR
     subgraph client["ブラウザ"]
         FE["React SPA<br/>(frontend/, Vite)"]
     end
-    subgraph proc["プロセス(start-local.bat が一括起動)"]
+    subgraph proc["プロセス(start-local.bat / start-local.sh が一括起動)"]
         API["API<br/>uvicorn app.main:app<br/>:8000"]
         MDW["market-data worker<br/>python -m app.market_data.worker"]
         TRW["trading worker<br/>python -m app.trading.worker"]
@@ -52,7 +52,7 @@ flowchart LR
 | notification worker | `python -m app.notifications.worker` | Outbox を `FOR UPDATE SKIP LOCKED` で取り出し通知を配信。**5 分ごとに台帳照合**、各 Worker の停止監視(ウォッチドッグ) | `NOTIFICATION_POLL_INTERVAL_SECONDS`(5s)。メールは `SMTP_*` が揃うときだけ(`in_app` は常に動く) |
 | mock OIDC | `scripts/mock_oidc_server.py` | ローカル専用のログイン用 IdP | `:9000`。本番相当の IdP は `OIDC_*` で指定 |
 
-- ローカル一括起動は `start-local.bat` → `scripts/start_local.py`(API・Vite・3 Worker・mock OIDC。DB が Alembic head より古いと警告。`--no-trading-worker` あり)。
+- ローカル一括起動は `start-local.bat`(Windows)/ `start-local.sh`(macOS・Linux)→ `scripts/start_local.py`(API・Vite・3 Worker・mock OIDC。DB が Alembic head より古いと警告。`--no-trading-worker` あり)。
 - Worker は **シグナル処理・エンジン生成・CLI を `__main__.py` に、スケジューリングを別モジュールに**置く(テスト容易性のため)。
 - 依存方向は `API/Worker → Application → Domain`、Application → Infrastructure。**Application 層は `HTTPException` を投げず、FastAPI のスキーマを返さない。** API 層に取引所固有ルールを書かない。
 
@@ -336,7 +336,8 @@ flowchart LR
 
 | スクリプト | 用途 |
 |---|---|
-| `start-local.bat` / `scripts/start_local.py` | ローカルの一括起動 |
+| `start-local.bat` / `start-local.sh` / `scripts/start_local.py` | ローカルの一括起動(Windows / macOS / Linux) |
+| `scripts/unix/run_trading_worker.sh` | トレーディング Worker の再起動ループ(macOS / Linux。Windows は `scripts/windows/`) |
 | `scripts/provision_paper_bot.py` | ペーパー Bot の作成(承認済み設定のみ) |
 | `scripts/report_paper_performance.py` | ペーパー成績のレポート |
 | `scripts/check_paper_parity.py` | ライブとバックテストの判断一致の検査 |

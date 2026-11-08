@@ -1,6 +1,7 @@
-# Windows local launcher
+# Local launcher
 
 Status: `[x]` implemented as `start-local.bat` / `scripts/start_local.py`.
+macOS / Linux 版(`start-local.sh`)は [cross-platform.md](cross-platform.md)。
 
 ## Scope
 
@@ -49,3 +50,8 @@ performed. Frontend/UI and database schemas are unchanged; browser UI verificati
 検証: `tests/test_local_launcher.py`(34件。リビジョンの比較・読めないときの警告・`--no-trading-worker`・`--check`)。
 実際の `--check` はローカル DB で「マイグレーションは最新」と答えた。実際の起動(全プロセス)と、自動起動のタスクの実行は未検証。
 
+
+## 2026-11-08の更新(macOS / Linux 対応)
+
+[cross-platform.md](cross-platform.md) を参照。`start_local.py` は Windows 専用ではなくなった(対話キーは
+`termios`、プロセスは `start_new_session`)。`start-local.sh` が `start-local.bat` の Python 環境の探索を引き継ぐ。
