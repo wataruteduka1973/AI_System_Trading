@@ -1,18 +1,16 @@
-# What the test image must not contain: the host's environment, secrets and build output.
-.git
-.github
-.claude
-.env
-.secrets
-.venv*
+# An allowlist: the test image gets only what the tests and the install read. A denylist let a
+# stray local folder (.codex-test-deps, unreadable by Docker) break the build, and would put the
+# host's .env, .secrets or other leftovers into the image the next time one appeared.
+*
+!app
+!alembic
+!alembic.ini
+!database
+!scripts
+!tests
+!docs/design
+!pyproject.toml
+!requirements-lock.txt
+!README.md
+!start-local.sh
 **/__pycache__
-.pytest_cache
-.mypy_cache
-.ruff_cache
-logs
-dist
-src
-node_modules
-frontend/node_modules
-frontend/dist
-docs/_build
