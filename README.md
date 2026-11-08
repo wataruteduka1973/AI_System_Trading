@@ -203,7 +203,7 @@ python -m pip install uv
 uv pip compile pyproject.toml --extra dev --universal --python-version 3.13 -o requirements-lock.txt
 ```
 
-作り直したら、上のチェックと `python -m pip_audit` を実行してからコミットします。`pyproject.toml` の範囲外の版がロックに残っていると、インストールがエラーになります。
+作り直したら、上のチェックと `python -m pip_audit --skip-editable` を実行してからコミットします。`pyproject.toml` の範囲外の版がロックに残っていると、インストールがエラーになります。
 `pyproject.toml` に足した依存がロックに無い場合はエラーにならず、その依存だけ範囲内の最新で入るので、ロックの作り直しを忘れないでください。
 
 ### Worker DB基盤の統合試験（開発者向け）
