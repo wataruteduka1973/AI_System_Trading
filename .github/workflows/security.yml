@@ -1,0 +1,41 @@
+name: Security
+
+# Checks that do not depend on a code change, so they run on a schedule as well: a vulnerability
+# can be published, or a secret turn out to be in the history, with no pull request open.
+# A failed run is reported by GitHub to the repository owner.
+
+on:
+  schedule:
+    - cron: "17 21 * * *" # 06:17 JST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Audit the locked dependencies for known vulnerabilities
+        run: |
+          python -m pip install pip-audit -c requirements-lock.txt
+          python -m pip_audit -r requirements-lock.txt --no-deps --disable-pip
+
+  # The pull-request job scans the files as they are now (`--no-git`). This one scans every
+  # commit: the repository is public, and a secret that was committed and later deleted is
+  # still readable in the history.
+  secret-history-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Run gitleaks over the whole history
+        run: |
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.30.1 \
+            detect --source="/repo" --config="/repo/.gitleaks.toml" --redact --exit-code 1 -v

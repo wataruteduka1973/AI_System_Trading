@@ -330,13 +330,28 @@ tests/                       # 自動テスト
 
 ## CI/CD
 
-Pull Requestと`main`へのPushで、`.github/workflows/ci.yml`が次の5ジョブを実行します。
+Pull Requestと`main`へのPushで、`.github/workflows/ci.yml`が次の6ジョブを実行します。
 
-- **backend**: 依存関係の既知脆弱性スキャン（`pip-audit`）、Ruff lint/format、mypy（既定 + Windows用分岐）、pytest（DB不要分）
+- **backend**: Ruff lint/format、mypy（既定 + Windows用分岐）、pytest（DB不要分）
 - **worker-storage**: 使い捨てPostgreSQL上でmigration往復試験とWorker/Outbox関連の統合試験
-- **secret-scan**: gitleaksによるsecretの混入検出
+- **secret-scan**: gitleaksによるsecretの混入検出(現在のファイルのみ)
 - **frontend**: ESLint、Vitest、本番ビルド
-- **cross-platform**: macOSとWindowsで、pytest(DB不要分)とフロントエンドのVitest・本番ビルド(上の4ジョブはLinux)
+- **cross-platform**: macOSとWindowsで、pytest(DB不要分)とフロントエンドのVitest・本番ビルド(上の3ジョブはLinux)
+- **dependency-audit**: ロックした依存関係の既知脆弱性スキャン(`pip-audit`)。**`backend`とは別ジョブ**です。
+  新しく公表された脆弱性は今回の変更と関係がなく、`backend`の最初のステップに置くと、全PRのlint・型検査・テストの結果が見えなくなるためです(2026-11-07)。
+  マージの必須条件にはしません。見つかったら、`requirements-lock.txt`の該当の版を上げます。
+
+`.github/workflows/security.yml`は、コードの変更と関係なく、毎日(日本時間06:17)と手動で次を実行します。失敗すると、GitHubがリポジトリの所有者へ知らせます。
+
+- **dependency-audit**: 上と同じ脆弱性スキャン(PRが無い日に公表された脆弱性にも気づくため)
+- **secret-history-scan**: gitleaksを、**全コミットの履歴**に対して実行(公開リポジトリでは、削除したsecretも履歴から読めるため)
+
+#### mainの保護(推奨)
+
+`main`のCIが赤いままマージされ、約半日壊れたままになったことがあります(2026-11-08)。
+Settings → Branches(または`gh api`)で、次の4つ+macOS/Windowsの成功をマージの条件にしてください:
+`backend`、`worker-storage`、`frontend`、`secret-scan`、`cross-platform (macos-latest)`、`cross-platform (windows-latest)`。
+`dependency-audit`は、条件に含めません。
 
 DependabotがGitHub ActionsとPython依存関係の更新を週次で確認します。
 
