@@ -4,6 +4,11 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    ignore:
+      # pydantic pins this to one exact version (pydantic 2.13.5 needs ==2.46.5). A PR that
+      # bumps it alone makes requirements-lock.txt unresolvable and breaks every CI install
+      # (2026-11-08, #146). It moves together with pydantic.
+      - dependency-name: "pydantic-core"
   - package-ecosystem: github-actions
     directory: "/"
     schedule:

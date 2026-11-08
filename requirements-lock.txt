@@ -146,12 +146,12 @@ pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementatio
     # via cffi
 pycryptodome==3.24.0
     # via python-binance
-pydantic==2.13.5
+pydantic==2.14.3
     # via
     #   ai-system-trading (pyproject.toml)
     #   fastapi
     #   pydantic-settings
-pydantic-core==2.50.1
+pydantic-core==2.50.4
     # via pydantic
 pydantic-settings==2.15.0
     # via ai-system-trading (pyproject.toml)
