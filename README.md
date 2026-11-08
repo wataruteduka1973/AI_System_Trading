@@ -206,6 +206,22 @@ uv pip compile pyproject.toml --extra dev --universal --python-version 3.13 -o r
 作り直したら、上のチェックと `python -m pip_audit --skip-editable` を実行してからコミットします。`pyproject.toml` の範囲外の版がロックに残っていると、インストールがエラーになります。
 `pyproject.toml` に足した依存がロックに無い場合はエラーにならず、その依存だけ範囲内の最新で入るので、ロックの作り直しを忘れないでください。
 
+### Dockerで、Linux + PostgreSQL のテストを流す(開発者向け)
+
+CIと同じ版のLinux環境で、DBが必要なテストも含め、手元で全テストを流せます(Docker Desktopが必要)。
+Windows・macOSの端末からでも、サーバー(Linux)に近い環境を確かめられます。
+
+```powershell
+python scripts/test_in_docker.py              # 全テスト(約1分。初回はイメージの取得とビルドが加わる)
+python scripts/test_in_docker.py -k ledger -x # pytestの引数を渡せる
+```
+
+- `docker-compose.test.yml`(PostgreSQL 16 + テスト用イメージ `docker/test.Dockerfile`)を使います。DBは実行ごとに空で作り、終了時に消します
+  (DBテストは、空でないDBを拒否するため)。ホストのPostgreSQLとは、ポートも中身も衝突しません。
+- 依存は`requirements-lock.txt`の版で入ります。`.env`や秘密情報はイメージに入りません(`.dockerignore`)。
+- 他のコマンドも、同じ環境で流せます: `docker compose -f docker-compose.test.yml run --rm --build tests ruff check .`
+- macOSは、Dockerでは確かめられません(Dockerが動かすのはLinuxです)。CIのmacOSジョブが担います。
+
 ### Worker DB基盤の統合試験（開発者向け）
 
 市場データWorker（`app/market_data/worker/`、`python -m app.market_data.worker`で起動）は
