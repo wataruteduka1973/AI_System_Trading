@@ -515,7 +515,8 @@ def test_the_trading_worker_can_be_left_out_for_a_pc_that_runs_it_by_itself() ->
     ]
 
 
-def test_the_launcher_starts_the_trading_worker_unless_told_not_to(tmp_path) -> None:
+def test_the_launcher_starts_the_trading_worker_unless_told_not_to(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(launcher, "find_node", lambda: "node")  # not every machine has Node.js
     (tmp_path / ".env").write_text("OIDC_ISSUER=https://idp.example", encoding="utf-8")
     vite = tmp_path / "frontend/node_modules/vite/bin/vite.js"
     vite.parent.mkdir(parents=True)

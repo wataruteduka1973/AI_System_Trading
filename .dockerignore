@@ -1,0 +1,18 @@
+# What the test image must not contain: the host's environment, secrets and build output.
+.git
+.github
+.claude
+.env
+.secrets
+.venv*
+**/__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+logs
+dist
+src
+node_modules
+frontend/node_modules
+frontend/dist
+docs/_build

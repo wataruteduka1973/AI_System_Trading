@@ -36,6 +36,21 @@ Worker の終了シグナル(`SIGTERM`/`SIGBREAK`)、DB・取引所・暗号化�
   lint・test・build を実行する(`cross-platform` ジョブ)。手元に macOS・Linux が無いので、これが実機での検証になる。
 - 手元の Windows: 全テスト、ruff、mypy(`--platform win32` も)。
 
+## Dockerでの Linux 検証(2026-11-08)
+
+手元の Windows から、CI と同じ版の Linux + PostgreSQL でテストを流せるようにした(`scripts/test_in_docker.py`、
+`docker-compose.test.yml`、`docker/test.Dockerfile`)。使い方は README。デプロイ用のイメージではない。
+
+初回の実行で、CI では見つからなかった問題が 2 つ見つかった(どちらも、DB を使うテストと使わないテストが
+**同じセッション**で動くと起きる。CI は両者を別のジョブで流すため、露見しなかった)。
+
+- `alembic/env.py` の `fileConfig` が、既存のロガーをすべて無効にし、以降のテストのログ出力が消えた
+  (ログのテスト 4 件が失敗)。`disable_existing_loggers=False` にした(`docs/knowledge/alembic-fileconfig-silences-loggers.md`)。
+- `test_the_launcher_starts_the_trading_worker_unless_told_not_to` が、実行する PC に Node.js があることを
+  前提にしていた(CI のランナーには入っている)。Node.js の探索を差し替えた。
+
+結果: 1162 件成功、1 件スキップ(Windows 専用の `SIGBREAK`)。CI で skip されている DB 必須の 131 件も含む。
+
 ## 検証できないこと(記録)
 
 - macOS・Linux での対話的な起動(キー入力、ブラウザの自動オープン)は、CI では確認できない
