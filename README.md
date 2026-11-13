@@ -361,6 +361,9 @@ Pull Requestと`main`へのPushで、`.github/workflows/ci.yml`が次の6ジョ�
 
 - **dependency-audit**: 上と同じ脆弱性スキャン(PRが無い日に公表された脆弱性にも気づくため)
 - **secret-history-scan**: gitleaksを、**全コミットの履歴**に対して実行(公開リポジトリでは、削除したsecretも履歴から読めるため)
+  確認済みで、secretではないもの(テスト用のダミー値が過去のコミットに残っている、など)は、`.gitleaksignore` にフィンガープリントで記録します。
+  行を足すのは、値を確かめて、何であるかを書いてからにしてください。
+  手元で再現するには: `docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.30.1 detect --source=/repo --config=/repo/.gitleaks.toml --redact -v`(Git Bashでは先頭に`MSYS_NO_PATHCONV=1`)。
 
 #### mainの保護(推奨)
 

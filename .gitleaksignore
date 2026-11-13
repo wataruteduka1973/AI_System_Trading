@@ -1,0 +1,13 @@
+# Findings of the full-history scan (.github/workflows/security.yml) that were looked at and are
+# not secrets. gitleaks matches them by fingerprint: commit:file:rule:line. Nothing here hides a
+# secret in the current files -- the pull-request scan (`secret-scan`) still reads those.
+# Add a line only after checking the value, and say what it is.
+
+# Made-up JWT signing key in a unit test (commit 54c6c8d, 2026-09-21). The test has since been
+# rewritten so the literal no longer appears next to `secret=`.
+54c6c8db4c57e3967cd1ed5b8d03e9c44e50f0e4:tests/test_session_token.py:generic-api-key:14
+54c6c8db4c57e3967cd1ed5b8d03e9c44e50f0e4:tests/test_session_token.py:generic-api-key:20
+
+# An obviously fake "sk_live_..." value in the log-redaction test (commit 6731f58, 2026-09-16).
+# The test now uses a value that does not look like a key.
+6731f58c58aa050d76d5b6d69edbd129362599c7:tests/test_logging_redaction.py:generic-api-key:13
